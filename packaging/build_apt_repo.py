@@ -26,6 +26,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--key", required=True, help="key id or fingerprint of the signing key")
     ap.add_argument("--gnupghome", help="GnuPG home holding that key")
+    ap.add_argument("--loopback", action="store_true", help="CI or test keys with NO passphrase: do not ask the agent for one. A protected key needs the normal prompt")
     ap.add_argument("--out", default=str(HERE / "repo"))
     ap.add_argument("--dist", default=str(HERE / "dist"))
     a = ap.parse_args()
@@ -57,7 +58,8 @@ def main() -> int:
         lines.append(f"{algo}:")
         lines += [f" {digests(p)[key]} {digests(p)['size']:>8} {p.relative_to(rel)}" for p in files]
     (rel / "Release").write_text("\n".join(lines) + "\n")
-    g = ["gpg", "--batch", "--yes", "--pinentry-mode", "loopback", "--local-user", a.key]
+    # A key with a passphrase is unlocked by gpg-agent's own prompt (a window or the terminal). Forcing loopback made every protected key fail with exit 2.
+    g = ["gpg", "--yes", "--local-user", a.key] + (["--batch", "--pinentry-mode", "loopback"] if a.loopback else [])
     subprocess.run(g + ["--clearsign", "-o", str(rel / "InRelease"), str(rel / "Release")], check=True, env=env)
     subprocess.run(g + ["--armor", "--detach-sign", "-o", str(rel / "Release.gpg"), str(rel / "Release")], check=True, env=env)
     pub = subprocess.run(["gpg", "--export", a.key], capture_output=True, check=True, env=env).stdout
