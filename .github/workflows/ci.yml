@@ -1,0 +1,37 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read   # nothing here writes to the repository
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 is the floor the package promises (requires-python); 3.14 is what the author's machine runs.
+        python: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -W error::ResourceWarning -m unittest discover -s tests -v
+
+  build:
+    # The three artifacts must keep building, and the bundled skill script must equal the source (tests/test_skill.py fails if not).
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y fakeroot
+      - run: python -m pip install "setuptools>=77" wheel
+      - run: python packaging/build.py
+      - run: dpkg-deb --info dist/*.deb && python dist/lattice-scan.pyz --version
