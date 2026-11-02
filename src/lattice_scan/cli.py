@@ -351,6 +351,7 @@ def version_check(entry: dict, vers: list[str]) -> dict:
     in-range      an installed version lies inside a listed range
     outside-range every usable range for the product excludes it (and none was unusable)
     undetermined  no ranges for the product, no plain version, or a range with a date or build id as its bound
+    lead          the declared package only shares a scope or name with the product, or is its client library (minio); no range is compared
     """
     # The ranges that belong to THIS entry's product: same vendor as CISA names it, and a shared product word. The host was already matched by name
     # (a kernel matches by uname, not by a package), so what is installed is not consulted here.
@@ -669,7 +670,7 @@ examples:
 
 csv columns (one row per finding and declared component; a header row always):
   project cve title verdict component ecosystem declared version file line listed due due_status action why
-  verdict is one of in-range, undetermined, outside-range, not-read. A cell that starts with = + - or @ has a leading ' so a spreadsheet does not run it.
+  verdict is one of in-range, undetermined, outside-range, lead, not-read. A cell that starts with = + - or @ has a leading ' so a spreadsheet does not run it.
 
 exit status: 0 done; 1 --fail-on matched; 2 bad usage or an unreadable input; 3 stopped part-way (Lattice limit or unreachable): read the NOT READ list.
 Only CVE ids leave the machine. Full manual: man lattice-scan.
@@ -717,6 +718,10 @@ def project_inventory(comps) -> tuple[dict, dict[str, list]]:
     return inv, where
 
 
+# Packages whose name IS a server product's name but which are only its client library (the PyPI "minio" is the Python SDK, not the MinIO server). A name match on one of
+# these is a lead, never a version comparison. Kept short on purpose: add a name only when a real scan shows the mix-up.
+CLIENT_LIBS = {"minio", "redis", "elasticsearch"}
+CLIENT_ECOSYSTEMS = {"pypi", "npm"}
 FAMILY_ECOSYSTEMS = {"maven", "cargo", "conan", "vcpkg", "cmake", "make", "c"}
 GENERIC_PRODUCTS = {"core", "client", "server", "library", "tools", "runtime", "view", "framework", "platform", "engine", "common", "base", "utils", "api", "cli", "sdk", "web", "app"}
 
@@ -763,6 +768,8 @@ def project_candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str]
                 if same and (not generic or vendor_in_name or f == scope or f == vendor + pf):
                     matched = True
                     comparable = not (scope and f == scope and base != f)     # matched only through the scope: not the same package
+                    if eco.get(key) in CLIENT_ECOSYSTEMS and base in CLIENT_LIBS:
+                        comparable = False                                      # a client SDK that shares the server's name
                     break
             if matched:
                 break
@@ -886,13 +893,13 @@ def cmd_project(a) -> int:
                 if comp:
                     vc_one = version_check(e, [val])
                 else:
-                    vc_one = {"verdict": "undetermined", "why": "the declared package shares a scope or name with the product but is not the product, so its version says nothing about the product's affected ranges"}
+                    vc_one = {"verdict": "lead", "why": "the declared package shares a scope or name with the product, or is only its client library, but is not the product, so its version says nothing about the product's affected ranges"}
                 verdicts.append(vc_one)
                 for c in where.get(key, []):
                     declared.append({"name": c.name, "spec": c.spec, "version": c.version, "file": c.file, "line": c.line, "ecosystem": c.ecosystem,
                                      "verdict": vc_one["verdict"], "why": vc_one["why"]})
             # The finding's own verdict is the most pressing of its components': a lead (undetermined) must never hide a pinned version that is outside, or the other way round.
-            order = {"in-range": 0, "undetermined": 1, "outside-range": 2}
+            order = {"in-range": 0, "undetermined": 1, "outside-range": 2, "lead": 3}     # a lead ranks below every real comparison
             vc = min(verdicts, key=lambda v: order[v["verdict"]])
             hits.append({"cve": cve, "title": e["title"], "why": why, "listed": e["added"], "due": e["due"], "action": e["action"][:400], "versionCheck": vc, "declared": declared})
         results.append({"root": str(root), "files": files, "filesCut": cut, "components": len(comps), "pinned": pinned, "read": read, "candidates": hits,

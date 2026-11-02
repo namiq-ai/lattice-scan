@@ -18,13 +18,14 @@ import shutil
 import sys
 import textwrap
 
-VERDICT_ORDER = {"in-range": 0, "undetermined": 1, "outside-range": 2, "not-read": 3}
-VERDICT_LABEL = {"in-range": "IN RANGE", "undetermined": "UNDETERMINED", "outside-range": "OUTSIDE RANGE", "not-read": "NOT READ"}
+VERDICT_ORDER = {"in-range": 0, "undetermined": 1, "outside-range": 2, "lead": 3, "not-read": 4}
+VERDICT_LABEL = {"in-range": "IN RANGE", "undetermined": "UNDETERMINED", "outside-range": "OUTSIDE RANGE", "lead": "LEAD", "not-read": "NOT READ"}
 CSV_COLUMNS = ["project", "cve", "title", "verdict", "component", "ecosystem", "declared", "version", "file", "line", "listed", "due", "due_status", "action", "why"]
 
 MEANING = [
     ("in-range", "a declared, pinned version lies inside a range NVD lists as affected. Check what is really deployed: a distribution can backport a fix under the same number."),
-    ("undetermined", "the declaration is a range, a minimum, a floating tag or no version at all, or NVD's bounds are dates or build ids, or the package is not the product itself. It could not be judged."),
+    ("undetermined", "the declaration is a range, a minimum, a floating tag or no version at all, or NVD's bounds are dates or build ids. It could not be judged."),
+    ("lead", "the declared package only shares a scope or name with the product, or is its client library (the PyPI minio is not the MinIO server). Its version says nothing about the product; no range was compared."),
     ("outside-range", "every pinned version declared lies outside every usable range NVD lists. This does not close a finding; a person does."),
     ("not-read", "an exploited id that name-matches a dependency was not read from Lattice (a limit or a stop). It is neither safe nor affected."),
 ]
@@ -88,7 +89,7 @@ def to_csv(results: list[dict], today: str) -> str:
 
 
 def counts(r: dict) -> dict[str, int]:
-    c = {"in-range": 0, "undetermined": 0, "outside-range": 0}
+    c = {"in-range": 0, "undetermined": 0, "outside-range": 0, "lead": 0}
     for h in r["candidates"]:
         c[h["versionCheck"]["verdict"]] += 1
     c["not-read"] = len(r["unread"])
@@ -116,7 +117,7 @@ def console(results: list[dict], today: str, tool: str, width: int = 100, color:
     def wrap(text: str, first: str = "", rest: str = "") -> list[str]:
         return textwrap.wrap(text, width, initial_indent=first, subsequent_indent=rest, break_long_words=False, break_on_hyphens=False) or [first.rstrip()]
 
-    tag_color = {"in-range": "1;31", "undetermined": "33", "outside-range": "32", "not-read": "2"}
+    tag_color = {"in-range": "1;31", "undetermined": "33", "outside-range": "32", "lead": "36", "not-read": "2"}
     bar, thin = "=" * width, "-" * width
     L: list[str] = []
     L += [paint(f"{tool}  |  dependency report  |  {today}", "1"), bar]
@@ -126,24 +127,24 @@ def console(results: list[dict], today: str, tool: str, width: int = 100, color:
     wide = width >= 92
     cols = [("Project", 14, "<"), ("Files", 6 if wide else 5, ">"), ("Components" if wide else "Comp.", 11 if wide else 6, ">"), ("Pinned" if wide else "Pin", 8 if wide else 5, ">"),
             ("Candidates" if wide else "Cand.", 11 if wide else 6, ">"), ("In range" if wide else "In", 9 if wide else 4, ">"),
-            ("Undetermined" if wide else "Und.", 13 if wide else 5, ">"), ("Outside" if wide else "Out", 8 if wide else 5, ">"), ("Not read" if wide else "NR", 9 if wide else 4, ">")]
+            ("Undetermined" if wide else "Und.", 13 if wide else 5, ">"), ("Outside" if wide else "Out", 8 if wide else 5, ">"), ("Leads" if wide else "Ld", 7 if wide else 4, ">"), ("Not read" if wide else "NR", 9 if wide else 4, ">")]
 
     def line(vals: list) -> str:
         return "".join(f"{str(v):{a}{w}}" for v, (_, w, a) in zip(vals, cols))
     L.append(line([c[0] for c in cols]))
-    tot = {"files": 0, "components": 0, "pinned": 0, "cand": 0, "in-range": 0, "undetermined": 0, "outside-range": 0, "not-read": 0}
+    tot = {"files": 0, "components": 0, "pinned": 0, "cand": 0, "in-range": 0, "undetermined": 0, "outside-range": 0, "lead": 0, "not-read": 0}
     for r in results:
         c = counts(r)
         name = (r.get("name") or r["root"].rstrip("/").rsplit("/", 1)[-1])[:13]
-        row = line([name, len(r["files"]), r["components"], r["pinned"], len(r["candidates"]), c["in-range"], c["undetermined"], c["outside-range"], c["not-read"]])
+        row = line([name, len(r["files"]), r["components"], r["pinned"], len(r["candidates"]), c["in-range"], c["undetermined"], c["outside-range"], c["lead"], c["not-read"]])
         L.append(paint(row, "1;31") if c["in-range"] else row)
         for k, v in (("files", len(r["files"])), ("components", r["components"]), ("pinned", r["pinned"]), ("cand", len(r["candidates"]))):
             tot[k] += v
-        for k in ("in-range", "undetermined", "outside-range", "not-read"):
+        for k in ("in-range", "undetermined", "outside-range", "lead", "not-read"):
             tot[k] += c[k]
     if len(results) > 1:
         L.append(thin[:sum(w for _, w, _ in cols)])
-        L.append(line(["Total", tot["files"], tot["components"], tot["pinned"], tot["cand"], tot["in-range"], tot["undetermined"], tot["outside-range"], tot["not-read"]]))
+        L.append(line(["Total", tot["files"], tot["components"], tot["pinned"], tot["cand"], tot["in-range"], tot["undetermined"], tot["outside-range"], tot["lead"], tot["not-read"]]))
     for r in results:
         if r["filesCut"]:
             L += wrap(f"! {r.get('name') or r['root']}: the file search stopped at its limit, so not every manifest was read.")

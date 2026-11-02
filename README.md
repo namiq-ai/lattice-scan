@@ -81,7 +81,8 @@ terminal (`--color auto`; never when `NO_COLOR` is set). `--width N` fixes the w
 | Verdict | Meaning |
 |---|---|
 | `in-range` | A declared, pinned version lies inside a range NVD lists as affected. Check what is really deployed. |
-| `undetermined` | The declaration is a range, a minimum, a floating tag or has no version; NVD's bounds are dates or build ids; or the package is not the product itself. |
+| `undetermined` | The declaration is a range, a minimum, a floating tag or has no version; NVD's bounds are dates or build ids. |
+| `lead` | The declared package only shares a scope or name with the product, or is its client library (the PyPI `minio` is not the MinIO server). No range is compared. |
 | `outside-range` | Every pinned version declared is outside every usable range. This does not close a finding. |
 | `not-read` | An id that matches a dependency by name was not read from Lattice (a limit or a stop). Neither safe nor affected. |
 
