@@ -655,6 +655,22 @@ def cmd_run(a) -> int:
     return 0
 
 
+PROJECT_EPILOG = """\
+examples:
+  lattice-scan project . --kev-catalogue known_exploited_vulnerabilities.json
+  lattice-scan project api/ web/ --name API --name WEB --cve CVE-2026-46300 --csv findings.csv
+  lattice-scan project . --kev-catalogue kev.json --format csv > findings.csv
+  lattice-scan project . --kev-catalogue kev.json --fail-on in-range        # exit 1 when a declared version is inside an affected range
+
+csv columns (one row per finding and declared component; a header row always):
+  project cve title verdict component ecosystem declared version file line listed due due_status action why
+  verdict is one of in-range, undetermined, outside-range, not-read. A cell that starts with = + - or @ has a leading ' so a spreadsheet does not run it.
+
+exit status: 0 done; 1 --fail-on matched; 2 bad usage or an unreadable input; 3 stopped part-way (Lattice limit or unreachable): read the NOT READ list.
+Only CVE ids leave the machine. Full manual: man lattice-scan.
+"""
+
+
 def project_inventory(comps) -> tuple[dict, dict[str, list]]:
     """An inventory in the shape the host matcher reads, built from declared components, and where each name was declared.
 
@@ -833,24 +849,21 @@ def cmd_project(a) -> int:
                                       for n in names for c in where.get(n, [])]})
         results.append({"root": str(root), "files": files, "filesCut": cut, "components": len(comps), "pinned": pinned, "read": read, "candidates": hits,
                         "notListed": not_listed, "unread": unread, "stopped": stopped})
+    from lattice_scan import report
+    names = a.name or []
+    for i, r in enumerate(results):
+        r["name"] = names[i] if i < len(names) else Path(r["root"]).name
+    tool = f"lattice-scan {__version__}"
     if a.json:
-        Path(a.json).write_text(json.dumps({"tool": f"lattice-scan {__version__}", "on": TODAY, "projects": results}, indent=1))
-    for r in results:
-        print(f"project scan {TODAY}: {r['root']}\n  {len(r['files'])} manifest file(s), {r['components']} declared component(s), {r['pinned']} pinned to a version"
-              + (" (file search stopped at its limit: not every manifest was read)" if r["filesCut"] else ""))
-        print(f"  {r['read']} exploited entries read, {len(r['candidates'])} candidate(s) (a person must read each against what is really deployed)")
-        for h in r["candidates"]:
-            print(f"  {h['cve']}  {h['title'][:70]}\n      because: {h['why']}")
-            for d in h["declared"][:6]:
-                print(f"      declared: {d['name']} {d['spec'] or '(no version)'}  [{d['file']}:{d['line']}]")
-            vc = h["versionCheck"]
-            print(f"      listed {h['listed'] or '-'}, due {h['due'] or '-'}\n      version check: {vc['verdict']}: {vc['why']}")
-            if vc["verdict"] == "in-range":
-                print("      (declared version only: what is deployed may differ, and a distribution may have backported the fix)")
-        if r["unread"]:
-            print(f"  NOT READ ({len(r['unread'])}): " + ", ".join(r["unread"][:12]) + (" ..." if len(r["unread"]) > 12 else "") + ("  (stopped: " + r["stopped"] + ")" if r["stopped"] else "  (over --max-read; raise it or use a key)"))
-        if r["notListed"]:
-            print(f"  not in the graph's CISA list (not 'safe', only 'not listed in this snapshot'): {', '.join(r['notListed'][:12])}")
+        Path(a.json).write_text(json.dumps({"tool": tool, "on": TODAY, "projects": results}, indent=1))
+    if a.csv:
+        report.emit(report.to_csv(results, TODAY), a.csv)
+    if a.format == "csv":
+        report.emit(report.to_csv(results, TODAY), None)
+    elif a.format == "json":
+        report.emit(json.dumps({"tool": tool, "on": TODAY, "projects": results}, indent=1) + "\n", None)
+    else:
+        report.emit(report.console(results, TODAY, tool, report.width_for(a.width), report.use_color(a.color, sys.stdout)), None)
     if stopped:
         print(f"stopped: {stopped}", file=sys.stderr)
     bad = [h for r in results for h in r["candidates"] if (a.fail_on == "candidate") or (a.fail_on == "in-range" and h["versionCheck"]["verdict"] == "in-range")]
@@ -932,12 +945,19 @@ def main() -> int:
     r = sub.add_parser("resolve"); r.add_argument("cve"); r.add_argument("--status", required=True, choices=["verified", "fixed", "not-applicable"]); r.add_argument("--proof", default=""); r.add_argument("--on")
     im = sub.add_parser("impact", help="the recorded impact detail of one finding"); im.add_argument("cve")
     d = sub.add_parser("add"); d.add_argument("--ref", required=True); d.add_argument("--note", required=True); d.add_argument("--on")
-    pj = sub.add_parser("project", help="check the dependencies a project DECLARES (requirements, pyproject, package.json and lock, Dockerfile, compose); writes no host records")
+    pj = sub.add_parser("project", help="check the dependencies a project DECLARES (Python, JavaScript, Java, Rust, C/C++, Make, CMake, Docker); writes no host records",
+                        formatter_class=argparse.RawDescriptionHelpFormatter,
+                        epilog=PROJECT_EPILOG)
     pj.add_argument("paths", nargs="*", default=["."], help="project folders (default: the current folder)")
     pj.add_argument("--cve", action="append"); pj.add_argument("--cve-file")
     pj.add_argument("--kev-catalogue", help="CISA's known_exploited_vulnerabilities.json; used locally to choose which ids to read, nothing from it is sent")
     pj.add_argument("--max-read", type=int, default=40, help="most ids to read from Lattice per project (default 40: the keyless daily allowance is 60)")
-    pj.add_argument("--json", help="also write the result to this file")
+    pj.add_argument("--format", choices=["console", "csv", "json"], default="console", help="what to print (default console: a report for a person)")
+    pj.add_argument("--csv", help="also write the findings as CSV to this file")
+    pj.add_argument("--json", help="also write the full result as JSON to this file")
+    pj.add_argument("--name", action="append", help="a label for each folder, in order (default: the folder name)")
+    pj.add_argument("--color", choices=["auto", "always", "never"], default="auto", help="colour the console report (auto: only on a terminal, never with NO_COLOR)")
+    pj.add_argument("--width", type=int, help="console report width in columns (default: the terminal's, between 72 and 110)")
     pj.add_argument("--fail-on", choices=["never", "in-range", "candidate"], default="never", help="exit 1 when a candidate (or an in-range one) is found; default never: a person reads it")
     sub.add_parser("list"); sub.add_parser("stats")
     il = sub.add_parser("inventory", help="show inventory.log: counts and changes per run"); il.add_argument("-n", type=int, default=20)

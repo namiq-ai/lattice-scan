@@ -40,7 +40,8 @@ lattice-scan --debug --cve CVE-...                         # every request, resp
 
 ```bash
 lattice-scan project .  --kev-catalogue known_exploited_vulnerabilities.json     # CISA's file; used here only to choose which ids to read
-lattice-scan project app/ api/ --cve CVE-2026-46300 --json result.json            # explicit ids; several folders at once
+lattice-scan project app/ api/ --name APP --name API --cve CVE-2026-46300         # explicit ids; several folders at once, labelled
+lattice-scan project . --kev-catalogue kev.json --csv findings.csv                # the report on screen, a CSV alongside
 lattice-scan project . --kev-catalogue kev.json --fail-on in-range                # exit 1 when a declared version is inside an affected range
 ```
 
@@ -65,6 +66,39 @@ Reads what the project **declares**. Nothing is executed and nothing is installe
   that package's version is not the product's, so no range is compared. `minio` the Python client matches MinIO the server by name; reading the finding tells you which it is. A match is a candidate for a person to read against what is really deployed (a distribution may backport a fix; a lockfile may not be what runs).
 - Writes no host records (`~/.lattice-scan` is untouched). Skips `node_modules`, virtualenvs, build output and `.claude`. If its file search reaches its limit it says so.
 - Without a key, Lattice allows 60 reads a day; `--max-read` (default 40) stops a project from using them all, and the ids not read are listed.
+
+### Reading the report
+
+The default output is a report for a person: a summary table (one row per project, a total for several), then each project's findings with the declared component and its
+file and line, CISA's dates ("listed 3 days ago, due in 18 days"), the version check and CISA's required action, then the ids that were not read, and a legend. Colour is used only on a
+terminal (`--color auto`; never when `NO_COLOR` is set). `--width N` fixes the width.
+
+| Verdict | Meaning |
+|---|---|
+| `in-range` | A declared, pinned version lies inside a range NVD lists as affected. Check what is really deployed. |
+| `undetermined` | The declaration is a range, a minimum, a floating tag or has no version; NVD's bounds are dates or build ids; or the package is not the product itself. |
+| `outside-range` | Every pinned version declared is outside every usable range. This does not close a finding. |
+| `not-read` | An id that matches a dependency by name was not read from Lattice (a limit or a stop). Neither safe nor affected. |
+
+### For scripts: CSV and JSON
+
+`--format csv` prints (and `--csv FILE` writes) one row per finding and declared component, UTF-8, LF line ends, always with a header row, in this fixed column order:
+
+```
+project,cve,title,verdict,component,ecosystem,declared,version,file,line,listed,due,due_status,action,why
+```
+
+`version` is the pinned version alone (empty when there is none), `declared` is the text as written (`==2.14.0`). Text from outside (a CVE title, CISA's action, a file name) that starts with `=`, `+`, `-` or `@` is
+written with one leading apostrophe so a spreadsheet does not run it as a formula; strip one leading `'` for the raw text. `--format json` (or `--json FILE`) is the same data with the files read and the ids not read.
+
+```bash
+lattice-scan project . --kev-catalogue kev.json --format csv | \
+  python3 -c 'import csv,sys; [print(r["cve"], r["component"]) for r in csv.DictReader(sys.stdin) if r["verdict"]=="in-range"]'
+```
+
+Exit status: `0` done, `1` `--fail-on` matched, `2` bad usage or an unreadable input, `3` stopped part-way (Lattice's allowance ran out or it could not be reached; the ids not read are listed).
+
+The full manual is `man lattice-scan` (installed by the `.deb`; `man -l man/lattice-scan.1` from a checkout), and `lattice-scan project --help` has examples and the CSV columns.
 
 ## Use it as a Claude Code skill
 

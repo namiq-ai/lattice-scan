@@ -15,7 +15,7 @@ sys.path.insert(0, str(HERE / "src"))
 from lattice_scan import __version__ as VERSION  # noqa: E402
 
 MAINTAINER = "NamiQ LLC <contact@namiq.io>"  # the contact Lattice itself gives in its answers
-MODULES = ("__init__.py", "__main__.py", "cli.py", "manifests.py")
+MODULES = ("__init__.py", "__main__.py", "cli.py", "manifests.py", "report.py")
 
 
 def wheel() -> None:
@@ -70,10 +70,10 @@ def deb() -> None:
         shutil.copy(HERE / "NOTICE", doc / "NOTICE")
         man = root / "usr/share/man/man1"
         man.mkdir(parents=True)
+        # The manual page is a real file (man/lattice-scan.1); tests/test_docs.py keeps it in step with the options the tool has.
+        text = (HERE / "man" / "lattice-scan.1").read_text().replace("lattice-scan 0.2.0", f"lattice-scan {VERSION}")
         with gzip.open(man / "lattice-scan.1.gz", "wt") as f:
-            f.write(f'.TH LATTICE-SCAN 1 "" "lattice-scan {VERSION}"\n.SH NAME\nlattice-scan \\- match CISA-exploited CVEs, via Lattice, against what is installed on this host\n'
-                    ".SH SYNOPSIS\n.B lattice-scan\n[\\-\\-cve ID] [\\-\\-discover] [\\-\\-refresh] [\\-\\-debug]\n.SH DESCRIPTION\nPrints evidence for a person to read. "
-                    "It decides nothing. Only CVE ids leave the machine. Records are written to ~/.lattice-scan and name this host's software.\n.SH SEE ALSO\n/usr/share/doc/lattice-scan/README.md\n")
+            f.write(text)
         for q in root.rglob("*"):  # copies keep the source mode: set what a package should have
             q.chmod(0o755 if q.is_dir() or q == wrap else 0o644)
         size = sum(p.stat().st_size for p in root.rglob("*") if p.is_file()) // 1024 + 1

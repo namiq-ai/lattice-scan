@@ -125,6 +125,37 @@ class ProjectMatching(unittest.TestCase):
         self.assertEqual(sorted(vers), ["2.14.0", "2.17.1"])
 
 
+class Report(unittest.TestCase):
+    def result(self, **over):
+        h = {"cve": "CVE-2099-7", "title": "=HYPERLINK(\"http://example.invalid\")", "why": "w", "listed": "2026-10-30", "due": "2026-11-20", "action": "+cmd|' /C calc'!A0",
+             "versionCheck": {"verdict": "in-range", "why": "inside"}, "declared": [{"name": "a", "spec": "==1", "version": "1", "file": "-f.txt", "line": 3, "ecosystem": "pypi"}]}
+        r = {"root": "/p/demo", "files": ["a"], "filesCut": False, "components": 1, "pinned": 1, "read": 1, "candidates": [h], "notListed": [], "unread": ["CVE-2099-8"], "stopped": ""}
+        r.update(over)
+        return [r]
+
+    def test_spreadsheet_formulas_in_third_party_text_are_defused(self):
+        import csv as _csv
+        from lattice_scan import report
+        rows = list(_csv.reader(report.to_csv(self.result(), "2026-11-02").splitlines()))
+        row = dict(zip(rows[0], rows[1]))
+        for col in ("title", "action", "file", "declared"):
+            self.assertTrue(row[col].startswith("'"), col)
+        self.assertEqual(row["version"], "1")                       # the clean copy for a parser
+
+    def test_rows_are_ordered_in_range_first_and_not_read_last(self):
+        from lattice_scan import report
+        r = self.result()
+        r[0]["candidates"].append({**r[0]["candidates"][0], "cve": "CVE-2099-6", "versionCheck": {"verdict": "outside-range", "why": "x"}})
+        order = [f["verdict"] for f in report.findings(r)]
+        self.assertEqual(order, ["in-range", "outside-range", "not-read"])
+
+    def test_console_total_row_only_with_several_projects(self):
+        from lattice_scan import report
+        one = report.console(self.result(), "2026-11-02", "t", 100)
+        two = report.console(self.result() + self.result(root="/p/other"), "2026-11-02", "t", 100)
+        self.assertNotIn("Total", one); self.assertIn("Total", two)
+
+
 class MoreEcosystems(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -283,31 +314,31 @@ class ProjectCommand(unittest.TestCase):
         write(self.root, "requirements.txt", "# c\nexamplelib==2.14.0\n")
         rc, out, _ = self.run_cli("project", str(self.root), "--cve", "CVE-2099-0001")
         self.assertEqual(rc, 0)
-        self.assertIn("version check: in-range", out)
-        self.assertIn("[requirements.txt:2]", out)
-        self.assertIn("what is deployed may differ", out)
+        self.assertIn("[IN RANGE]", out)
+        self.assertIn("requirements.txt:2", out)
+        self.assertIn("what is deployed may differ", " ".join(out.split()))
 
     def test_pinned_version_above_the_range_is_outside(self):
         write(self.root, "requirements.txt", "examplelib==2.17.1\n")
         _, out, _ = self.run_cli("project", str(self.root), "--cve", "CVE-2099-0001")
-        self.assertIn("version check: outside-range", out)
+        self.assertIn("[OUTSIDE RANGE]", out)
 
     def test_a_declared_range_is_undetermined_never_outside(self):
         write(self.root, "requirements.txt", "examplelib>=2.0\n")
         _, out, _ = self.run_cli("project", str(self.root), "--cve", "CVE-2099-0001")
-        self.assertIn("version check: undetermined", out)
-        self.assertNotIn("outside-range", out)
+        self.assertIn("[UNDETERMINED]", out)
+        self.assertNotIn("[OUTSIDE RANGE]", out)
 
     def test_unpinned_image_is_undetermined_too(self):
         write(self.root, "docker-compose.yml", "services:\n  a:\n    image: examplelib:latest\n")
         _, out, _ = self.run_cli("project", str(self.root), "--cve", "CVE-2099-0001")
-        self.assertIn("version check: undetermined", out)
+        self.assertIn("[UNDETERMINED]", out)
 
     def test_nothing_declared_means_no_candidate_and_no_host_records(self):
         write(self.root, "requirements.txt", "unrelated==1.0\n")
         rc, out, _ = self.run_cli("project", str(self.root), "--cve", "CVE-2099-0001")
         self.assertEqual(rc, 0)
-        self.assertIn("0 candidate(s)", out)
+        self.assertIn("No dependency declared here matches", " ".join(out.split()))
         self.assertFalse((cli.OUT).exists(), "a project scan must not write host records")
 
     def test_catalogue_chooses_ids_and_only_matches_are_sent(self):
@@ -334,8 +365,8 @@ class ProjectCommand(unittest.TestCase):
         write(other, "requirements.txt", "examplelib==2.16.0\n")
         rc, out, _ = self.run_cli("project", str(self.root), str(other), "--cve", "CVE-2099-0001")
         self.assertEqual(len([m for m, _, _ in Stub.seen if m == "tools/call"]), 1)
-        self.assertIn("version check: in-range", out)         # the first folder
-        self.assertIn("version check: outside-range", out)    # the second, from the same single read
+        self.assertIn("[IN RANGE]", out)         # the first folder
+        self.assertIn("[OUTSIDE RANGE]", out)    # the second, from the same single read
 
     def test_json_and_fail_on(self):
         write(self.root, "requirements.txt", "examplelib==2.14.0\n")
@@ -346,6 +377,45 @@ class ProjectCommand(unittest.TestCase):
         self.assertEqual(d["candidates"][0]["versionCheck"]["verdict"], "in-range")
         self.assertEqual(d["candidates"][0]["declared"][0]["file"], "requirements.txt")
         self.assertEqual(self.run_cli("project", str(self.root), "--cve", "CVE-2099-0001")[0], 0)   # default: report only
+
+    def test_csv_to_stdout_has_a_fixed_header_and_one_row_per_finding(self):
+        import csv as _csv
+        write(self.root, "requirements.txt", "examplelib==2.14.0\n")
+        rc, out, _ = self.run_cli("project", str(self.root), "--cve", "CVE-2099-0001", "--format", "csv", "--name", "DEMO")
+        self.assertEqual(rc, 0)
+        rows = list(_csv.reader(out.splitlines()))
+        self.assertEqual(rows[0], ["project", "cve", "title", "verdict", "component", "ecosystem", "declared", "version", "file", "line", "listed", "due", "due_status", "action", "why"])
+        self.assertEqual(len(rows), 2)
+        r = dict(zip(rows[0], rows[1]))
+        self.assertEqual((r["project"], r["cve"], r["verdict"], r["component"], r["version"], r["file"], r["line"]), ("DEMO", "CVE-2099-0001", "in-range", "examplelib", "2.14.0", "requirements.txt", "1"))
+        self.assertEqual(r["due"], "2026-11-20"); self.assertIn("due in", r["due_status"])
+
+    def test_csv_with_nothing_found_is_just_the_header(self):
+        write(self.root, "requirements.txt", "unrelated==1.0\n")
+        _, out, _ = self.run_cli("project", str(self.root), "--cve", "CVE-2099-0001", "--format", "csv")
+        self.assertEqual(len(out.splitlines()), 1)
+
+    def test_csv_file_and_json_file_alongside_the_console_report(self):
+        write(self.root, "requirements.txt", "examplelib==2.14.0\n")
+        c, j = Path(self.tmp.name) / "f.csv", Path(self.tmp.name) / "f.json"
+        _, out, _ = self.run_cli("project", str(self.root), "--cve", "CVE-2099-0001", "--csv", str(c), "--json", str(j))
+        self.assertIn("SUMMARY", out); self.assertIn("HOW TO READ THIS", out)
+        self.assertEqual(c.read_text().splitlines()[0].split(",")[0], "project")
+        self.assertEqual(json.loads(j.read_text())["projects"][0]["candidates"][0]["cve"], "CVE-2099-0001")
+
+    def test_json_format_is_valid_json_on_stdout(self):
+        write(self.root, "requirements.txt", "examplelib==2.14.0\n")
+        _, out, _ = self.run_cli("project", str(self.root), "--cve", "CVE-2099-0001", "--format", "json")
+        self.assertEqual(json.loads(out)["projects"][0]["pinned"], 1)
+
+    def test_colour_only_when_asked_and_width_is_respected(self):
+        write(self.root, "requirements.txt", "examplelib==2.14.0\n")
+        _, plain, _ = self.run_cli("project", str(self.root), "--cve", "CVE-2099-0001", "--color", "never", "--width", "80")
+        self.assertNotIn("\033[", plain)
+        self.assertLessEqual(max(len(l) for l in plain.splitlines()), 80)
+        Stub.seen = []; cli.Lattice.last_gap = 0.0
+        _, coloured, _ = self.run_cli("project", str(self.root), "--cve", "CVE-2099-0001", "--color", "always")
+        self.assertIn("\033[", coloured)
 
     def test_quota_stop_is_reported_and_exit_3(self):
         write(self.root, "requirements.txt", "examplelib==2.14.0\n")
