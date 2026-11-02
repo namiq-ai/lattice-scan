@@ -129,12 +129,25 @@ or a major\-only tag (\fB16\fR) is not a version, and the result for it is
 never
 .BR outside\-range .
 Where a lockfile pins a name, that name's unpinned declarations are left out: the lockfile says what is installed. A \fB\-l\fR link flag names a library, not a version.
+.SS Who can scan what
+Reading many ids is for a key whose owner has confirmed their email. Lattice reports a key's tier in every answer: \fBtrial\fR until the email is confirmed and the terms accepted,
+then \fBtrial_accepted\fR or \fBcommercial\fR.
+.TP
+.B With a confirmed key
+(\fBLATTICE_API_KEY\fR set): \fB\-\-kev\-catalogue\fR works, with up to 200 ids read a run by default.
+.TP
+.B With a key whose email is not confirmed
+\fB\-\-kev\-catalogue\fR is refused (exit 2) after one cheap tier check, with a message to confirm the email from the message Lattice sent; no id is read.
+.TP
+.B Without a key
+\fB\-\-kev\-catalogue\fR is refused (exit 2) before any request is made. Only the CVEs you name are checked: \fB\-\-cve CVE\-2026\-46300,CVE\-2021\-44228\fR (comma separated; the option may be
+repeated), or \fB\-\-cve\-file\fR with one or more ids per line. A string that is not a CVE id is refused (exit 2) before anything is asked. At most 40 are read a run, inside the keyless allowance.
 .SS Choosing which ids to read
-Lattice looks up by CVE id, not by product, so something has to name the ids. Either give them with
+Lattice looks up by CVE id, not by product, so something has to name the ids. Either name them with
 .B \-\-cve
 or
 .BR \-\-cve\-file ,
-or give
+or (with a confirmed key) give
 .BI \-\-kev\-catalogue " FILE"
 (CISA's known_exploited_vulnerabilities.json, or one JSON object per line with source_id, vendor_project and product). The catalogue is read locally and only chooses ids:
 an id is read from Lattice only when its product is the same as a declared package. Each id is read once per run, however many folders match it.
@@ -145,14 +158,14 @@ product as one whole token of a longer coordinate matches too (\fBorg.apache.log
 alone (\fB@vitejs/plugin\-react\fR for Vite) is a lead only: that package's version is not the product's, so no range is compared and the result is \fBundetermined\fR.
 .SS Options
 .TP
-.BI \-\-cve " ID" ", " \-\-cve\-file " FILE"
-Ids to read, as in host mode.
+.BI \-\-cve " ID[,ID...]" ", " \-\-cve\-file " FILE"
+Ids to read, as in host mode. Several may be given in one argument, separated by commas.
 .TP
 .BI \-\-kev\-catalogue " FILE"
-CISA's catalogue, used locally to choose ids.
+CISA's catalogue, used locally to choose ids. Needs a key whose email is confirmed (see \fBWho can scan what\fR).
 .TP
 .BI \-\-max\-read " N"
-Most ids to read from Lattice per run (default 40; the keyless day is 60). Ids over the limit are listed as not read.
+Most ids to read from Lattice per run (default 200 with a key, 40 without; the keyless day is 60). Ids over the limit are listed as not read.
 .TP
 .BR \-\-format " " console | csv | json
 What to print. The default,
@@ -245,7 +258,7 @@ The run finished. (Without \fB\-\-fail\-on\fR this does not mean nothing was fou
 \fB\-\-fail\-on\fR matched.
 .TP
 .B 2
-Bad usage, or an input could not be read (a folder, a catalogue, an id file).
+Bad usage, or an input could not be read (a folder, a catalogue, an id file), or the catalogue was asked for without a key, or with a key whose email is not confirmed.
 .TP
 .B 3
 \fBproject\fR stopped part\-way because Lattice's allowance ran out or it could not be reached. The ids not read are listed; the report is otherwise complete.
@@ -292,10 +305,16 @@ Check a host for two CVEs:
 lattice-scan --cve CVE-2021-44228 --cve CVE-2026-46300
 .fi
 .PP
-Check a project against CISA's catalogue and read the report:
+Check a project for two named CVEs, no key needed:
 .PP
 .nf
-lattice-scan project . --kev-catalogue known_exploited_vulnerabilities.json
+lattice-scan project . --cve CVE-2026-46300,CVE-2021-44228
+.fi
+.PP
+With a key whose email is confirmed, let CISA's catalogue choose the ids:
+.PP
+.nf
+LATTICE_API_KEY=... lattice-scan project . --kev-catalogue known_exploited_vulnerabilities.json
 .fi
 .PP
 Several folders, labelled, with a CSV for a spreadsheet and a non\-zero exit if a declared version is in range:

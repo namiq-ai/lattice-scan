@@ -295,7 +295,7 @@ class ProjectCommand(unittest.TestCase):
         self.root.mkdir()
         self.saved = (cli.URL, cli.KEY, cli.OUT, cli.TODAY)
         cli.URL, cli.KEY, cli.OUT, cli.TODAY = self.url, "", Path(self.tmp.name) / "records", "2026-11-01"
-        Stub.mode, Stub.seen = "json", []
+        Stub.mode, Stub.seen, Stub.tier = "json", [], "keyless"
         Stub.answers = {"CVE-2099-0001": lookup("CVE-2099-0001")}   # examplelib, affected 2.0.1 up to (not including) 2.15.0
         cli.Lattice.last_gap = 0.0
 
@@ -346,15 +346,70 @@ class ProjectCommand(unittest.TestCase):
         cat = write(Path(self.tmp.name), "kev.json", json.dumps({"vulnerabilities": [
             {"cveID": "CVE-2099-0001", "vendorProject": "Exampleco", "product": "Examplelib", "vulnerabilityName": "x"},
             {"cveID": "CVE-2099-0002", "vendorProject": "Other", "product": "Nothingdeclared", "vulnerabilityName": "y"}]}))
+        cli.KEY, Stub.tier = "k", "trial_accepted"
         rc, out, _ = self.run_cli("project", str(self.root), "--kev-catalogue", str(cat))
-        calls = [m for m, _, _ in Stub.seen if m == "tools/call"]
-        self.assertEqual(len(calls), 1)                                    # CVE-2099-0002 was never read: its product is not declared here
+        reads = [m for m, _, _ in Stub.seen if m == "tools/call"]
+        self.assertEqual(len(reads), 2)                                    # one graph_meta (the tier check) and ONE id: CVE-2099-0002's product is not declared here
         self.assertIn("CVE-2099-0001", out)
+
+    def _catalogue(self):
+        write(self.root, "requirements.txt", "examplelib==2.14.0\n")
+        return write(Path(self.tmp.name), "kev.json", json.dumps({"vulnerabilities": [
+            {"cveID": "CVE-2099-0001", "vendorProject": "Exampleco", "product": "Examplelib", "vulnerabilityName": "x"}]}))
+
+    def test_the_catalogue_needs_a_key_and_asks_nothing_without_one(self):
+        cat = self._catalogue()
+        rc, out, err = self.run_cli("project", str(self.root), "--kev-catalogue", str(cat))
+        self.assertEqual(rc, 2)
+        self.assertIn("needs a Lattice key", err)
+        self.assertIn("--cve CVE-2026-46300,CVE-2021-44228", err)          # and says what to do instead
+        self.assertEqual(Stub.seen, [])                                    # not one request was made
+
+    def test_a_key_whose_email_is_not_confirmed_cannot_use_the_catalogue(self):
+        cat = self._catalogue()
+        cli.KEY, Stub.tier = "k", "trial"
+        rc, out, err = self.run_cli("project", str(self.root), "--kev-catalogue", str(cat))
+        self.assertEqual(rc, 2)
+        self.assertIn("not confirmed", err); self.assertIn("'trial'", err)
+        self.assertEqual(len([m for m, _, _ in Stub.seen if m == "tools/call"]), 1)      # only the tier check: no id was read
+        self.assertNotIn("CVE-2099-0001", out)
+
+    def test_a_confirmed_key_can_use_the_catalogue(self):
+        cat = self._catalogue()
+        for tier in ("trial_accepted", "commercial"):
+            cli.KEY, Stub.tier, Stub.seen = "k", tier, []
+            rc, out, err = self.run_cli("project", str(self.root), "--kev-catalogue", str(cat))
+            self.assertEqual((rc, err), (0, ""), tier)
+            self.assertIn("CVE-2099-0001", out)
+
+    def test_without_a_key_named_ids_work_and_may_be_comma_separated(self):
+        write(self.root, "requirements.txt", "examplelib==2.14.0\n")
+        Stub.answers["CVE-2099-0002"] = lookup("CVE-2099-0002", product="Other", vendor="Otherco")
+        cli.Lattice.last_gap = 0.0
+        orig = cli.time.sleep
+        cli.time.sleep = lambda s: None            # the keyless pacing is not what is tested here
+        try:
+            rc, out, err = self.run_cli("project", str(self.root), "--cve", "cve-2099-0001, CVE-2099-0002", "--format", "csv")
+        finally:
+            cli.time.sleep = orig
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(len([m for m, _, _ in Stub.seen if m == "tools/call"]), 2)
+        self.assertIn("CVE-2099-0001", out)
+
+    def test_a_malformed_id_is_refused_before_anything_is_asked(self):
+        rc, _, err = self.run_cli("project", str(self.root), "--cve", "CVE-2099-0001,not-an-id")
+        self.assertEqual(rc, 2)
+        self.assertIn("not a CVE id: NOT-AN-ID", err)
+        self.assertEqual(Stub.seen, [])
+
+    def test_nothing_named_and_no_catalogue_is_refused(self):
+        rc, _, err = self.run_cli("project", str(self.root))
+        self.assertEqual(rc, 2); self.assertIn("name CVEs with --cve CVE-A,CVE-B", err)
 
     def test_max_read_says_what_was_not_read(self):
         write(self.root, "requirements.txt", "examplelib==2.14.0\n")
         cve = Path(self.tmp.name) / "ids.txt"
-        cve.write_text("CVE-2099-0001\nCVE-2099-0005\nCVE-2099-0006\n")
+        cve.write_text("CVE-2099-0001, CVE-2099-0005  # two on one line\nCVE-2099-0006\n")
         rc, out, _ = self.run_cli("project", str(self.root), "--cve-file", str(cve), "--max-read", "1")
         self.assertIn("NOT READ (2)", out)
 

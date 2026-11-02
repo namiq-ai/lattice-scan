@@ -548,14 +548,14 @@ def cmd_run(a) -> int:
     private_dir()
     seen_f = OUT / "seen.json"
     seen = set(json.loads(seen_f.read_text())) if seen_f.exists() else set()
-    ids = [c.upper() for c in (a.cve or [])]
+    ids = split_ids(a.cve)
     if a.cve_file:
         try:
             lines = Path(a.cve_file).read_text().splitlines()
         except OSError as err:
             print(f"cannot read --cve-file: {err}", file=sys.stderr)
             return 2
-        ids += [l.split("#")[0].strip().upper() for l in lines if l.split("#")[0].strip()]
+        ids += split_ids(l.split("#")[0] for l in lines)
     named = set(ids)  # ids the user typed or listed: always read. `seen` only stops --discover re-reading what it has already read.
     if a.refresh and not ids and not a.discover:
         # Inventory only: collect again now, show all of it, log it. No Lattice call, nothing leaves the machine.
@@ -656,8 +656,13 @@ def cmd_run(a) -> int:
 
 
 PROJECT_EPILOG = """\
+who can do what:
+  with a key (LATTICE_API_KEY) whose email is confirmed:   --kev-catalogue FILE, any number of ids
+  without a key:                                          only the CVEs you name, comma separated:  --cve CVE-2026-46300,CVE-2021-44228
+
 examples:
-  lattice-scan project . --kev-catalogue known_exploited_vulnerabilities.json
+  lattice-scan project . --kev-catalogue known_exploited_vulnerabilities.json                  # needs a confirmed key
+  lattice-scan project . --cve CVE-2026-46300,CVE-2021-44228                                    # works without a key
   lattice-scan project api/ web/ --name API --name WEB --cve CVE-2026-46300 --csv findings.csv
   lattice-scan project . --kev-catalogue kev.json --format csv > findings.csv
   lattice-scan project . --kev-catalogue kev.json --fail-on in-range        # exit 1 when a declared version is inside an affected range
@@ -669,6 +674,19 @@ csv columns (one row per finding and declared component; a header row always):
 exit status: 0 done; 1 --fail-on matched; 2 bad usage or an unreadable input; 3 stopped part-way (Lattice limit or unreachable): read the NOT READ list.
 Only CVE ids leave the machine. Full manual: man lattice-scan.
 """
+
+
+CONFIRMED_TIERS = ("trial_accepted", "commercial")
+NEEDS_KEY = ("scanning against the exploited-vulnerability catalogue reads many ids, so it needs a Lattice key whose owner has confirmed their email. "
+             "Without a key, name the CVEs instead: --cve CVE-2026-46300,CVE-2021-44228 (comma separated). A person requests a key at https://namiq.io/lattice/docs#agents.")
+
+
+def split_ids(values) -> list[str]:
+    """CVE ids from repeated --cve arguments or lines, each of which may hold several separated by commas or spaces: 'CVE-A,CVE-B' and 'CVE-A, CVE-B' both work."""
+    out: list[str] = []
+    for v in values or []:
+        out += [t.strip().upper() for t in re.split(r"[,\s]+", str(v)) if t.strip()]
+    return out
 
 
 def project_inventory(comps) -> tuple[dict, dict[str, list]]:
@@ -781,21 +799,42 @@ def load_catalogue(path: str) -> list[dict]:
 def cmd_project(a) -> int:
     """Declared dependencies of one or more project folders against CISA-exploited CVEs, through Lattice. Evidence for a person; it decides nothing, writes no host records."""
     from lattice_scan import manifests
-    ids = [c.upper() for c in (a.cve or [])]
+    ids = split_ids(a.cve)
     if a.cve_file:
         try:
-            ids += [l.split("#")[0].strip().upper() for l in Path(a.cve_file).read_text().splitlines() if l.split("#")[0].strip()]
+            ids += split_ids(l.split("#")[0] for l in Path(a.cve_file).read_text().splitlines())
         except OSError as err:
             print(f"cannot read --cve-file: {err}", file=sys.stderr)
             return 2
-    if not ids and not a.kev_catalogue:
-        print("nothing to check: give --cve / --cve-file, or --kev-catalogue FILE (CISA's catalogue, used here only to choose which ids to read)", file=sys.stderr)
+    bad = [i for i in ids if not re.fullmatch(r"CVE-\d{4}-\d{4,7}", i)]
+    if bad:
+        print(f"not a CVE id: {', '.join(bad[:5])} (write them like CVE-2026-46300, separated by commas)", file=sys.stderr)
         return 2
+    if not ids and not a.kev_catalogue:
+        print("nothing to check: name CVEs with --cve CVE-A,CVE-B (or --cve-file), or give --kev-catalogue FILE (needs a key with a confirmed email)", file=sys.stderr)
+        return 2
+    if a.kev_catalogue and not KEY:
+        print(f"no key: {NEEDS_KEY}", file=sys.stderr)
+        return 2
+    if a.max_read is None:
+        a.max_read = 200 if KEY else 40
     results = []
     lat = Lattice()
     started = False
     stopped = ""
     catalogue = load_catalogue(a.kev_catalogue) if a.kev_catalogue else []
+    if a.kev_catalogue:
+        try:
+            lat.start()
+            started = True
+            tier = ((lat.call("graph_meta").get("access") or {}).get("tier")) or "unknown"
+        except LatticeError as err:
+            print(f"stopped: {err}", file=sys.stderr)
+            return 3
+        if tier not in CONFIRMED_TIERS:
+            print(f"this key's tier is '{tier}': the email behind it is not confirmed yet. Confirm it from the message Lattice sent to the key's owner, then run again. "
+                  "Until then, name the CVEs with --cve CVE-A,CVE-B.", file=sys.stderr)
+            return 2
     entries: dict[str, dict | None] = {}   # one read per id for the whole run, however many folders match it: the keyless day is 60 reads
     for root_s in a.paths:
         root = Path(root_s).resolve()
@@ -949,9 +988,9 @@ def main() -> int:
                         formatter_class=argparse.RawDescriptionHelpFormatter,
                         epilog=PROJECT_EPILOG)
     pj.add_argument("paths", nargs="*", default=["."], help="project folders (default: the current folder)")
-    pj.add_argument("--cve", action="append"); pj.add_argument("--cve-file")
-    pj.add_argument("--kev-catalogue", help="CISA's known_exploited_vulnerabilities.json; used locally to choose which ids to read, nothing from it is sent")
-    pj.add_argument("--max-read", type=int, default=40, help="most ids to read from Lattice per project (default 40: the keyless daily allowance is 60)")
+    pj.add_argument("--cve", action="append", help="CVE ids, comma separated (CVE-A,CVE-B); repeatable"); pj.add_argument("--cve-file", help="file of ids, one or several per line, # comments")
+    pj.add_argument("--kev-catalogue", help="CISA's known_exploited_vulnerabilities.json; chooses which ids to read. Needs a key whose email is confirmed. Nothing from the file is sent")
+    pj.add_argument("--max-read", type=int, default=None, help="most ids to read from Lattice per run (default 200 with a key, 40 without: the keyless day is 60)")
     pj.add_argument("--format", choices=["console", "csv", "json"], default="console", help="what to print (default console: a report for a person)")
     pj.add_argument("--csv", help="also write the findings as CSV to this file")
     pj.add_argument("--json", help="also write the full result as JSON to this file")

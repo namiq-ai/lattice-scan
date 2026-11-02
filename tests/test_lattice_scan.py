@@ -30,6 +30,7 @@ class Stub(BaseHTTPRequestHandler):
     answers: dict = {}
     seen: list = []
     other_port = 0
+    tier = "keyless"
 
     def log_message(self, *a):
         pass
@@ -47,7 +48,10 @@ class Stub(BaseHTTPRequestHandler):
             res = {"serverInfo": {"name": "stub"}}
         else:
             a = body["params"]["arguments"]
-            data = {"error": "quota_exceeded", "message": "daily limit reached"} if Stub.mode == "quota" else Stub.answers.get(a.get("id"), {"items": []})
+            if body["params"].get("name") == "graph_meta":
+                data = {"snapshot": "s1", "access": {"tier": Stub.tier}}
+            else:
+                data = {"error": "quota_exceeded", "message": "daily limit reached"} if Stub.mode == "quota" else Stub.answers.get(a.get("id"), {"items": []})
             res = {"content": [{"type": "text", "text": json.dumps(data)}], "isError": False}
         payload = json.dumps({"jsonrpc": "2.0", "id": body["id"], "result": res})
         if Stub.mode == "sse":

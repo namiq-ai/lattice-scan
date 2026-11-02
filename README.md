@@ -38,11 +38,16 @@ lattice-scan --debug --cve CVE-...                         # every request, resp
 
 ## Check a project's dependencies
 
+**Who can scan what.** Reading many ids is for a key whose owner has confirmed their email. With a confirmed key, `--kev-catalogue` lets CISA's catalogue choose the ids. A key whose email is not
+confirmed yet (tier `trial`) is refused with a message to confirm it; no id is read. **Without a key you name the CVEs yourself**, comma separated:
+`lattice-scan project . --cve CVE-2026-46300,CVE-2021-44228` (at most 40 a run, inside the keyless daily allowance).
+
 ```bash
-lattice-scan project .  --kev-catalogue known_exploited_vulnerabilities.json     # CISA's file; used here only to choose which ids to read
+lattice-scan project . --cve CVE-2026-46300,CVE-2021-44228                       # no key needed: only the CVEs you name
+LATTICE_API_KEY=... lattice-scan project .  --kev-catalogue known_exploited_vulnerabilities.json   # confirmed key: CISA's file chooses the ids
 lattice-scan project app/ api/ --name APP --name API --cve CVE-2026-46300         # explicit ids; several folders at once, labelled
-lattice-scan project . --kev-catalogue kev.json --csv findings.csv                # the report on screen, a CSV alongside
-lattice-scan project . --kev-catalogue kev.json --fail-on in-range                # exit 1 when a declared version is inside an affected range
+lattice-scan project . --cve CVE-2026-46300 --csv findings.csv                    # the report on screen, a CSV alongside
+lattice-scan project . --cve CVE-2026-46300 --fail-on in-range                    # exit 1 when a declared version is inside an affected range
 ```
 
 Reads what the project **declares**. Nothing is executed and nothing is installed.
@@ -65,7 +70,7 @@ Reads what the project **declares**. Nothing is executed and nothing is installe
   coordinate also matches (`org.apache.logging.log4j:log4j-core` is Log4j2), and its versions are compared. A match through an npm scope alone (`@vitejs/plugin-react` for Vite) is a lead only:
   that package's version is not the product's, so no range is compared. `minio` the Python client matches MinIO the server by name; reading the finding tells you which it is. A match is a candidate for a person to read against what is really deployed (a distribution may backport a fix; a lockfile may not be what runs).
 - Writes no host records (`~/.lattice-scan` is untouched). Skips `node_modules`, virtualenvs, build output and `.claude`. If its file search reaches its limit it says so.
-- Without a key, Lattice allows 60 reads a day; `--max-read` (default 40) stops a project from using them all, and the ids not read are listed.
+- Without a key, Lattice allows 60 reads a day; `--max-read` (default 40 without a key, 200 with one) stops a run from using them all, and the ids not read are listed.
 
 ### Reading the report
 
@@ -92,7 +97,7 @@ project,cve,title,verdict,component,ecosystem,declared,version,file,line,listed,
 written with one leading apostrophe so a spreadsheet does not run it as a formula; strip one leading `'` for the raw text. `--format json` (or `--json FILE`) is the same data with the files read and the ids not read.
 
 ```bash
-lattice-scan project . --kev-catalogue kev.json --format csv | \
+lattice-scan project . --cve CVE-2026-46300,CVE-2021-44228 --format csv | \
   python3 -c 'import csv,sys; [print(r["cve"], r["component"]) for r in csv.DictReader(sys.stdin) if r["verdict"]=="in-range"]'
 ```
 
