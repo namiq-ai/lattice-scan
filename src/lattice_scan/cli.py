@@ -649,6 +649,139 @@ def cmd_run(a) -> int:
     return 0
 
 
+def project_inventory(comps) -> tuple[dict, dict[str, list]]:
+    """An inventory in the shape the host matcher reads, built from declared components, and where each name was declared.
+
+    A declared range, `latest` or no tag has no version, so its value is the declaration itself (`>=1.0`, `unpinned`): version_check cannot read it as a number and
+    says `undetermined`, which is the truth. Where a lockfile pins a name, the unpinned declarations of that name are dropped: the lock is what is installed.
+    A name with several different versions keeps each under `name#2`, `name#3`: they all matter.
+    """
+    pinned_names = {c.name for c in comps if c.version}
+    packages: dict[str, str] = {}
+    where: dict[str, list] = {}
+    for c in comps:
+        if not c.version and c.name in pinned_names:
+            continue
+        val = c.version or c.spec or "unpinned"
+        key = c.name
+        k = 1
+        while key in packages and packages[key] != val:
+            k += 1
+            key = f"{c.name}#{k}"
+        packages[key] = val
+        where.setdefault(key, []).append(c)
+    inv = {"kernel": "", "os": "project manifests", "node": "", "restartRequired": False, "packages": packages, "snaps": {}, "images": []}
+    inv["hash"] = hashlib.sha256(json.dumps(packages, sort_keys=True).encode()).hexdigest()[:12]
+    return inv, where
+
+
+def load_catalogue(path: str) -> list[dict]:
+    """CISA's known_exploited_vulnerabilities.json, or one JSON object per line with source_id / vendor_project / product (the shape the OCO graph keeps)."""
+    text = Path(path).read_text()
+    rows = []
+    if text.lstrip().startswith("{") and '"vulnerabilities"' in text[:2000]:
+        for v in json.loads(text).get("vulnerabilities", []):
+            rows.append({"cve": str(v.get("cveID", "")).upper(), "vendor": v.get("vendorProject", ""), "product": v.get("product", ""), "title": v.get("vulnerabilityName", "")})
+    else:
+        for line in text.splitlines():
+            if line.strip():
+                v = json.loads(line)
+                rows.append({"cve": str(v.get("source_id") or v.get("cve") or "").upper(), "vendor": v.get("vendor_project", ""), "product": v.get("product", ""), "title": v.get("title", "")})
+    return [r for r in rows if r["cve"].startswith("CVE-")]
+
+
+def cmd_project(a) -> int:
+    """Declared dependencies of one or more project folders against CISA-exploited CVEs, through Lattice. Evidence for a person; it decides nothing, writes no host records."""
+    from lattice_scan import manifests
+    ids = [c.upper() for c in (a.cve or [])]
+    if a.cve_file:
+        try:
+            ids += [l.split("#")[0].strip().upper() for l in Path(a.cve_file).read_text().splitlines() if l.split("#")[0].strip()]
+        except OSError as err:
+            print(f"cannot read --cve-file: {err}", file=sys.stderr)
+            return 2
+    if not ids and not a.kev_catalogue:
+        print("nothing to check: give --cve / --cve-file, or --kev-catalogue FILE (CISA's catalogue, used here only to choose which ids to read)", file=sys.stderr)
+        return 2
+    results = []
+    lat = Lattice()
+    started = False
+    stopped = ""
+    catalogue = load_catalogue(a.kev_catalogue) if a.kev_catalogue else []
+    for root_s in a.paths:
+        root = Path(root_s).resolve()
+        if not root.is_dir():
+            print(f"not a folder: {root_s}", file=sys.stderr)
+            return 2
+        comps, files, cut = manifests.read_project(root)
+        inv, where = project_inventory(comps)
+        pinned = sum(1 for c in comps if c.version)
+        # Which ids to read: the ones named, plus catalogue entries whose product words are all declared here (a name match, nothing more).
+        picked = {}
+        for e in catalogue:
+            if e["cve"] in ids or e["cve"] in picked:
+                continue
+            m = candidate({"cve": e["cve"], "vendor": e["vendor"], "product": e["product"], "title": e["title"]}, inv)
+            if m and not m[0].startswith(("kernel in use", "Node.js")):
+                picked[e["cve"]] = m[0]
+        todo = sorted(set(ids) | set(picked))
+        unread = []
+        if len(todo) > a.max_read:
+            unread = todo[a.max_read:]
+            todo = todo[:a.max_read]
+        hits, read, not_listed = [], 0, []
+        for cve in todo:
+            if stopped:
+                unread.append(cve)
+                continue
+            try:
+                if not started:
+                    lat.start()
+                    started = True
+                e = kev_entry(lat, cve)
+            except LatticeError as err:
+                stopped = str(err)
+                unread.append(cve)
+                continue
+            read += 1
+            if e is None:
+                not_listed.append(cve)
+                continue
+            m = candidate(e, inv)
+            if not m or m[0].startswith(("kernel in use", "Node.js")):
+                continue
+            why, installed, vers = m
+            names = [n for n in inv["packages"] if f"{n} {inv['packages'][n]}" in installed]
+            vc = version_check(e, vers)
+            hits.append({"cve": cve, "title": e["title"], "why": why, "listed": e["added"], "due": e["due"], "action": e["action"][:400], "versionCheck": vc,
+                         "declared": [{"name": c.name, "spec": c.spec, "version": c.version, "file": c.file, "line": c.line, "ecosystem": c.ecosystem}
+                                      for n in names for c in where.get(n, [])]})
+        results.append({"root": str(root), "files": files, "filesCut": cut, "components": len(comps), "pinned": pinned, "read": read, "candidates": hits,
+                        "notListed": not_listed, "unread": unread, "stopped": stopped})
+    if a.json:
+        Path(a.json).write_text(json.dumps({"tool": f"lattice-scan {__version__}", "on": TODAY, "projects": results}, indent=1))
+    for r in results:
+        print(f"project scan {TODAY}: {r['root']}\n  {len(r['files'])} manifest file(s), {r['components']} declared component(s), {r['pinned']} pinned to a version"
+              + (" (file search stopped at its limit: not every manifest was read)" if r["filesCut"] else ""))
+        print(f"  {r['read']} exploited entries read, {len(r['candidates'])} candidate(s) (a person must read each against what is really deployed)")
+        for h in r["candidates"]:
+            print(f"  {h['cve']}  {h['title'][:70]}\n      because: {h['why']}")
+            for d in h["declared"][:6]:
+                print(f"      declared: {d['name']} {d['spec'] or '(no version)'}  [{d['file']}:{d['line']}]")
+            vc = h["versionCheck"]
+            print(f"      listed {h['listed'] or '-'}, due {h['due'] or '-'}\n      version check: {vc['verdict']}: {vc['why']}")
+            if vc["verdict"] == "in-range":
+                print("      (declared version only: what is deployed may differ, and a distribution may have backported the fix)")
+        if r["unread"]:
+            print(f"  NOT READ ({len(r['unread'])}): " + ", ".join(r["unread"][:12]) + (" ..." if len(r["unread"]) > 12 else "") + ("  (stopped: " + r["stopped"] + ")" if r["stopped"] else "  (over --max-read; raise it or use a key)"))
+        if r["notListed"]:
+            print(f"  not in the graph's CISA list (not 'safe', only 'not listed in this snapshot'): {', '.join(r['notListed'][:12])}")
+    if stopped:
+        print(f"stopped: {stopped}", file=sys.stderr)
+    bad = [h for r in results for h in r["candidates"] if (a.fail_on == "candidate") or (a.fail_on == "in-range" and h["versionCheck"]["verdict"] == "in-range")]
+    return 1 if (bad and a.fail_on != "never") else (3 if stopped else 0)
+
+
 def print_impact(imp: dict) -> None:
     print(f"      installed: {'; '.join(imp['installed'])}")
     print(f"      listed {imp.get('listed') or '-'}" + (f" ({imp['daysSinceListed']} days ago)" if "daysSinceListed" in imp else "") + f", due {imp.get('due') or '-'}" + (f", {imp['dueStatus']}" if "dueStatus" in imp else ""))
@@ -724,12 +857,20 @@ def main() -> int:
     r = sub.add_parser("resolve"); r.add_argument("cve"); r.add_argument("--status", required=True, choices=["verified", "fixed", "not-applicable"]); r.add_argument("--proof", default=""); r.add_argument("--on")
     im = sub.add_parser("impact", help="the recorded impact detail of one finding"); im.add_argument("cve")
     d = sub.add_parser("add"); d.add_argument("--ref", required=True); d.add_argument("--note", required=True); d.add_argument("--on")
+    pj = sub.add_parser("project", help="check the dependencies a project DECLARES (requirements, pyproject, package.json and lock, Dockerfile, compose); writes no host records")
+    pj.add_argument("paths", nargs="*", default=["."], help="project folders (default: the current folder)")
+    pj.add_argument("--cve", action="append"); pj.add_argument("--cve-file")
+    pj.add_argument("--kev-catalogue", help="CISA's known_exploited_vulnerabilities.json; used locally to choose which ids to read, nothing from it is sent")
+    pj.add_argument("--max-read", type=int, default=40, help="most ids to read from Lattice per project (default 40: the keyless daily allowance is 60)")
+    pj.add_argument("--json", help="also write the result to this file")
+    pj.add_argument("--fail-on", choices=["never", "in-range", "candidate"], default="never", help="exit 1 when a candidate (or an in-range one) is found; default never: a person reads it")
     sub.add_parser("list"); sub.add_parser("stats")
     il = sub.add_parser("inventory", help="show inventory.log: counts and changes per run"); il.add_argument("-n", type=int, default=20)
     lg = sub.add_parser("log"); lg.add_argument("-n", type=int, default=20, help="last N lines (default 20)")
     a = p.parse_args()
     global DEBUG
     DEBUG = a.debug or env("DEBUG") == "1"
+    if a.c == "project": return cmd_project(a)
     if a.c == "impact": return cmd_impact(a)
     if a.c == "resolve": return cmd_resolve(a)
     if a.c == "add": return cmd_add(a)

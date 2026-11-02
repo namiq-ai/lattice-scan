@@ -25,7 +25,7 @@ class Bundle(unittest.TestCase):
 
     def test_bundled_script_is_the_current_source(self):
         with zipfile.ZipFile(PYZ) as z:
-            for m in ("cli.py", "__init__.py", "__main__.py"):
+            for m in ("cli.py", "manifests.py", "__init__.py", "__main__.py"):
                 self.assertEqual(z.read(f"lattice_scan/{m}"), (ROOT / "src/lattice_scan" / m).read_bytes(),
                                  f"{m} in the bundled .pyz is stale: run packaging/build.py")
 

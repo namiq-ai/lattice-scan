@@ -36,6 +36,24 @@ lattice-scan list | impact CVE-... | resolve CVE-... --status fixed --proof "...
 lattice-scan --debug --cve CVE-...                         # every request, response and match decision
 ```
 
+## Check a project's dependencies
+
+```bash
+lattice-scan project .  --kev-catalogue known_exploited_vulnerabilities.json     # CISA's file; used here only to choose which ids to read
+lattice-scan project app/ api/ --cve CVE-2026-46300 --json result.json            # explicit ids; several folders at once
+lattice-scan project . --kev-catalogue kev.json --fail-on in-range                # exit 1 when a declared version is inside an affected range
+```
+
+Reads what the project **declares**: `requirements*.txt` and `requirements*.lock` (with `-r` includes), `pyproject.toml` (PEP 621, optional groups, poetry), `package.json`
+and `package-lock.json`, `Dockerfile*` (`FROM`, `pip install`, `apt-get install`) and `docker-compose` / `compose` files (`image:`). Nothing is executed and nothing is installed.
+
+- A **pinned** version (`==2.14.0`, a lockfile entry, an image tag such as `16.2`) is compared with NVD's ranges. A range (`>=1.0`), `latest` or no tag has no version, and the
+  answer for it is `undetermined`, never `outside-range`.
+- Where a lockfile pins a name, the unpinned declarations of that name are left out: the lock says what is installed.
+- Matching is by product name, like the host check. A match is a candidate for a person to read against what is really deployed (a distribution may backport a fix; a lockfile may not be what runs).
+- Writes no host records (`~/.lattice-scan` is untouched). Skips `node_modules`, virtualenvs, build output and `.claude`. If its file search reaches its limit it says so.
+- Without a key, Lattice allows 60 reads a day; `--max-read` (default 40) stops a project from using them all, and the ids not read are listed.
+
 ## Use it as a Claude Code skill
 
 The same tool ships as a plugin whose skill runs it on the machine Claude is running on and reports each match as a candidate for a person to check.
