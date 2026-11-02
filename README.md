@@ -36,6 +36,75 @@ lattice-scan list | impact CVE-... | resolve CVE-... --status fixed --proof "...
 lattice-scan --debug --cve CVE-...                         # every request, response and match decision
 ```
 
+## Check a project's dependencies
+
+**Who can scan what.** Reading many ids is for a key whose owner has confirmed their email. With a confirmed key, `--kev-catalogue` lets CISA's catalogue choose the ids. A key whose email is not
+confirmed yet (tier `trial`) is refused with a message to confirm it; no id is read. **Without a key you name the CVEs yourself**, comma separated:
+`lattice-scan project . --cve CVE-2026-46300,CVE-2021-44228` (at most 40 a run, inside the keyless daily allowance).
+
+```bash
+lattice-scan project . --cve CVE-2026-46300,CVE-2021-44228                       # no key needed: only the CVEs you name
+LATTICE_API_KEY=... lattice-scan project .  --kev-catalogue known_exploited_vulnerabilities.json   # confirmed key: CISA's file chooses the ids
+lattice-scan project app/ api/ --name APP --name API --cve CVE-2026-46300         # explicit ids; several folders at once, labelled
+lattice-scan project . --cve CVE-2026-46300 --csv findings.csv                    # the report on screen, a CSV alongside
+lattice-scan project . --cve CVE-2026-46300 --fail-on in-range                    # exit 1 when a declared version is inside an affected range
+```
+
+Reads what the project **declares**. Nothing is executed and nothing is installed.
+
+| Ecosystem | Files |
+|---|---|
+| Python | `requirements*.txt` and `requirements*.lock` (with `-r` includes), `pyproject.toml` (PEP 621, optional groups, poetry) |
+| JavaScript | `package.json`, `package-lock.json` |
+| Java | `pom.xml` (properties resolved), `build.gradle`, `build.gradle.kts`, `gradle.lockfile`, `gradle/libs.versions.toml` |
+| Rust | `Cargo.toml`, `Cargo.lock` |
+| C and C++ | `CMakeLists.txt` and `*.cmake` (`find_package`, `FetchContent_Declare`, `ExternalProject_Add`, `CPMAddPackage`, `pkg_check_modules`), `conanfile.txt` / `conanfile.py`, `vcpkg.json` |
+| Make | `Makefile`, `GNUmakefile`, `*.mk` (`NAME_VERSION = x.y.z`, `pkg-config` constraints, library names from `-l` flags, tarball names in download commands) |
+| Containers | `Dockerfile*` (`FROM`, `pip install`, `apt-get install`, tarball names), `docker-compose` / `compose` files (`image:`) |
+
+- A **pinned** version (`==2.14.0`, a lockfile entry, `=1.4.2` in Cargo, a Docker tag with two or more numbers such as `16.2` or `13.0.1-security-01`) is compared with NVD's ranges. A range
+  (`>=1.0`), a caret requirement, `find_package(X 1.1)` (a minimum), a branch name, `latest` or a major-only tag (`16`) has no version, and the answer for it is `undetermined`, never `outside-range`.
+- A `-lssl` link flag or an unversioned `find_package` names a library, not a version: it is listed so a person knows the library is used.
+- Where a lockfile pins a name, the unpinned declarations of that name are left out: the lock says what is installed.
+- Matching is by identity: the product must be the package (or its npm scope, or vendor+product). For Maven, Cargo, Conan, vcpkg, CMake and Make names the product as a whole token of a longer
+  coordinate also matches (`org.apache.logging.log4j:log4j-core` is Log4j2), and its versions are compared. A match through an npm scope alone (`@vitejs/plugin-react` for Vite) is a lead only:
+  that package's version is not the product's, so no range is compared. `minio` the Python client matches MinIO the server by name; reading the finding tells you which it is. A match is a candidate for a person to read against what is really deployed (a distribution may backport a fix; a lockfile may not be what runs).
+- Writes no host records (`~/.lattice-scan` is untouched). Skips `node_modules`, virtualenvs, build output and `.claude`. If its file search reaches its limit it says so.
+- Without a key, Lattice allows 60 reads a day; `--max-read` (default 40 without a key, 200 with one) stops a run from using them all, and the ids not read are listed.
+
+### Reading the report
+
+The default output is a report for a person: a summary table (one row per project, a total for several), then each project's findings with the declared component and its
+file and line, CISA's dates ("listed 3 days ago, due in 18 days"), the version check and CISA's required action, then the ids that were not read, and a legend. Colour is used only on a
+terminal (`--color auto`; never when `NO_COLOR` is set). `--width N` fixes the width.
+
+| Verdict | Meaning |
+|---|---|
+| `in-range` | A declared, pinned version lies inside a range NVD lists as affected. Check what is really deployed. |
+| `undetermined` | The declaration is a range, a minimum, a floating tag or has no version; NVD's bounds are dates or build ids; or the package is not the product itself. |
+| `outside-range` | Every pinned version declared is outside every usable range. This does not close a finding. |
+| `not-read` | An id that matches a dependency by name was not read from Lattice (a limit or a stop). Neither safe nor affected. |
+
+### For scripts: CSV and JSON
+
+`--format csv` prints (and `--csv FILE` writes) one row per finding and declared component, UTF-8, LF line ends, always with a header row, in this fixed column order:
+
+```
+project,cve,title,verdict,component,ecosystem,declared,version,file,line,listed,due,due_status,action,why
+```
+
+`version` is the pinned version alone (empty when there is none), `declared` is the text as written (`==2.14.0`). Text from outside (a CVE title, CISA's action, a file name) that starts with `=`, `+`, `-` or `@` is
+written with one leading apostrophe so a spreadsheet does not run it as a formula; strip one leading `'` for the raw text. `--format json` (or `--json FILE`) is the same data with the files read and the ids not read.
+
+```bash
+lattice-scan project . --cve CVE-2026-46300,CVE-2021-44228 --format csv | \
+  python3 -c 'import csv,sys; [print(r["cve"], r["component"]) for r in csv.DictReader(sys.stdin) if r["verdict"]=="in-range"]'
+```
+
+Exit status: `0` done, `1` `--fail-on` matched, `2` bad usage or an unreadable input, `3` stopped part-way (Lattice's allowance ran out or it could not be reached; the ids not read are listed).
+
+The full manual is `man lattice-scan` (installed by the `.deb`; `man -l man/lattice-scan.1` from a checkout), and `lattice-scan project --help` has examples and the CSV columns.
+
 ## Use it as a Claude Code skill
 
 The same tool ships as a plugin whose skill runs it on the machine Claude is running on and reports each match as a candidate for a person to check.

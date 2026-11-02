@@ -355,11 +355,17 @@ def version_check(entry: dict, vers: list[str]) -> dict:
     # The ranges that belong to THIS entry's product: same vendor as CISA names it, and a shared product word. The host was already matched by name
     # (a kernel matches by uname, not by a package), so what is installed is not consulted here.
     kev_words = words(entry.get("product", ""))
+    kev_words |= {w[:-2] for w in kev_words if w.endswith("js") and len(w) > 4}      # CISA says "Vitejs", NVD says vite
     vendor = re.sub(r"[^a-z0-9]", "", entry.get("vendor", "").lower())
+    prod_forms = {_flat(entry.get("product", ""))}
+    prod_forms |= {f[:-2] for f in prod_forms if f.endswith("js") and len(f) > 4}
     mine = []
     for r in entry.get("ranges", []):
         sv, _, sp = r.get("product", "").partition("/")
-        if words(sp.replace("_", " ")) & kev_words and (not vendor or re.sub(r"[^a-z0-9]", "", sv.lower()) in vendor):
+        # Another vendor's range is not ours, unless the product name is the same name: CISA's vendor is often the maintainer today ("Kludex Starlette")
+        # while NVD files the product under the original one ("encode/starlette"), and "sudo_project/sudo" is CISA's "Sudo".
+        vendor_ok = not vendor or re.sub(r"[^a-z0-9]", "", sv.lower()) in vendor or _flat(sp.replace("_", " ")) in prod_forms
+        if words(sp.replace("_", " ")) & kev_words and vendor_ok:
             mine.append(r)
     if not mine:
         return {"verdict": "undetermined", "why": "Lattice listed no version range for this product name"}
@@ -542,14 +548,14 @@ def cmd_run(a) -> int:
     private_dir()
     seen_f = OUT / "seen.json"
     seen = set(json.loads(seen_f.read_text())) if seen_f.exists() else set()
-    ids = [c.upper() for c in (a.cve or [])]
+    ids = split_ids(a.cve)
     if a.cve_file:
         try:
             lines = Path(a.cve_file).read_text().splitlines()
         except OSError as err:
             print(f"cannot read --cve-file: {err}", file=sys.stderr)
             return 2
-        ids += [l.split("#")[0].strip().upper() for l in lines if l.split("#")[0].strip()]
+        ids += split_ids(l.split("#")[0] for l in lines)
     named = set(ids)  # ids the user typed or listed: always read. `seen` only stops --discover re-reading what it has already read.
     if a.refresh and not ids and not a.discover:
         # Inventory only: collect again now, show all of it, log it. No Lattice call, nothing leaves the machine.
@@ -649,6 +655,269 @@ def cmd_run(a) -> int:
     return 0
 
 
+PROJECT_EPILOG = """\
+who can do what:
+  with a key (LATTICE_API_KEY) whose email is confirmed:   --kev-catalogue FILE, any number of ids
+  without a key:                                          only the CVEs you name, comma separated:  --cve CVE-2026-46300,CVE-2021-44228
+
+examples:
+  lattice-scan project . --kev-catalogue known_exploited_vulnerabilities.json                  # needs a confirmed key
+  lattice-scan project . --cve CVE-2026-46300,CVE-2021-44228                                    # works without a key
+  lattice-scan project api/ web/ --name API --name WEB --cve CVE-2026-46300 --csv findings.csv
+  lattice-scan project . --kev-catalogue kev.json --format csv > findings.csv
+  lattice-scan project . --kev-catalogue kev.json --fail-on in-range        # exit 1 when a declared version is inside an affected range
+
+csv columns (one row per finding and declared component; a header row always):
+  project cve title verdict component ecosystem declared version file line listed due due_status action why
+  verdict is one of in-range, undetermined, outside-range, not-read. A cell that starts with = + - or @ has a leading ' so a spreadsheet does not run it.
+
+exit status: 0 done; 1 --fail-on matched; 2 bad usage or an unreadable input; 3 stopped part-way (Lattice limit or unreachable): read the NOT READ list.
+Only CVE ids leave the machine. Full manual: man lattice-scan.
+"""
+
+
+CONFIRMED_TIERS = ("trial_accepted", "commercial")
+NEEDS_KEY = ("scanning against the exploited-vulnerability catalogue reads many ids, so it needs a Lattice key whose owner has confirmed their email. "
+             "Without a key, name the CVEs instead: --cve CVE-2026-46300,CVE-2021-44228 (comma separated). A person requests a key at https://namiq.io/lattice/docs#agents.")
+
+
+def split_ids(values) -> list[str]:
+    """CVE ids from repeated --cve arguments or lines, each of which may hold several separated by commas or spaces: 'CVE-A,CVE-B' and 'CVE-A, CVE-B' both work."""
+    out: list[str] = []
+    for v in values or []:
+        out += [t.strip().upper() for t in re.split(r"[,\s]+", str(v)) if t.strip()]
+    return out
+
+
+def project_inventory(comps) -> tuple[dict, dict[str, list]]:
+    """An inventory in the shape the host matcher reads, built from declared components, and where each name was declared.
+
+    A declared range, `latest` or no tag has no version, so its value is the declaration itself (`>=1.0`, `unpinned`): version_check cannot read it as a number and
+    says `undetermined`, which is the truth. Where a lockfile pins a name, the unpinned declarations of that name are dropped: the lock is what is installed.
+    A name with several different versions keeps each under `name#2`, `name#3`: they all matter.
+    """
+    pinned_names = {c.name for c in comps if c.version}
+    packages: dict[str, str] = {}
+    where: dict[str, list] = {}
+    ecosystems: dict[str, str] = {}
+    for c in comps:
+        if not c.version and c.name in pinned_names:
+            continue
+        val = c.version or c.spec or "unpinned"
+        key = c.name
+        k = 1
+        while key in packages and packages[key] != val:
+            k += 1
+            key = f"{c.name}#{k}"
+        packages[key] = val
+        ecosystems[key] = c.ecosystem
+        where.setdefault(key, []).append(c)
+    inv = {"kernel": "", "os": "project manifests", "node": "", "restartRequired": False, "packages": packages, "snaps": {}, "images": [], "ecosystems": ecosystems}
+    inv["hash"] = hashlib.sha256(json.dumps(packages, sort_keys=True).encode()).hexdigest()[:12]
+    return inv, where
+
+
+FAMILY_ECOSYSTEMS = {"maven", "cargo", "conan", "vcpkg", "cmake", "make", "c"}
+GENERIC_PRODUCTS = {"core", "client", "server", "library", "tools", "runtime", "view", "framework", "platform", "engine", "common", "base", "utils", "api", "cli", "sdk", "web", "app"}
+
+
+def _flat(s: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def project_candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str], bool, list[tuple[str, str, str, bool]]] | None:
+    """A declared dependency that IS this entry's product, or None. Stricter than the host's word match, on purpose.
+
+    A host's package list is flat and a product word may sit anywhere in a name; a project's names are single identifiers, and a loose match is noise
+    ('WordPress Core' is not @babel/core, 'Chromium' is not electron-to-chromium, 'BIND' is not call-bind). So the flattened product must equal the flattened package
+    name, the vendor+product, or one is a prefix of the other when the shorter has 6+ characters and covers 70% of the longer (postgres / PostgreSQL). A generic one-word
+    product ('Core') also needs its vendor in the name. The title is the fallback when an answer has no product, as for the host.
+
+    Beyond identity: for Maven, Cargo, Conan, vcpkg, CMake and Makefile names, which carry the product inside a longer coordinate (org.apache.logging.log4j:log4j-core is
+    Log4j2; openssl-sys is OpenSSL), the product as one whole token of the name is a match of the same product family, whose versions are comparable. A match through an npm
+    SCOPE only (@vitejs/plugin-react for Vite) is a lead and nothing more: its version is not the product's, so the fourth value is False and no range is compared.
+    Returns (why, "name version" list, versions, whether every match is comparable, the matches as (key, name, version, comparable) so each can be judged on its own).
+    """
+    product = _flat(entry.get("product", ""))
+    basis = "product"
+    if not product:
+        product, basis = _flat(re.sub(r"^\S+\s+", "", entry.get("title", ""))), "title"
+    if len(product) < 4:
+        return None
+    forms_p = {product} | ({product[:-2]} if product.endswith("js") and len(product) > 4 else set())    # CISA "Vitejs" is the npm package "vite"
+    vendor = _flat(entry.get("vendor", ""))
+    generic = product in GENERIC_PRODUCTS
+    eco = inv.get("ecosystems", {})
+    hit: list[tuple[str, str, str, bool]] = []
+    for key, val in inv["packages"].items():
+        name = key.split("#")[0]
+        base = _flat(name.rsplit("/", 1)[-1].rsplit(":", 1)[-1])
+        scope = _flat(name.split("/")[0].lstrip("@")) if name.startswith("@") else ""
+        vendor_in_name = bool(vendor) and (vendor in _flat(name) or (scope and scope in vendor))
+        comparable, matched = True, False
+        for pf in forms_p:
+            forms = [f for f in ((base if (not scope or scope == pf or vendor_in_name) else ""), scope) if f]
+            for f in forms:
+                short, long_ = sorted((f, pf), key=len)
+                same = f == pf or (vendor and f == vendor + pf) or (len(short) >= 6 and long_.startswith(short) and len(short) / len(long_) >= 0.7)
+                if same and (not generic or vendor_in_name or f == scope or f == vendor + pf):
+                    matched = True
+                    comparable = not (scope and f == scope and base != f)     # matched only through the scope: not the same package
+                    break
+            if matched:
+                break
+        if not matched and eco.get(key) in FAMILY_ECOSYSTEMS and not generic:
+            toks = {t.rstrip("0123456789") or t for t in re.findall(r"[a-z][a-z0-9]*", name.lower())}
+            core = {pf.rstrip("0123456789") or pf for pf in forms_p}
+            if any(len(c) >= 5 and c in toks for c in core):
+                matched = True
+        if matched:
+            hit.append((key, name, val, comparable))
+    if not hit:
+        return None
+    names = sorted({n for _, n, _, _ in hit})
+    comparable = all(c for _, _, _, c in hit)
+    vers = [v for _, _, v, _ in hit] if comparable else ["not the product's own package"]
+    return (f"{basis} {product} is declared as " + ", ".join(names), [f"{n} {v}" for _, n, v, _ in hit], vers, comparable, hit)
+
+
+def load_catalogue(path: str) -> list[dict]:
+    """CISA's known_exploited_vulnerabilities.json, or one JSON object per line with source_id / vendor_project / product (the shape the OCO graph keeps)."""
+    text = Path(path).read_text()
+    rows = []
+    if text.lstrip().startswith("{") and '"vulnerabilities"' in text[:2000]:
+        for v in json.loads(text).get("vulnerabilities", []):
+            rows.append({"cve": str(v.get("cveID", "")).upper(), "vendor": v.get("vendorProject", ""), "product": v.get("product", ""), "title": v.get("vulnerabilityName", "")})
+    else:
+        for line in text.splitlines():
+            if line.strip():
+                v = json.loads(line)
+                rows.append({"cve": str(v.get("source_id") or v.get("cve") or "").upper(), "vendor": v.get("vendor_project", ""), "product": v.get("product", ""), "title": v.get("title", "")})
+    return [r for r in rows if r["cve"].startswith("CVE-")]
+
+
+def cmd_project(a) -> int:
+    """Declared dependencies of one or more project folders against CISA-exploited CVEs, through Lattice. Evidence for a person; it decides nothing, writes no host records."""
+    from lattice_scan import manifests
+    ids = split_ids(a.cve)
+    if a.cve_file:
+        try:
+            ids += split_ids(l.split("#")[0] for l in Path(a.cve_file).read_text().splitlines())
+        except OSError as err:
+            print(f"cannot read --cve-file: {err}", file=sys.stderr)
+            return 2
+    bad = [i for i in ids if not re.fullmatch(r"CVE-\d{4}-\d{4,7}", i)]
+    if bad:
+        print(f"not a CVE id: {', '.join(bad[:5])} (write them like CVE-2026-46300, separated by commas)", file=sys.stderr)
+        return 2
+    if not ids and not a.kev_catalogue:
+        print("nothing to check: name CVEs with --cve CVE-A,CVE-B (or --cve-file), or give --kev-catalogue FILE (needs a key with a confirmed email)", file=sys.stderr)
+        return 2
+    if a.kev_catalogue and not KEY:
+        print(f"no key: {NEEDS_KEY}", file=sys.stderr)
+        return 2
+    if a.max_read is None:
+        a.max_read = 200 if KEY else 40
+    results = []
+    lat = Lattice()
+    started = False
+    stopped = ""
+    catalogue = load_catalogue(a.kev_catalogue) if a.kev_catalogue else []
+    if a.kev_catalogue:
+        try:
+            lat.start()
+            started = True
+            tier = ((lat.call("graph_meta").get("access") or {}).get("tier")) or "unknown"
+        except LatticeError as err:
+            print(f"stopped: {err}", file=sys.stderr)
+            return 3
+        if tier not in CONFIRMED_TIERS:
+            print(f"this key's tier is '{tier}': the email behind it is not confirmed yet. Confirm it from the message Lattice sent to the key's owner, then run again. "
+                  "Until then, name the CVEs with --cve CVE-A,CVE-B.", file=sys.stderr)
+            return 2
+    entries: dict[str, dict | None] = {}   # one read per id for the whole run, however many folders match it: the keyless day is 60 reads
+    for root_s in a.paths:
+        root = Path(root_s).resolve()
+        if not root.is_dir():
+            print(f"not a folder: {root_s}", file=sys.stderr)
+            return 2
+        comps, files, cut = manifests.read_project(root)
+        inv, where = project_inventory(comps)
+        pinned = sum(1 for c in comps if c.version)
+        # Which ids to read: the ones named, plus catalogue entries whose product words are all declared here (a name match, nothing more).
+        picked = {}
+        for e in catalogue:
+            if e["cve"] in ids or e["cve"] in picked:
+                continue
+            m = project_candidate(e, inv)
+            if m:
+                picked[e["cve"]] = m[0]
+        todo = sorted(set(ids) | set(picked))
+        unread = []
+        if len(todo) > a.max_read:
+            unread = todo[a.max_read:]
+            todo = todo[:a.max_read]
+        hits, read, not_listed = [], 0, []
+        for cve in todo:
+            if stopped:
+                unread.append(cve)
+                continue
+            try:
+                if cve not in entries:
+                    if not started:
+                        lat.start()
+                        started = True
+                    entries[cve] = kev_entry(lat, cve)
+                e = entries[cve]
+            except LatticeError as err:
+                stopped = str(err)
+                unread.append(cve)
+                continue
+            read += 1
+            if e is None:
+                not_listed.append(cve)
+                continue
+            m = project_candidate(e, inv)
+            if not m:
+                continue
+            why, installed, vers, comparable, matches = m
+            declared, verdicts = [], []
+            for key, name, val, comp in matches:
+                if comp:
+                    vc_one = version_check(e, [val])
+                else:
+                    vc_one = {"verdict": "undetermined", "why": "the declared package shares a scope or name with the product but is not the product, so its version says nothing about the product's affected ranges"}
+                verdicts.append(vc_one)
+                for c in where.get(key, []):
+                    declared.append({"name": c.name, "spec": c.spec, "version": c.version, "file": c.file, "line": c.line, "ecosystem": c.ecosystem,
+                                     "verdict": vc_one["verdict"], "why": vc_one["why"]})
+            # The finding's own verdict is the most pressing of its components': a lead (undetermined) must never hide a pinned version that is outside, or the other way round.
+            order = {"in-range": 0, "undetermined": 1, "outside-range": 2}
+            vc = min(verdicts, key=lambda v: order[v["verdict"]])
+            hits.append({"cve": cve, "title": e["title"], "why": why, "listed": e["added"], "due": e["due"], "action": e["action"][:400], "versionCheck": vc, "declared": declared})
+        results.append({"root": str(root), "files": files, "filesCut": cut, "components": len(comps), "pinned": pinned, "read": read, "candidates": hits,
+                        "notListed": not_listed, "unread": unread, "stopped": stopped})
+    from lattice_scan import report
+    names = a.name or []
+    for i, r in enumerate(results):
+        r["name"] = names[i] if i < len(names) else Path(r["root"]).name
+    tool = f"lattice-scan {__version__}"
+    if a.json:
+        Path(a.json).write_text(json.dumps({"tool": tool, "on": TODAY, "projects": results}, indent=1))
+    if a.csv:
+        report.emit(report.to_csv(results, TODAY), a.csv)
+    if a.format == "csv":
+        report.emit(report.to_csv(results, TODAY), None)
+    elif a.format == "json":
+        report.emit(json.dumps({"tool": tool, "on": TODAY, "projects": results}, indent=1) + "\n", None)
+    else:
+        report.emit(report.console(results, TODAY, tool, report.width_for(a.width), report.use_color(a.color, sys.stdout)), None)
+    if stopped:
+        print(f"stopped: {stopped}", file=sys.stderr)
+    bad = [h for r in results for h in r["candidates"] if (a.fail_on == "candidate") or (a.fail_on == "in-range" and h["versionCheck"]["verdict"] == "in-range")]
+    return 1 if (bad and a.fail_on != "never") else (3 if stopped else 0)
+
+
 def print_impact(imp: dict) -> None:
     print(f"      installed: {'; '.join(imp['installed'])}")
     print(f"      listed {imp.get('listed') or '-'}" + (f" ({imp['daysSinceListed']} days ago)" if "daysSinceListed" in imp else "") + f", due {imp.get('due') or '-'}" + (f", {imp['dueStatus']}" if "dueStatus" in imp else ""))
@@ -724,12 +993,27 @@ def main() -> int:
     r = sub.add_parser("resolve"); r.add_argument("cve"); r.add_argument("--status", required=True, choices=["verified", "fixed", "not-applicable"]); r.add_argument("--proof", default=""); r.add_argument("--on")
     im = sub.add_parser("impact", help="the recorded impact detail of one finding"); im.add_argument("cve")
     d = sub.add_parser("add"); d.add_argument("--ref", required=True); d.add_argument("--note", required=True); d.add_argument("--on")
+    pj = sub.add_parser("project", help="check the dependencies a project DECLARES (Python, JavaScript, Java, Rust, C/C++, Make, CMake, Docker); writes no host records",
+                        formatter_class=argparse.RawDescriptionHelpFormatter,
+                        epilog=PROJECT_EPILOG)
+    pj.add_argument("paths", nargs="*", default=["."], help="project folders (default: the current folder)")
+    pj.add_argument("--cve", action="append", help="CVE ids, comma separated (CVE-A,CVE-B); repeatable"); pj.add_argument("--cve-file", help="file of ids, one or several per line, # comments")
+    pj.add_argument("--kev-catalogue", help="CISA's known_exploited_vulnerabilities.json; chooses which ids to read. Needs a key whose email is confirmed. Nothing from the file is sent")
+    pj.add_argument("--max-read", type=int, default=None, help="most ids to read from Lattice per run (default 200 with a key, 40 without: the keyless day is 60)")
+    pj.add_argument("--format", choices=["console", "csv", "json"], default="console", help="what to print (default console: a report for a person)")
+    pj.add_argument("--csv", help="also write the findings as CSV to this file")
+    pj.add_argument("--json", help="also write the full result as JSON to this file")
+    pj.add_argument("--name", action="append", help="a label for each folder, in order (default: the folder name)")
+    pj.add_argument("--color", choices=["auto", "always", "never"], default="auto", help="colour the console report (auto: only on a terminal, never with NO_COLOR)")
+    pj.add_argument("--width", type=int, help="console report width in columns (default: the terminal's, between 72 and 110)")
+    pj.add_argument("--fail-on", choices=["never", "in-range", "candidate"], default="never", help="exit 1 when a candidate (or an in-range one) is found; default never: a person reads it")
     sub.add_parser("list"); sub.add_parser("stats")
     il = sub.add_parser("inventory", help="show inventory.log: counts and changes per run"); il.add_argument("-n", type=int, default=20)
     lg = sub.add_parser("log"); lg.add_argument("-n", type=int, default=20, help="last N lines (default 20)")
     a = p.parse_args()
     global DEBUG
     DEBUG = a.debug or env("DEBUG") == "1"
+    if a.c == "project": return cmd_project(a)
     if a.c == "impact": return cmd_impact(a)
     if a.c == "resolve": return cmd_resolve(a)
     if a.c == "add": return cmd_add(a)

@@ -1,0 +1,345 @@
+.\" SPDX-License-Identifier: Apache-2.0
+.\" Copyright 2026 NamiQ LLC
+.TH LATTICE-SCAN 1 "November 2026" "lattice-scan 0.2.0" "User Commands"
+.SH NAME
+lattice-scan \- check this host, or a project's declared dependencies, against the CVEs CISA lists as exploited, through Lattice
+.SH SYNOPSIS
+.B lattice-scan
+[\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-discover\fR] [\fB\-\-refresh\fR] [\fB\-\-again\fR] [\fB\-\-debug\fR]
+.br
+.B lattice-scan project
+[\fIPATH\fR...] [\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-kev\-catalogue\fR \fIFILE\fR] [\fB\-\-max\-read\fR \fIN\fR]
+[\fB\-\-format\fR \fBconsole\fR|\fBcsv\fR|\fBjson\fR] [\fB\-\-csv\fR \fIFILE\fR] [\fB\-\-json\fR \fIFILE\fR] [\fB\-\-name\fR \fILABEL\fR]...
+[\fB\-\-color\fR \fBauto\fR|\fBalways\fR|\fBnever\fR] [\fB\-\-width\fR \fIN\fR] [\fB\-\-fail\-on\fR \fBnever\fR|\fBin\-range\fR|\fBcandidate\fR]
+.br
+.B lattice-scan
+.RB { list | impact " \fICVE\fR" | resolve " \fICVE\fR \fB\-\-status\fR \fISTATUS\fR [\fB\-\-proof\fR \fITEXT\fR] | add | stats | inventory | log }
+.SH DESCRIPTION
+.B lattice-scan
+asks the Lattice MCP server which CVEs CISA lists as exploited, and compares each with what is on one machine or declared in one project. It prints the evidence: the
+product, CISA's dates and required action, NVD's affected version ranges, and the version found. A person reads it and decides. It does not detect incidents, it does not
+decide whether a host or project is affected, and it never closes a finding by itself.
+.PP
+It uses the Python standard library only, needs Python 3.9 or newer, and works without a key. Without a key Lattice allows a small number of reads a day; see
+.B LIMITS
+below.
+.PP
+There are two modes. The default mode checks the
+.B host
+it runs on: installed packages, snaps, running container images and the kernel. The
+.B project
+command checks what a project's files
+.B declare
+it depends on, and needs no installation on the machine it runs from.
+.SH HOST MODE
+With one or more
+.B \-\-cve
+the host's inventory is collected (dpkg, rpm or apk packages, snaps, running Docker images, kernel, Node.js) and each id is read from Lattice and matched by product name.
+A match is a
+.IR candidate ,
+not a finding about the host: the report shows the installed version against NVD's ranges and whether the installed package's own Debian changelog names the CVE.
+.TP
+.BI \-\-cve " ID"
+A CVE id to check. Repeatable.
+.TP
+.BI \-\-cve\-file " FILE"
+A file of CVE ids, one per line. Text after # is a comment.
+.TP
+.B \-\-discover
+Find the exploited CVEs CISA added in the last
+.B LATTICE_SCAN_WINDOW
+days (default 6). Needs
+.BR LATTICE_API_KEY :
+graph_search is not keyless.
+.TP
+.B \-\-refresh
+Collect the inventory again now and print all of it. With no ids it makes no network call at all.
+.TP
+.B \-\-again
+Read ids that were read before.
+.TP
+.B \-\-debug
+Write every request, response and match decision to stderr and
+.IR debug.log .
+.TP
+.BR list ", " impact " \fICVE\fR, " resolve " \fICVE\fR, " add ", " stats ", " inventory ", " log
+Read or record the host's findings. A finding is closed only by
+.B resolve
+with a status of
+.BR verified ,
+.B fixed
+or
+.BR not\-applicable ,
+and
+.B fixed
+and
+.B verified
+need
+.BR \-\-proof .
+.TP
+.BI "add \-\-ref " REF " \-\-note " TEXT " [\-\-on " DATE ]
+Record a finding by hand (a reference and a note).
+.TP
+.BI "resolve " CVE " \-\-status " STATUS " [\-\-proof " TEXT "] [\-\-on " DATE ]
+.I DATE
+is YYYY\-MM\-DD; the default is today.
+.SH PROJECT MODE
+.B lattice-scan project
+reads the dependency declarations under each
+.I PATH
+(default: the current folder), builds an inventory of what they declare, and checks it the same way. It writes no host records, executes nothing and installs nothing.
+.SS Files read
+.TP
+Python
+.IR requirements*.txt " and " requirements*.lock
+(with \fB\-r\fR includes),
+.IR pyproject.toml
+(PEP 621, optional groups, dependency groups, build requirements, Poetry).
+.TP
+JavaScript
+.IR package.json ", " package\-lock.json .
+.TP
+Java
+.IR pom.xml
+(properties resolved),
+.IR build.gradle ", " build.gradle.kts ", " gradle.lockfile ", " gradle/libs.versions.toml .
+.TP
+Rust
+.IR Cargo.toml ", " Cargo.lock .
+.TP
+C and C++
+.IR CMakeLists.txt " and " *.cmake
+(find_package, FetchContent_Declare, ExternalProject_Add, CPMAddPackage, pkg_check_modules),
+.IR conanfile.txt ", " conanfile.py ", " vcpkg.json .
+.TP
+Make
+.IR Makefile ", " GNUmakefile ", " *.mk
+(\fINAME\fR_VERSION = x.y.z, pkg-config constraints, library names from \-l flags, tarball names in download commands).
+.TP
+Containers
+.IR Dockerfile* " (FROM, pip install, apt-get install, tarball names) and " docker\-compose*.yml ", " compose*.yaml " (image:)."
+.PP
+.IR node_modules ", virtual environments, " target ", build output and " .claude
+are skipped. If the search reaches its file limit the report says so.
+.SS What counts as a version
+Only a version that is written down. A pinned version (\fB==2.14.0\fR, a lockfile entry, \fB=1.4.2\fR in Cargo, a Docker tag with two or more numbers such as
+\fB16.2\fR or \fB13.0.1\-security\-01\fR) is compared with NVD's ranges. A range (\fB>=1.0\fR), a caret requirement, a minimum in \fBfind_package\fR, a branch name, \fBlatest\fR
+or a major\-only tag (\fB16\fR) is not a version, and the result for it is
+.BR undetermined ,
+never
+.BR outside\-range .
+Where a lockfile pins a name, that name's unpinned declarations are left out: the lockfile says what is installed. A \fB\-l\fR link flag names a library, not a version.
+.SS Who can scan what
+Reading many ids is for a key whose owner has confirmed their email. Lattice reports a key's tier in every answer: \fBtrial\fR until the email is confirmed and the terms accepted,
+then \fBtrial_accepted\fR or \fBcommercial\fR.
+.TP
+.B With a confirmed key
+(\fBLATTICE_API_KEY\fR set): \fB\-\-kev\-catalogue\fR works, with up to 200 ids read a run by default.
+.TP
+.B With a key whose email is not confirmed
+\fB\-\-kev\-catalogue\fR is refused (exit 2) after one cheap tier check, with a message to confirm the email from the message Lattice sent; no id is read.
+.TP
+.B Without a key
+\fB\-\-kev\-catalogue\fR is refused (exit 2) before any request is made. Only the CVEs you name are checked: \fB\-\-cve CVE\-2026\-46300,CVE\-2021\-44228\fR (comma separated; the option may be
+repeated), or \fB\-\-cve\-file\fR with one or more ids per line. A string that is not a CVE id is refused (exit 2) before anything is asked. At most 40 are read a run, inside the keyless allowance.
+.SS Choosing which ids to read
+Lattice looks up by CVE id, not by product, so something has to name the ids. Either name them with
+.B \-\-cve
+or
+.BR \-\-cve\-file ,
+or (with a confirmed key) give
+.BI \-\-kev\-catalogue " FILE"
+(CISA's known_exploited_vulnerabilities.json, or one JSON object per line with source_id, vendor_project and product). The catalogue is read locally and only chooses ids:
+an id is read from Lattice only when its product is the same as a declared package. Each id is read once per run, however many folders match it.
+.PP
+Matching is by identity. The product must be the package, its npm scope, or vendor and product together; a prefix counts when the shorter name has six or more characters and covers
+70% of the longer (postgres, PostgreSQL). A generic one\-word product (Core, Client) also needs its vendor in the name. For Maven, Cargo, Conan, vcpkg, CMake and Make names the
+product as one whole token of a longer coordinate matches too (\fBorg.apache.logging.log4j:log4j\-core\fR is Log4j2) and its versions are compared. A match through an npm scope
+alone (\fB@vitejs/plugin\-react\fR for Vite) is a lead only: that package's version is not the product's, so no range is compared and the result is \fBundetermined\fR.
+.SS Options
+.TP
+.BI \-\-cve " ID[,ID...]" ", " \-\-cve\-file " FILE"
+Ids to read, as in host mode. Several may be given in one argument, separated by commas.
+.TP
+.BI \-\-kev\-catalogue " FILE"
+CISA's catalogue, used locally to choose ids. Needs a key whose email is confirmed (see \fBWho can scan what\fR).
+.TP
+.BI \-\-max\-read " N"
+Most ids to read from Lattice per run (default 200 with a key, 40 without; the keyless day is 60). Ids over the limit are listed as not read.
+.TP
+.BR \-\-format " " console | csv | json
+What to print. The default,
+.BR console ,
+is a report for a person. See
+.BR "OUTPUT FORMATS" .
+.TP
+.BI \-\-csv " FILE"
+Also write the findings as CSV to
+.IR FILE .
+.TP
+.BI \-\-json " FILE"
+Also write the full result as JSON to
+.IR FILE .
+.TP
+.BI \-\-name " LABEL"
+A label for each folder, in order (default: the folder's name). It is the
+.B project
+column in CSV.
+.TP
+.BR \-\-color " " auto | always | never
+Colour the console report. \fBauto\fR colours only when standard output is a terminal and
+.B NO_COLOR
+is unset and
+.B TERM
+is not dumb.
+.TP
+.BI \-\-width " N"
+Console report width (default: the terminal's, between 72 and 110).
+.TP
+.BR \-\-fail\-on " " never | in\-range | candidate
+Exit 1 when a candidate, or an in\-range one, is found. The default is
+.BR never :
+a person reads the report.
+.SH OUTPUT FORMATS
+.SS console
+A report in four parts: a summary table (files read, components declared, how many are pinned, candidates, and a count for each verdict, with a total row for several projects);
+one section per project, each finding showing the declared component with file and line, CISA's dates ("listed ... 3 days ago, due ... in 18 days"), the version check, and CISA's required
+action; the ids that were not read; and a legend of what each verdict means.
+.SS csv
+One row per finding and declared component, UTF\-8, LF line ends, a header row even when there are no findings, columns in this fixed order:
+.PP
+.nf
+project  cve  title  verdict  component  ecosystem  declared  version  file  line
+listed  due  due_status  action  why
+.fi
+.PP
+.B verdict
+is one of
+.BR in\-range ", " undetermined ", " outside\-range ", " not\-read .
+Rows are ordered by project, then verdict (in\-range first, not\-read last), then CVE.
+.B declared
+is the text as written (\fB==2.14.0\fR);
+.B version
+is the pinned version alone, empty when there is none;
+.B line
+is empty when the file has no meaningful line (a lockfile or a pom).
+.B due_status
+is "due in 18 days", "due today" or "overdue by 4 days". An id that was not read has an empty component and a
+.B why
+saying so.
+.PP
+Text that came from outside (a CVE title, CISA's action, a file name) can start with \fB=\fR, \fB+\fR, \fB\-\fR or \fB@\fR, which a spreadsheet would run as a formula. Such a cell is written with
+one leading apostrophe. A program that wants the raw text strips one leading apostrophe; the
+.B version
+column is already clean.
+.SS json
+The whole result, one object per project: files read, counts, every candidate with its declared components and version check, the ids not read and why. The same data as the other two formats.
+.SH VERDICTS
+.TP
+.B in\-range
+A declared, pinned version lies inside a range NVD lists as affected. Check what is really deployed: a distribution can fix a CVE under an unchanged version number, and a lockfile may not be
+what runs.
+.TP
+.B undetermined
+The declaration is a range, a minimum, a floating tag or has no version; or NVD's bounds are dates or build ids; or Lattice listed no range for this product; or the package is not the product
+itself. It could not be judged.
+.TP
+.B outside\-range
+Every pinned version declared lies outside every usable range. This does not close a finding.
+.TP
+.B not\-read
+An id that matches a dependency by name was not read from Lattice (the read limit, or a stop). It is neither safe nor affected.
+.SH EXIT STATUS
+.TP
+.B 0
+The run finished. (Without \fB\-\-fail\-on\fR this does not mean nothing was found.)
+.TP
+.B 1
+\fB\-\-fail\-on\fR matched.
+.TP
+.B 2
+Bad usage, or an input could not be read (a folder, a catalogue, an id file), or the catalogue was asked for without a key, or with a key whose email is not confirmed.
+.TP
+.B 3
+\fBproject\fR stopped part\-way because Lattice's allowance ran out or it could not be reached. The ids not read are listed; the report is otherwise complete.
+.SH ENVIRONMENT
+.TP
+.B LATTICE_API_KEY
+A Lattice key. Raises the daily allowance and enables \fB\-\-discover\fR. Never written to any record or log. It is refused over plain http to anything but this machine.
+.TP
+.B LATTICE_URL
+The Lattice MCP endpoint (default https://lattice.namiq.io/mcp).
+.TP
+.B LATTICE_SCAN_DIR
+Where host records go (default ~/.lattice-scan). Project mode writes nothing there.
+.TP
+.B LATTICE_SCAN_WINDOW
+Days that \fB\-\-discover\fR looks back (default 6).
+.TP
+.B LATTICE_SCAN_INVENTORY
+A JSON inventory to use instead of collecting one (tests, other tools).
+.TP
+.B LATTICE_SCAN_DEBUG
+Set to 1 for \fB\-\-debug\fR.
+.TP
+.B LATTICE_SCAN_TODAY
+Pretend today is this YYYY\-MM\-DD (tests, reproducing a report).
+.PP
+The first internal version read \fBHOST_SCAN_\fR\fIname\fR for each \fBLATTICE_SCAN_\fR\fIname\fR; those are still honoured when the new name is unset.
+.TP
+.BR NO_COLOR ", " TERM
+Respected by \fB\-\-color auto\fR.
+.SH FILES
+.TP
+.I ~/.lattice-scan/
+Host mode only, mode 0700: findings.jsonl, runs.jsonl, scan.log, inventory.json and inventory.log, seen.json, debug.log. They name this host's software. Do not commit, publish or share them.
+.SH LIMITS
+Without a key Lattice allows 5 calls a minute and 60 reads a day; lattice\-scan waits between calls to stay under that. A run that hits the limit stops, lists what it did not read, and exits 3.
+A key is requested by a person (https://namiq.io/lattice/docs); the tool never requests one.
+.SH WHAT LEAVES THE MACHINE
+CVE ids, and the key if one is set. Package names, versions, file names and the inventory are never sent; matching happens locally.
+.SH EXAMPLES
+Check a host for two CVEs:
+.PP
+.nf
+lattice-scan --cve CVE-2021-44228 --cve CVE-2026-46300
+.fi
+.PP
+Check a project for two named CVEs, no key needed:
+.PP
+.nf
+lattice-scan project . --cve CVE-2026-46300,CVE-2021-44228
+.fi
+.PP
+With a key whose email is confirmed, let CISA's catalogue choose the ids:
+.PP
+.nf
+LATTICE_API_KEY=... lattice-scan project . --kev-catalogue known_exploited_vulnerabilities.json
+.fi
+.PP
+Several folders, labelled, with a CSV for a spreadsheet and a non\-zero exit if a declared version is in range:
+.PP
+.nf
+lattice-scan project api/ web/ --name API --name WEB \e
+    --kev-catalogue kev.json --csv findings.csv --fail-on in-range
+.fi
+.PP
+Pipe CSV to a script, reading columns by name:
+.PP
+.nf
+lattice-scan project . --kev-catalogue kev.json --format csv | \e
+    python3 \-c 'import csv,sys; [print(r["cve"], r["component"]) for r in csv.DictReader(sys.stdin)
+                  if r["verdict"]=="in-range"]'
+.fi
+.SH LIMITATIONS
+Version ranges are compared as upstream numbers. A distribution can fix a CVE under an unchanged version, so \fBin\-range\fR is a lead, not a finding. Name matching is by identity but is
+still only a name: the Python package \fBminio\fR (a client library) matches the CISA entry for the MinIO server, and reading the finding tells you which it is. Docker tags that float, ranges
+and lockfile\-less projects give \fBundetermined\fR, not a clean bill. An id that is not in the graph's CISA list is "not listed in this snapshot", which is not the same as safe. Tested on
+Debian\-family hosts; rpm and apk inventories are collected but matching there is untested.
+.SH REPORTING PROBLEMS
+A wrong match, a crash, or anything that looks like a security problem: open an issue at https://github.com/namiq\-ai/lattice\-scan, or write to contact@namiq.io for anything you would
+rather not post publicly.
+.SH SEE ALSO
+https://namiq.io/lattice/docs, /usr/share/doc/lattice\-scan/README.md
+.SH COPYRIGHT
+Copyright 2026 NamiQ LLC. Apache License 2.0. The licence does not grant the right to use the names NamiQ or Lattice.

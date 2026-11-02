@@ -15,7 +15,7 @@ sys.path.insert(0, str(HERE / "src"))
 from lattice_scan import __version__ as VERSION  # noqa: E402
 
 MAINTAINER = "NamiQ LLC <contact@namiq.io>"  # the contact Lattice itself gives in its answers
-MODULES = ("__init__.py", "__main__.py", "cli.py")
+MODULES = ("__init__.py", "__main__.py", "cli.py", "manifests.py", "report.py")
 
 
 def wheel() -> None:
@@ -44,6 +44,22 @@ def bundle() -> None:
     shutil.copy(DIST / "lattice-scan.pyz", dest / "lattice-scan.pyz")
 
 
+def release_notes() -> list[str]:
+    """The bullet points of this version's section of CHANGELOG.md, one line each, for the Debian changelog. A version with no section is a build error: it would ship notes for another release."""
+    text = (HERE / "CHANGELOG.md").read_text()
+    sec = text.split(f"## {VERSION} ", 1)
+    if len(sec) < 2:
+        raise SystemExit(f"CHANGELOG.md has no section for {VERSION}")
+    body = sec[1].split("\n## ", 1)[0]
+    out = []
+    for line in body.splitlines():
+        if line.startswith("- "):
+            out.append(line[2:].replace("`", "").replace("**", "").strip()[:200])
+        elif line.startswith("**") and line.endswith("**"):
+            continue
+    return out or [f"Release {VERSION}."]
+
+
 def deb() -> None:
     with tempfile.TemporaryDirectory() as t:
         root = Path(t) / "pkg"
@@ -59,7 +75,8 @@ def deb() -> None:
         doc.mkdir(parents=True)
         shutil.copy(HERE / "README.md", doc / "README.md")
         with gzip.open(doc / "changelog.Debian.gz", "wt") as f:
-            f.write(f"lattice-scan ({VERSION}) stable; urgency=low\n\n  * First packaged release.\n\n -- {MAINTAINER}  Mon, 02 Nov 2026 00:00:00 +0000\n")
+            f.write(f"lattice-scan ({VERSION}) stable; urgency=low\n\n" + "".join(f"  * {b}\n" for b in release_notes()) + f"\n -- {MAINTAINER}  Mon, 02 Nov 2026 00:00:00 +0000\n")
+        shutil.copy(HERE / "CHANGELOG.md", doc / "CHANGELOG.md")
         # DEP-5 copyright file. The licence text is the one Debian already ships in /usr/share/common-licenses, which a .deb should reference, not repeat.
         (doc / "copyright").write_text(
             "Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\n"
@@ -70,10 +87,10 @@ def deb() -> None:
         shutil.copy(HERE / "NOTICE", doc / "NOTICE")
         man = root / "usr/share/man/man1"
         man.mkdir(parents=True)
+        # The manual page is a real file (man/lattice-scan.1); tests/test_docs.py keeps it in step with the options the tool has.
+        text = (HERE / "man" / "lattice-scan.1").read_text().replace("lattice-scan 0.2.0", f"lattice-scan {VERSION}")
         with gzip.open(man / "lattice-scan.1.gz", "wt") as f:
-            f.write(f'.TH LATTICE-SCAN 1 "" "lattice-scan {VERSION}"\n.SH NAME\nlattice-scan \\- match CISA-exploited CVEs, via Lattice, against what is installed on this host\n'
-                    ".SH SYNOPSIS\n.B lattice-scan\n[\\-\\-cve ID] [\\-\\-discover] [\\-\\-refresh] [\\-\\-debug]\n.SH DESCRIPTION\nPrints evidence for a person to read. "
-                    "It decides nothing. Only CVE ids leave the machine. Records are written to ~/.lattice-scan and name this host's software.\n.SH SEE ALSO\n/usr/share/doc/lattice-scan/README.md\n")
+            f.write(text)
         for q in root.rglob("*"):  # copies keep the source mode: set what a package should have
             q.chmod(0o755 if q.is_dir() or q == wrap else 0o644)
         size = sum(p.stat().st_size for p in root.rglob("*") if p.is_file()) // 1024 + 1
