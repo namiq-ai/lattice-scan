@@ -147,6 +147,12 @@ def console(results: list[dict], today: str, tool: str, width: int = 100, color:
     for r in results:
         if r["filesCut"]:
             L += wrap(f"! {r.get('name') or r['root']}: the file search stopped at its limit, so not every manifest was read.")
+    stops = [r["stopped"] for r in results if r["stopped"]]
+    if stops:
+        n_unread = sum(len(r["unread"]) for r in results)
+        L += ["", paint("! INCOMPLETE", "1;33")]
+        L += wrap(f"Lattice stopped this run: {stops[0]} {n_unread} id(s) were not read; they are listed under each project and are neither safe nor affected. "
+                  "Run it again after the limit resets, or use a key.", "  ", "  ")
     L.append("")
     for r in results:
         name = r.get("name") or r["root"].rstrip("/").rsplit("/", 1)[-1]
@@ -181,7 +187,7 @@ def console(results: list[dict], today: str, tool: str, width: int = 100, color:
                 L += textwrap.wrap("Declared version only: what is deployed may differ, and a distribution may have backported the fix.", width - 14, initial_indent="   Note       ", subsequent_indent="              ")
         if r["unread"]:
             L += ["", paint(f"NOT READ ({len(r['unread'])})", "2")]
-            L += wrap(f"stopped: {r['stopped']}" if r["stopped"] else "over the read limit; raise --max-read or use a key", "   ", "   ")
+            L += wrap("not read because Lattice stopped the run (see INCOMPLETE above)" if r["stopped"] else "over the read limit; raise --max-read or use a key", "   ", "   ")
             L += textwrap.wrap(", ".join(r["unread"]), width - 3, initial_indent="   ", subsequent_indent="   ", max_lines=6, placeholder=" ...")
         if r["notListed"]:
             L += ["", "Not in the graph's CISA list (not 'safe', only 'not listed in this snapshot'):"]

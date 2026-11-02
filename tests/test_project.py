@@ -423,6 +423,8 @@ class ProjectCommand(unittest.TestCase):
         rc, out, err = self.run_cli("project", str(self.root), "--cve", "CVE-2099-0001")
         self.assertEqual(rc, 3)
         self.assertIn("NOT READ (1)", out)
+        self.assertIn("INCOMPLETE", out)
+        self.assertEqual(out.count("daily limit reached"), 1)      # the stop is said once, not under every project
         self.assertIn("stopped", err)
 
 
