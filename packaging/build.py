@@ -44,6 +44,22 @@ def bundle() -> None:
     shutil.copy(DIST / "lattice-scan.pyz", dest / "lattice-scan.pyz")
 
 
+def release_notes() -> list[str]:
+    """The bullet points of this version's section of CHANGELOG.md, one line each, for the Debian changelog. A version with no section is a build error: it would ship notes for another release."""
+    text = (HERE / "CHANGELOG.md").read_text()
+    sec = text.split(f"## {VERSION} ", 1)
+    if len(sec) < 2:
+        raise SystemExit(f"CHANGELOG.md has no section for {VERSION}")
+    body = sec[1].split("\n## ", 1)[0]
+    out = []
+    for line in body.splitlines():
+        if line.startswith("- "):
+            out.append(line[2:].replace("`", "").replace("**", "").strip()[:200])
+        elif line.startswith("**") and line.endswith("**"):
+            continue
+    return out or [f"Release {VERSION}."]
+
+
 def deb() -> None:
     with tempfile.TemporaryDirectory() as t:
         root = Path(t) / "pkg"
@@ -59,7 +75,8 @@ def deb() -> None:
         doc.mkdir(parents=True)
         shutil.copy(HERE / "README.md", doc / "README.md")
         with gzip.open(doc / "changelog.Debian.gz", "wt") as f:
-            f.write(f"lattice-scan ({VERSION}) stable; urgency=low\n\n  * First packaged release.\n\n -- {MAINTAINER}  Mon, 02 Nov 2026 00:00:00 +0000\n")
+            f.write(f"lattice-scan ({VERSION}) stable; urgency=low\n\n" + "".join(f"  * {b}\n" for b in release_notes()) + f"\n -- {MAINTAINER}  Mon, 02 Nov 2026 00:00:00 +0000\n")
+        shutil.copy(HERE / "CHANGELOG.md", doc / "CHANGELOG.md")
         # DEP-5 copyright file. The licence text is the one Debian already ships in /usr/share/common-licenses, which a .deb should reference, not repeat.
         (doc / "copyright").write_text(
             "Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\n"
