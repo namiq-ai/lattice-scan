@@ -46,13 +46,37 @@ class Bundle(unittest.TestCase):
 
 
 class Licence(unittest.TestCase):
-    def test_mit_everywhere_it_is_declared(self):
-        self.assertTrue((ROOT / "LICENSE").read_text().startswith("MIT License"))
-        self.assertIn('license = "MIT"', (ROOT / "pyproject.toml").read_text())
-        self.assertEqual(json.loads((ROOT / ".claude-plugin/plugin.json").read_text())["license"], "MIT")
+    def test_apache_everywhere_it_is_declared(self):
+        self.assertIn("Apache License", (ROOT / "LICENSE").read_text()[:200])
+        self.assertIn("Version 2.0", (ROOT / "LICENSE").read_text()[:200])
+        self.assertIn('license = "Apache-2.0"', (ROOT / "pyproject.toml").read_text())
+        self.assertEqual(json.loads((ROOT / ".claude-plugin/plugin.json").read_text())["license"], "Apache-2.0")
 
-    def test_licence_names_a_holder_and_year(self):
-        self.assertRegex((ROOT / "LICENSE").read_text(), r"Copyright \(c\) 20\d\d \S+")
+    def test_licence_text_is_the_canonical_one(self):
+        import hashlib
+        self.assertEqual(hashlib.sha256((ROOT / "LICENSE").read_bytes()).hexdigest(),
+                         "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30")   # the published Apache-2.0 text, unaltered
+
+    def test_notice_names_the_holder_and_reserves_the_names(self):
+        n = (ROOT / "NOTICE").read_text()
+        self.assertIn("Copyright 2026 NamiQ LLC", n)
+        for must in ("NamiQ", "Lattice", "section 6", "MIT"):
+            self.assertIn(must, n)
+
+    def test_every_source_file_carries_spdx_and_holder(self):
+        for f in (ROOT / "src/lattice_scan").glob("*.py"):
+            with self.subTest(f.name):
+                self.assertTrue(f.read_text().startswith("# SPDX-License-Identifier: Apache-2.0\n# Copyright 2026 NamiQ LLC\n"))
+
+    def test_skill_declares_the_licence(self):
+        self.assertEqual(frontmatter(SKILL.read_text())["license"], "Apache-2.0")
+
+    def test_no_stale_mit_declaration(self):
+        for f in ("pyproject.toml", ".claude-plugin/plugin.json", "README.md"):
+            with self.subTest(f):
+                t = (ROOT / f).read_text()
+                self.assertNotIn('license = "MIT"', t)
+                self.assertNotIn('"license": "MIT"', t)
 
 
 class Wording(unittest.TestCase):

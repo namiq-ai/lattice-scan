@@ -1,6 +1,7 @@
 ---
 name: lattice-scan
 description: Use when the user asks whether THIS machine is affected by a specific CISA-known-exploited CVE, or wants a host check against a list of CVE ids. Runs the bundled lattice-scan on the machine Claude is running on and reports each match as a candidate for a person to check. Not for hosted sandboxes, and not a verdict on whether a host is vulnerable.
+license: Apache-2.0
 ---
 
 # lattice-scan: check this machine against exploited CVEs

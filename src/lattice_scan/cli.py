@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 NamiQ LLC
 """Standalone host check against Lattice: exploited CVEs against what THIS machine has installed.
 
 Install it (pip, the lattice-scan.pyz file, or the .deb) on any Linux host. It needs Python 3.9+ and nothing else (standard library only): no repo, no CISA file.
