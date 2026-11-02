@@ -675,6 +675,49 @@ def project_inventory(comps) -> tuple[dict, dict[str, list]]:
     return inv, where
 
 
+GENERIC_PRODUCTS = {"core", "client", "server", "library", "tools", "runtime", "view", "framework", "platform", "engine", "common", "base", "utils", "api", "cli", "sdk", "web", "app"}
+
+
+def _flat(s: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def project_candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str]] | None:
+    """A declared dependency that IS this entry's product, or None. Stricter than the host's word match, on purpose.
+
+    A host's package list is flat and a product word may sit anywhere in a name; a project's names are single identifiers, and a loose match is noise
+    ('WordPress Core' is not @babel/core, 'Chromium' is not electron-to-chromium, 'BIND' is not call-bind). So: the flattened product equals the flattened
+    package name, or its npm scope (@tanstack/query-core is TanStack), or one is a prefix of the other when the shorter has at least 6 characters and
+    covers 70% of the longer (postgres / PostgreSQL). The title is the fallback when an answer has no product, as for the host.
+    """
+    product = _flat(entry.get("product", ""))
+    basis = "product"
+    if not product:
+        product, basis = _flat(re.sub(r"^\S+\s+", "", entry.get("title", ""))), "title"
+    if len(product) < 4:
+        return None
+    vendor = _flat(entry.get("vendor", ""))
+    generic = product in GENERIC_PRODUCTS
+    hit = []
+    for key, val in inv["packages"].items():
+        name = key.split("#")[0]
+        base = _flat(name.rsplit("/", 1)[-1])
+        scope = _flat(name.split("/")[0].lstrip("@")) if name.startswith("@") else ""
+        # A scope that is not the product must belong to the vendor ('@babel/core' is Babel's, not WordPress's); a generic one-word product needs its vendor in the name.
+        vendor_in_name = bool(vendor) and (vendor in _flat(name) or (scope and scope in vendor))
+        forms = [f for f in ((base if (not scope or scope == product or vendor_in_name) else ""), scope) if f]
+        for f in forms:
+            short, long_ = sorted((f, product), key=len)
+            same = f == product or (vendor and f == vendor + product) or (len(short) >= 6 and long_.startswith(short) and len(short) / len(long_) >= 0.7)
+            if same and (not generic or vendor_in_name or f == scope or f == vendor + product):
+                hit.append((key, name, val))
+                break
+    if not hit:
+        return None
+    names = sorted({n for _, n, _ in hit})
+    return (f"{basis} {product} is declared as " + ", ".join(names), [f"{n} {v}" for _, n, v in hit], [v for _, _, v in hit])
+
+
 def load_catalogue(path: str) -> list[dict]:
     """CISA's known_exploited_vulnerabilities.json, or one JSON object per line with source_id / vendor_project / product (the shape the OCO graph keeps)."""
     text = Path(path).read_text()
@@ -721,8 +764,8 @@ def cmd_project(a) -> int:
         for e in catalogue:
             if e["cve"] in ids or e["cve"] in picked:
                 continue
-            m = candidate({"cve": e["cve"], "vendor": e["vendor"], "product": e["product"], "title": e["title"]}, inv)
-            if m and not m[0].startswith(("kernel in use", "Node.js")):
+            m = project_candidate(e, inv)
+            if m:
                 picked[e["cve"]] = m[0]
         todo = sorted(set(ids) | set(picked))
         unread = []
@@ -747,11 +790,11 @@ def cmd_project(a) -> int:
             if e is None:
                 not_listed.append(cve)
                 continue
-            m = candidate(e, inv)
-            if not m or m[0].startswith(("kernel in use", "Node.js")):
+            m = project_candidate(e, inv)
+            if not m:
                 continue
             why, installed, vers = m
-            names = [n for n in inv["packages"] if f"{n} {inv['packages'][n]}" in installed]
+            names = [k for k, v in inv["packages"].items() if f"{k.split('#')[0]} {v}" in installed]
             vc = version_check(e, vers)
             hits.append({"cve": cve, "title": e["title"], "why": why, "listed": e["added"], "due": e["due"], "action": e["action"][:400], "versionCheck": vc,
                          "declared": [{"name": c.name, "spec": c.spec, "version": c.version, "file": c.file, "line": c.line, "ecosystem": c.ecosystem}

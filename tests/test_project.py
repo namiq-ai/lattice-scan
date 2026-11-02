@@ -95,6 +95,36 @@ class Manifests(unittest.TestCase):
             manifests.MAX_FILES = old
 
 
+class ProjectMatching(unittest.TestCase):
+    def inv(self, **pk):
+        return {"packages": dict(pk), "snaps": {}, "images": [], "kernel": "", "node": ""}
+
+    def hit(self, vendor, product, **pk):
+        return cli.project_candidate({"cve": "CVE-2099-1", "vendor": vendor, "product": product, "title": ""}, self.inv(**pk))
+
+    def test_the_product_must_be_the_package_not_share_a_word_with_it(self):
+        self.assertIsNone(self.hit("WordPress", "Core", **{"@babel/core": "7.0.0"}))
+        self.assertIsNone(self.hit("Google", "Chromium", **{"electron-to-chromium": "1.0.0"}))
+        self.assertIsNone(self.hit("ISC", "BIND", **{"call-bind": "1.0.0"}))
+
+    def test_exact_scope_and_prefix_matches(self):
+        self.assertIsNotNone(self.hit("Kludex", "Starlette", starlette="0.30.0"))
+        self.assertIsNotNone(self.hit("TanStack", "TanStack", **{"@tanstack/query-core": "5.0.0"}))
+        self.assertIsNotNone(self.hit("PostgreSQL", "PostgreSQL", postgres="16.2"))
+        self.assertIsNotNone(self.hit("Pallets", "Flask", **{"flask": "3.0.0", "flask#2": "2.0.0"}))
+
+    def test_short_names_never_prefix_match(self):
+        self.assertIsNone(self.hit("Example", "Corefoo", core="1.0"))
+        self.assertIsNone(self.hit("Example", "Go", go="1.0"))      # under 4 characters: no match at all
+        self.assertIsNone(self.hit("Example", "Core", core="1.0"))  # a generic one-word product needs its vendor in the name
+        self.assertIsNotNone(self.hit("Example", "Core", **{"example-core": "1.0"}))
+        self.assertIsNotNone(self.hit("Google", "Angular", **{"@angular/core": "17.0.0"}))   # the scope is the product
+
+    def test_every_declared_version_of_the_name_is_returned(self):
+        why, installed, vers = self.hit("Example", "Examplelib", **{"examplelib": "2.14.0", "examplelib#2": "2.17.1"})
+        self.assertEqual(sorted(vers), ["2.14.0", "2.17.1"])
+
+
 class ProjectCommand(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
