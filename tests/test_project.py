@@ -249,6 +249,52 @@ class MoreEcosystems(unittest.TestCase):
         self.assertEqual(v["ex:v1.4.1"], "1.4.1")
 
 
+class _NoTomllib:
+    """Run a test class again as Python 3.9 / 3.10 see it: no tomllib. CI found the fallback could not read Cargo.toml or libs.versions.toml; a 3.12 developer machine never would."""
+    def setUp(self):
+        super().setUp()
+        self._saved_toml = manifests.tomllib
+        manifests.tomllib = None
+
+    def tearDown(self):
+        manifests.tomllib = self._saved_toml
+        super().tearDown()
+
+
+class ManifestsWithoutTomllib(_NoTomllib, Manifests):
+    pass
+
+
+class MoreEcosystemsWithoutTomllib(_NoTomllib, MoreEcosystems):
+    pass
+
+
+class MiniToml(unittest.TestCase):
+    DOCS = [
+        '[project]\nname = "x"\ndependencies = ["a==1", "b>=2,<3",\n  "c"]  # trailing\n[project.optional-dependencies]\ndev = ["d==4"]\n',
+        '[package]\nname = "p"\n[dependencies]\nplain = "1.2.3"\nfull = { version = "0.9", features = ["x", "y"] }\nlocal = { path = "../x" }\n'
+        '[target.\'cfg(unix)\'.dependencies]\nunixonly = "=2.0.0"\n[dev-dependencies]\ndevc = "2"\n',
+        '[versions]\nv = "9.9.9"\nstrict = { strictly = "1.0" }\n[libraries]\na = { module = "g:a", version.ref = "v" }\nb = "g:b:1.2"\n'
+        'c = { group = "g", name = "c", version = "3" }\n',
+        '[tool.poetry.dependencies]\npython = "^3.9"\nrequests = { version = "^2.0", extras = ["socks"] }\nflat = "1.4.2"\n[build-system]\nrequires = ["setuptools>=77", "wheel"]\n',
+        '[[package]]\nname = "skipme"\nversion = "1"\n[workspace.dependencies]\nw = "3"\nn = 5\nflag = true\n',
+    ]
+
+    def test_it_reads_what_tomllib_reads_for_the_tables_that_matter(self):
+        try:
+            import tomllib
+        except ImportError:
+            self.skipTest("no tomllib to compare with")
+        for doc in self.DOCS:
+            expected = tomllib.loads(doc)
+            got = manifests._mini_toml(doc)
+            for key in ("project", "dependencies", "dev-dependencies", "versions", "libraries", "tool", "build-system", "workspace", "target"):
+                self.assertEqual(got.get(key), expected.get(key), f"{key} in {doc[:40]!r}")
+
+    def test_a_line_it_does_not_understand_is_skipped_not_fatal(self):
+        self.assertEqual(manifests._mini_toml("not toml at all\n[a]\nk = \"v\"\n"), {"a": {"k": "v"}})
+
+
 class FamilyAndRanges(unittest.TestCase):
     def inv(self, eco, **pk):
         return {"packages": dict(pk), "ecosystems": {k: eco for k in pk}, "snaps": {}, "images": [], "kernel": "", "node": ""}

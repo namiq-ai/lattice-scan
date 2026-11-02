@@ -87,31 +87,129 @@ def _line_of(text: str, needle: str) -> int:
     return text.count("\n", 0, i) + 1 if i >= 0 else 0
 
 
+def _split_top(s: str, sep: str = ",") -> list[str]:
+    """Split on sep outside quotes and brackets."""
+    out, depth, q, cur = [], 0, "", ""
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if q:
+            cur += ch
+            if ch == "\\" and q == '"' and i + 1 < len(s):
+                cur += s[i + 1]
+                i += 1
+            elif ch == q:
+                q = ""
+        elif ch in "\"'":
+            q = ch
+            cur += ch
+        elif ch in "[{":
+            depth += 1
+            cur += ch
+        elif ch in "]}":
+            depth -= 1
+            cur += ch
+        elif ch == sep and depth == 0:
+            out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+        i += 1
+    if cur.strip():
+        out.append(cur)
+    return out
+
+
+def _unquote_key(k: str) -> str:
+    k = k.strip()
+    return k[1:-1] if len(k) >= 2 and k[0] == k[-1] and k[0] in "\"'" else k
+
+
+def _toml_value(v: str):
+    v = v.strip()
+    if v[:1] == '"' and v.endswith('"') and len(v) >= 2:
+        return v[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+    if v[:1] == "'" and v.endswith("'") and len(v) >= 2:
+        return v[1:-1]
+    if v.startswith("[") and v.endswith("]"):
+        return [_toml_value(x) for x in _split_top(v[1:-1]) if x.strip()]
+    if v.startswith("{") and v.endswith("}"):
+        d: dict = {}
+        for pair in _split_top(v[1:-1]):
+            k, _, val = pair.partition("=")
+            _set_path(d, [_unquote_key(x) for x in _split_top(k.strip(), ".")], _toml_value(val))
+        return d
+    if v in ("true", "false"):
+        return v == "true"
+    try:
+        return int(v)
+    except ValueError:
+        try:
+            return float(v)
+        except ValueError:
+            return v
+
+
+def _set_path(d: dict, path: list[str], value) -> None:
+    for k in path[:-1]:
+        nxt = d.setdefault(k, {})
+        d = nxt if isinstance(nxt, dict) else {}
+    d[path[-1]] = value
+
+
+def _strip_comment(line: str) -> str:
+    q = ""
+    for i, ch in enumerate(line):
+        if q:
+            if ch == q:
+                q = ""
+        elif ch in "\"'":
+            q = ch
+        elif ch == "#":
+            return line[:i]
+    return line
+
+
+def _mini_toml(text: str) -> dict:
+    """The part of TOML that dependency files use, for Pythons without tomllib (3.9, 3.10): tables, dotted keys, strings, numbers, booleans, arrays (also over several lines) and inline tables.
+    Not a validator: a line it does not understand is skipped, which for this tool means a dependency not listed, never a wrong one."""
+    root: dict = {}
+    cur = root
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = _strip_comment(lines[i]).strip()
+        i += 1
+        if not line:
+            continue
+        if line.startswith("[["):
+            cur = {}            # an array of tables ([[package]]): not needed for dependency declarations
+            continue
+        if line.startswith("["):
+            path = [_unquote_key(x) for x in _split_top(line.strip().strip("[]"), ".")]
+            cur = root
+            for k in path:
+                nxt = cur.setdefault(k, {})
+                cur = nxt if isinstance(nxt, dict) else {}
+            continue
+        k, eq, v = line.partition("=")
+        if not eq:
+            continue
+        v = v.strip()
+        while (v.count("[") + v.count("{") > v.count("]") + v.count("}")) and i < len(lines):
+            v += " " + _strip_comment(lines[i]).strip()
+            i += 1
+        _set_path(cur, [_unquote_key(x) for x in _split_top(k.strip(), ".")], _toml_value(v))
+    return root
+
+
 def _toml(text: str) -> dict:
     if tomllib is not None:
         try:
             return tomllib.loads(text)
         except Exception:
             return {}
-    # 3.9 / 3.10: only the tables that carry dependencies, read with patterns. Good enough to find them; never used to rewrite anything.
-    d: dict = {"project": {}, "tool": {"poetry": {}}}
-    m = re.search(r"^\[project\]\s*$(.*?)(?=^\[|\Z)", text, re.S | re.M)
-    if m:
-        a = re.search(r"^dependencies\s*=\s*\[(.*?)\]", m.group(1), re.S | re.M)
-        if a:
-            d["project"]["dependencies"] = re.findall(r'"([^"]+)"|\'([^\']+)\'', a.group(1)) and [x or y for x, y in re.findall(r'"([^"]+)"|\'([^\']+)\'', a.group(1))]
-    m = re.search(r"^\[project\.optional-dependencies\]\s*$(.*?)(?=^\[|\Z)", text, re.S | re.M)
-    if m:
-        d["project"]["optional-dependencies"] = {k: [x or y for x, y in re.findall(r'"([^"]+)"|\'([^\']+)\'', v)]
-                                                 for k, v in re.findall(r"^([A-Za-z0-9_.-]+)\s*=\s*\[(.*?)\]", m.group(1), re.S | re.M)}
-    m = re.search(r"^\[tool\.poetry\.dependencies\]\s*$(.*?)(?=^\[|\Z)", text, re.S | re.M)
-    if m:
-        deps = {}
-        for k, v in re.findall(r'^([A-Za-z0-9_.-]+)\s*=\s*(.+)$', m.group(1), re.M):
-            vm = re.search(r'version\s*=\s*"([^"]+)"', v) or re.match(r'\s*"([^"]+)"', v)
-            deps[k] = vm.group(1) if vm else ""
-        d["tool"]["poetry"]["dependencies"] = deps
-    return d
+    return _mini_toml(text)
 
 
 def pyproject_toml(path: Path, root: Path) -> list[Component]:
@@ -333,7 +431,7 @@ def gradle_catalog(path: Path, root: Path) -> list[Component]:
 def cargo_toml(path: Path, root: Path) -> list[Component]:
     text = path.read_text(errors="replace")
     rel = str(path.relative_to(root))
-    d = _toml(text) if tomllib else {}
+    d = _toml(text)
     out = []
 
     def tables(node: dict):
