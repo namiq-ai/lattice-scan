@@ -68,6 +68,9 @@ class Licence(unittest.TestCase):
             with self.subTest(f.name):
                 self.assertTrue(f.read_text().startswith("# SPDX-License-Identifier: Apache-2.0\n# Copyright 2026 NamiQ LLC\n"))
 
+    def test_skill_declares_the_licence(self):
+        self.assertEqual(frontmatter(SKILL.read_text())["license"], "Apache-2.0")
+
     def test_no_stale_mit_declaration(self):
         for f in ("pyproject.toml", ".claude-plugin/plugin.json", "README.md"):
             with self.subTest(f):
