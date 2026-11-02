@@ -6,6 +6,17 @@ version ranges. A person reads it and decides. It does not detect incidents or d
 
 Standard library only. Python 3.9 or newer.
 
+## Install
+
+```bash
+uv tool install git+https://github.com/namiq-ai/lattice-scan      # or: pipx install git+https://github.com/namiq-ai/lattice-scan
+```
+
+It is not on PyPI or in an apt repository yet. When a release exists, its single-file `lattice-scan.pyz` and `SHA256SUMS` are on the
+[releases page](https://github.com/namiq-ai/lattice-scan/releases): `python3 lattice-scan.pyz --cve CVE-...`.
+
+## Use
+
 ```bash
 lattice-scan --cve CVE-2021-44228 --cve CVE-2026-46300     # works without a key
 LATTICE_API_KEY=... lattice-scan --discover                # a key lists what was added in the last week
@@ -17,8 +28,6 @@ lattice-scan --debug --cve CVE-...                         # every request, resp
 ## Use it as a Claude Code skill
 
 The same tool ships as a plugin whose skill runs it on the machine Claude is running on and reports each match as a candidate for a person to check.
-Once this repository is public:
-
 ```
 /plugin install lattice-scan --marketplace namiq-ai/lattice-scan
 ```
@@ -38,8 +47,14 @@ publish or share them.
 
 - Version ranges are compared as upstream numbers. A distribution can fix a CVE under an unchanged version number, so `in-range` is a lead, not a finding;
   the report also shows whether an installed package's own changelog names the CVE (Debian-family hosts only).
-- Without a key, only `graph_lookup` is available and the daily allowance is small. The script waits between calls to stay under it.
+- Without a key, only `graph_lookup` is available and the daily allowance is small. The script waits between calls to stay under it. Getting a key is
+  described at https://namiq.io/lattice/docs#agents; a person does that, and the tool never requests one.
 - Tested on Debian-family hosts. On rpm and apk hosts the inventory is collected (checked on Fedora and Alpine) but matching and the changelog check are not tested there; the changelog check is Debian-only.
+
+## Reporting a problem
+
+A wrong match, a crash, or anything that looks like a security problem: open an issue, or write to contact@namiq.io for anything you would rather not post
+publicly. See `SECURITY.md`.
 
 ## Licence
 
