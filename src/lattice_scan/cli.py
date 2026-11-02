@@ -355,11 +355,17 @@ def version_check(entry: dict, vers: list[str]) -> dict:
     # The ranges that belong to THIS entry's product: same vendor as CISA names it, and a shared product word. The host was already matched by name
     # (a kernel matches by uname, not by a package), so what is installed is not consulted here.
     kev_words = words(entry.get("product", ""))
+    kev_words |= {w[:-2] for w in kev_words if w.endswith("js") and len(w) > 4}      # CISA says "Vitejs", NVD says vite
     vendor = re.sub(r"[^a-z0-9]", "", entry.get("vendor", "").lower())
+    prod_forms = {_flat(entry.get("product", ""))}
+    prod_forms |= {f[:-2] for f in prod_forms if f.endswith("js") and len(f) > 4}
     mine = []
     for r in entry.get("ranges", []):
         sv, _, sp = r.get("product", "").partition("/")
-        if words(sp.replace("_", " ")) & kev_words and (not vendor or re.sub(r"[^a-z0-9]", "", sv.lower()) in vendor):
+        # Another vendor's range is not ours, unless the product name is the same name: CISA's vendor is often the maintainer today ("Kludex Starlette")
+        # while NVD files the product under the original one ("encode/starlette"), and "sudo_project/sudo" is CISA's "Sudo".
+        vendor_ok = not vendor or re.sub(r"[^a-z0-9]", "", sv.lower()) in vendor or _flat(sp.replace("_", " ")) in prod_forms
+        if words(sp.replace("_", " ")) & kev_words and vendor_ok:
             mine.append(r)
     if not mine:
         return {"verdict": "undetermined", "why": "Lattice listed no version range for this product name"}
@@ -659,6 +665,7 @@ def project_inventory(comps) -> tuple[dict, dict[str, list]]:
     pinned_names = {c.name for c in comps if c.version}
     packages: dict[str, str] = {}
     where: dict[str, list] = {}
+    ecosystems: dict[str, str] = {}
     for c in comps:
         if not c.version and c.name in pinned_names:
             continue
@@ -669,12 +676,14 @@ def project_inventory(comps) -> tuple[dict, dict[str, list]]:
             k += 1
             key = f"{c.name}#{k}"
         packages[key] = val
+        ecosystems[key] = c.ecosystem
         where.setdefault(key, []).append(c)
-    inv = {"kernel": "", "os": "project manifests", "node": "", "restartRequired": False, "packages": packages, "snaps": {}, "images": []}
+    inv = {"kernel": "", "os": "project manifests", "node": "", "restartRequired": False, "packages": packages, "snaps": {}, "images": [], "ecosystems": ecosystems}
     inv["hash"] = hashlib.sha256(json.dumps(packages, sort_keys=True).encode()).hexdigest()[:12]
     return inv, where
 
 
+FAMILY_ECOSYSTEMS = {"maven", "cargo", "conan", "vcpkg", "cmake", "make", "c"}
 GENERIC_PRODUCTS = {"core", "client", "server", "library", "tools", "runtime", "view", "framework", "platform", "engine", "common", "base", "utils", "api", "cli", "sdk", "web", "app"}
 
 
@@ -682,13 +691,18 @@ def _flat(s: str) -> str:
     return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
-def project_candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str]] | None:
+def project_candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str], bool] | None:
     """A declared dependency that IS this entry's product, or None. Stricter than the host's word match, on purpose.
 
     A host's package list is flat and a product word may sit anywhere in a name; a project's names are single identifiers, and a loose match is noise
-    ('WordPress Core' is not @babel/core, 'Chromium' is not electron-to-chromium, 'BIND' is not call-bind). So: the flattened product equals the flattened
-    package name, or its npm scope (@tanstack/query-core is TanStack), or one is a prefix of the other when the shorter has at least 6 characters and
-    covers 70% of the longer (postgres / PostgreSQL). The title is the fallback when an answer has no product, as for the host.
+    ('WordPress Core' is not @babel/core, 'Chromium' is not electron-to-chromium, 'BIND' is not call-bind). So the flattened product must equal the flattened package
+    name, the vendor+product, or one is a prefix of the other when the shorter has 6+ characters and covers 70% of the longer (postgres / PostgreSQL). A generic one-word
+    product ('Core') also needs its vendor in the name. The title is the fallback when an answer has no product, as for the host.
+
+    Beyond identity: for Maven, Cargo, Conan, vcpkg, CMake and Makefile names, which carry the product inside a longer coordinate (org.apache.logging.log4j:log4j-core is
+    Log4j2; openssl-sys is OpenSSL), the product as one whole token of the name is a match of the same product family, whose versions are comparable. A match through an npm
+    SCOPE only (@vitejs/plugin-react for Vite) is a lead and nothing more: its version is not the product's, so the fourth value is False and no range is compared.
+    Returns (why, "name version" list, versions, whether those versions may be compared with the product's ranges).
     """
     product = _flat(entry.get("product", ""))
     basis = "product"
@@ -696,26 +710,41 @@ def project_candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str]
         product, basis = _flat(re.sub(r"^\S+\s+", "", entry.get("title", ""))), "title"
     if len(product) < 4:
         return None
+    forms_p = {product} | ({product[:-2]} if product.endswith("js") and len(product) > 4 else set())    # CISA "Vitejs" is the npm package "vite"
     vendor = _flat(entry.get("vendor", ""))
     generic = product in GENERIC_PRODUCTS
-    hit = []
+    eco = inv.get("ecosystems", {})
+    hit: list[tuple[str, str, str, bool]] = []
     for key, val in inv["packages"].items():
         name = key.split("#")[0]
-        base = _flat(name.rsplit("/", 1)[-1])
+        base = _flat(name.rsplit("/", 1)[-1].rsplit(":", 1)[-1])
         scope = _flat(name.split("/")[0].lstrip("@")) if name.startswith("@") else ""
-        # A scope that is not the product must belong to the vendor ('@babel/core' is Babel's, not WordPress's); a generic one-word product needs its vendor in the name.
         vendor_in_name = bool(vendor) and (vendor in _flat(name) or (scope and scope in vendor))
-        forms = [f for f in ((base if (not scope or scope == product or vendor_in_name) else ""), scope) if f]
-        for f in forms:
-            short, long_ = sorted((f, product), key=len)
-            same = f == product or (vendor and f == vendor + product) or (len(short) >= 6 and long_.startswith(short) and len(short) / len(long_) >= 0.7)
-            if same and (not generic or vendor_in_name or f == scope or f == vendor + product):
-                hit.append((key, name, val))
+        comparable, matched = True, False
+        for pf in forms_p:
+            forms = [f for f in ((base if (not scope or scope == pf or vendor_in_name) else ""), scope) if f]
+            for f in forms:
+                short, long_ = sorted((f, pf), key=len)
+                same = f == pf or (vendor and f == vendor + pf) or (len(short) >= 6 and long_.startswith(short) and len(short) / len(long_) >= 0.7)
+                if same and (not generic or vendor_in_name or f == scope or f == vendor + pf):
+                    matched = True
+                    comparable = not (scope and f == scope and base != f)     # matched only through the scope: not the same package
+                    break
+            if matched:
                 break
+        if not matched and eco.get(key) in FAMILY_ECOSYSTEMS and not generic:
+            toks = {t.rstrip("0123456789") or t for t in re.findall(r"[a-z][a-z0-9]*", name.lower())}
+            core = {pf.rstrip("0123456789") or pf for pf in forms_p}
+            if any(len(c) >= 5 and c in toks for c in core):
+                matched = True
+        if matched:
+            hit.append((key, name, val, comparable))
     if not hit:
         return None
-    names = sorted({n for _, n, _ in hit})
-    return (f"{basis} {product} is declared as " + ", ".join(names), [f"{n} {v}" for _, n, v in hit], [v for _, _, v in hit])
+    names = sorted({n for _, n, _, _ in hit})
+    comparable = all(c for _, _, _, c in hit)
+    vers = [v for _, _, v, _ in hit] if comparable else ["not the product's own package"]
+    return (f"{basis} {product} is declared as " + ", ".join(names), [f"{n} {v}" for _, n, v, _ in hit], vers, comparable)
 
 
 def load_catalogue(path: str) -> list[dict]:
@@ -796,9 +825,9 @@ def cmd_project(a) -> int:
             m = project_candidate(e, inv)
             if not m:
                 continue
-            why, installed, vers = m
+            why, installed, vers, comparable = m
             names = [k for k, v in inv["packages"].items() if f"{k.split('#')[0]} {v}" in installed]
-            vc = version_check(e, vers)
+            vc = version_check(e, vers) if comparable else {"verdict": "undetermined", "why": "the declared package shares a scope or name with the product but is not the product, so its version says nothing about the product's affected ranges"}
             hits.append({"cve": cve, "title": e["title"], "why": why, "listed": e["added"], "due": e["due"], "action": e["action"][:400], "versionCheck": vc,
                          "declared": [{"name": c.name, "spec": c.spec, "version": c.version, "file": c.file, "line": c.line, "ecosystem": c.ecosystem}
                                       for n in names for c in where.get(n, [])]})

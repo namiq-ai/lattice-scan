@@ -44,13 +44,25 @@ lattice-scan project app/ api/ --cve CVE-2026-46300 --json result.json          
 lattice-scan project . --kev-catalogue kev.json --fail-on in-range                # exit 1 when a declared version is inside an affected range
 ```
 
-Reads what the project **declares**: `requirements*.txt` and `requirements*.lock` (with `-r` includes), `pyproject.toml` (PEP 621, optional groups, poetry), `package.json`
-and `package-lock.json`, `Dockerfile*` (`FROM`, `pip install`, `apt-get install`) and `docker-compose` / `compose` files (`image:`). Nothing is executed and nothing is installed.
+Reads what the project **declares**. Nothing is executed and nothing is installed.
 
-- A **pinned** version (`==2.14.0`, a lockfile entry, an image tag such as `16.2`) is compared with NVD's ranges. A range (`>=1.0`), `latest` or no tag has no version, and the
-  answer for it is `undetermined`, never `outside-range`.
+| Ecosystem | Files |
+|---|---|
+| Python | `requirements*.txt` and `requirements*.lock` (with `-r` includes), `pyproject.toml` (PEP 621, optional groups, poetry) |
+| JavaScript | `package.json`, `package-lock.json` |
+| Java | `pom.xml` (properties resolved), `build.gradle`, `build.gradle.kts`, `gradle.lockfile`, `gradle/libs.versions.toml` |
+| Rust | `Cargo.toml`, `Cargo.lock` |
+| C and C++ | `CMakeLists.txt` and `*.cmake` (`find_package`, `FetchContent_Declare`, `ExternalProject_Add`, `CPMAddPackage`, `pkg_check_modules`), `conanfile.txt` / `conanfile.py`, `vcpkg.json` |
+| Make | `Makefile`, `GNUmakefile`, `*.mk` (`NAME_VERSION = x.y.z`, `pkg-config` constraints, library names from `-l` flags, tarball names in download commands) |
+| Containers | `Dockerfile*` (`FROM`, `pip install`, `apt-get install`, tarball names), `docker-compose` / `compose` files (`image:`) |
+
+- A **pinned** version (`==2.14.0`, a lockfile entry, `=1.4.2` in Cargo, a Docker tag with two or more numbers such as `16.2` or `13.0.1-security-01`) is compared with NVD's ranges. A range
+  (`>=1.0`), a caret requirement, `find_package(X 1.1)` (a minimum), a branch name, `latest` or a major-only tag (`16`) has no version, and the answer for it is `undetermined`, never `outside-range`.
+- A `-lssl` link flag or an unversioned `find_package` names a library, not a version: it is listed so a person knows the library is used.
 - Where a lockfile pins a name, the unpinned declarations of that name are left out: the lock says what is installed.
-- Matching is by product name, like the host check. A match is a candidate for a person to read against what is really deployed (a distribution may backport a fix; a lockfile may not be what runs).
+- Matching is by identity: the product must be the package (or its npm scope, or vendor+product). For Maven, Cargo, Conan, vcpkg, CMake and Make names the product as a whole token of a longer
+  coordinate also matches (`org.apache.logging.log4j:log4j-core` is Log4j2), and its versions are compared. A match through an npm scope alone (`@vitejs/plugin-react` for Vite) is a lead only:
+  that package's version is not the product's, so no range is compared. `minio` the Python client matches MinIO the server by name; reading the finding tells you which it is. A match is a candidate for a person to read against what is really deployed (a distribution may backport a fix; a lockfile may not be what runs).
 - Writes no host records (`~/.lattice-scan` is untouched). Skips `node_modules`, virtualenvs, build output and `.claude`. If its file search reaches its limit it says so.
 - Without a key, Lattice allows 60 reads a day; `--max-read` (default 40) stops a project from using them all, and the ids not read are listed.
 

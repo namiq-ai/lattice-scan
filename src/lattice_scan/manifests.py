@@ -20,7 +20,7 @@ try:  # Python 3.11+
 except ImportError:  # 3.9 / 3.10
     tomllib = None  # type: ignore[assignment]
 
-SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "env", "__pycache__", ".tox", ".mypy_cache", ".next", "dist", "build", "site-packages", ".impl-worktrees", ".claude", "runtime", "workspace"}
+SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "env", "__pycache__", ".tox", ".mypy_cache", ".next", "dist", "build", "site-packages", ".impl-worktrees", ".claude", "runtime", "workspace", "target", ".gradle", "cmake-build-debug", "cmake-build-release"}
 MAX_FILES = 400
 MAX_BYTES = 2_000_000
 
@@ -179,8 +179,18 @@ def _image(ref: str, ecosystem_file: str, line: int, args: dict[str, str]) -> Co
     ref = ref.split("@", 1)[0]
     name, _, tag = ref.rpartition(":") if ":" in ref.rsplit("/", 1)[-1] else (ref, "", "")
     base = name.rsplit("/", 1)[-1].lower()
-    pinned = tag if re.fullmatch(r"v?\d+(\.\d+)*", tag) else None   # 16.2 and v1.4 pin a version; 16-alpine, latest, a digest do not
-    return Component(base, "image", ref, pinned.lstrip("v") if pinned else None, ecosystem_file, line)
+    # 16.2 and v1.4.1-alpine pin a version (two or more numbers, any suffix after a dash); 16, 16-alpine, latest and a digest float, so they are not versions.
+    m = re.fullmatch(r"v?(\d+(?:\.\d+)+)(?:[-_+][A-Za-z0-9._-]*)?", tag)
+    pinned = m.group(1) if m else None
+    return Component(base, "image", ref, pinned, ecosystem_file, line)
+
+
+_TARBALL = re.compile(r"([A-Za-z][A-Za-z0-9_+]*(?:-[A-Za-z][A-Za-z0-9_+]*)*)[-_]v?(\d+(?:\.\d+)+)\.(?:tar\.(?:gz|xz|bz2|zst)|tgz|zip)\b")
+
+
+def tarballs(text: str, eco: str, rel: str, line: int) -> list[Component]:
+    """'zlib-1.2.13.tar.gz' in a download command or URL: a name and a version that were actually written down."""
+    return [Component(m.group(1).lower(), eco, m.group(0), m.group(2), rel, line) for m in _TARBALL.finditer(text)]
 
 
 def dockerfile(path: Path, root: Path) -> list[Component]:
@@ -212,6 +222,7 @@ def dockerfile(path: Path, root: Path) -> list[Component]:
                 if len(toks) >= 3 and toks[1].upper() == "AS":
                     stages.add(toks[2])
         elif up.startswith("RUN "):
+            out += tarballs(s, "c", rel, ln)
             for m in re.finditer(r"pip3?\s+install\s+([^&|;]+)", s):
                 for tok in m.group(1).split():
                     if tok.startswith("-"):
@@ -240,6 +251,234 @@ def compose_file(path: Path, root: Path) -> list[Component]:
     return out
 
 
+def _xml_text(el, tag: str) -> str:
+    for c in el:
+        if c.tag.rsplit("}", 1)[-1] == tag:
+            return (c.text or "").strip()
+    return ""
+
+
+def pom_xml(path: Path, root: Path) -> list[Component]:
+    """pom.xml: dependencies and dependencyManagement, `${property}` resolved from <properties> (and the parent's version for ${project.version}); an unresolved property is no version."""
+    import xml.etree.ElementTree as ET
+    try:
+        tree = ET.parse(path).getroot()
+    except (ET.ParseError, OSError):
+        return []
+    rel = str(path.relative_to(root))
+    props = {"project.version": _xml_text(tree, "version")}
+    for el in tree:
+        if el.tag.rsplit("}", 1)[-1] == "properties":
+            for p in el:
+                props[p.tag.rsplit("}", 1)[-1]] = (p.text or "").strip()
+    out = []
+    for dep in tree.iter():
+        if dep.tag.rsplit("}", 1)[-1] != "dependency":
+            continue
+        g, a, v = _xml_text(dep, "groupId"), _xml_text(dep, "artifactId"), _xml_text(dep, "version")
+        if not a:
+            continue
+        v = re.sub(r"\$\{([^}]+)\}", lambda m: props.get(m.group(1), m.group(0)), v)
+        pinned = v if re.fullmatch(r"\d+(\.\d+)*([.-][A-Za-z0-9]+)*", v) and "$" not in v else None
+        out.append(Component(f"{g}:{a}".lower() if g else a.lower(), "maven", v, pinned, rel, 0))
+    return out
+
+
+_GRADLE_DEP = re.compile(r"""(?:implementation|api|compile|compileOnly|runtimeOnly|testImplementation|testCompile|testRuntimeOnly|annotationProcessor|kapt|classpath|developmentOnly)\s*\(?\s*["']([\w.-]+):([\w.-]+)(?::([^"'):@]+))?""")
+
+
+def gradle_build(path: Path, root: Path) -> list[Component]:
+    rel = str(path.relative_to(root))
+    out = []
+    for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+        for m in _GRADLE_DEP.finditer(line):
+            v = (m.group(3) or "").strip()
+            pinned = v if re.fullmatch(r"\d+(\.\d+)*([.-][A-Za-z0-9]+)*", v) else None
+            out.append(Component(f"{m.group(1)}:{m.group(2)}".lower(), "maven", v, pinned, rel, n))
+    return out
+
+
+def gradle_lockfile(path: Path, root: Path) -> list[Component]:
+    rel = str(path.relative_to(root))
+    out = []
+    for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+        m = re.match(r"^([\w.-]+):([\w.-]+):([^=\s]+)=", line)
+        if m:
+            out.append(Component(f"{m.group(1)}:{m.group(2)}".lower(), "maven", m.group(3), m.group(3), rel, n))
+    return out
+
+
+def gradle_catalog(path: Path, root: Path) -> list[Component]:
+    """gradle/libs.versions.toml: [versions] and [libraries] (module = "g:a", version or version.ref)."""
+    text = path.read_text(errors="replace")
+    d = _toml(text)
+    versions = {k: (v if isinstance(v, str) else (v or {}).get("require") or (v or {}).get("strictly") or "") for k, v in (d.get("versions") or {}).items()}
+    rel = str(path.relative_to(root))
+    out = []
+    for name, lib in (d.get("libraries") or {}).items():
+        if isinstance(lib, str):
+            g, _, rest = lib.partition(":")
+            a, _, v = rest.partition(":")
+        else:
+            mod = lib.get("module") or f"{lib.get('group', '')}:{lib.get('name', '')}"
+            g, _, a = mod.partition(":")
+            ver = lib.get("version")
+            v = versions.get((ver or {}).get("ref", ""), "") if isinstance(ver, dict) else (ver or "")
+        if a:
+            pinned = v if re.fullmatch(r"\d+(\.\d+)*([.-][A-Za-z0-9]+)*", v or "") else None
+            out.append(Component(f"{g}:{a}".lower(), "maven", v, pinned, rel, _line_of(text, name)))
+    return out
+
+
+def cargo_toml(path: Path, root: Path) -> list[Component]:
+    text = path.read_text(errors="replace")
+    rel = str(path.relative_to(root))
+    d = _toml(text) if tomllib else {}
+    out = []
+
+    def tables(node: dict):
+        for k, v in node.items():
+            if k in ("dependencies", "dev-dependencies", "build-dependencies") and isinstance(v, dict):
+                yield v
+            elif k == "workspace" and isinstance(v, dict):
+                if isinstance(v.get("dependencies"), dict):
+                    yield v["dependencies"]
+            elif k == "target" and isinstance(v, dict):
+                for t in v.values():
+                    if isinstance(t, dict):
+                        yield from tables(t)
+    for tbl in tables(d):
+        for name, spec in tbl.items():
+            if isinstance(spec, dict):
+                if "path" in spec or "git" in spec:
+                    continue
+                spec = spec.get("version", "")
+            spec = str(spec).strip()
+            pinned = spec[1:].strip() if spec.startswith("=") and re.fullmatch(r"\d+(\.\d+)*([-+][A-Za-z0-9.]+)?", spec[1:].strip()) else None   # a bare 1.2.3 in Cargo means ^1.2.3
+            out.append(Component(name.lower(), "cargo", spec, pinned, rel, _line_of(text, name)))
+    return out
+
+
+def cargo_lock(path: Path, root: Path) -> list[Component]:
+    text = path.read_text(errors="replace")
+    rel = str(path.relative_to(root))
+    return [Component(m.group(1).lower(), "cargo", "==" + m.group(2), m.group(2), rel, text.count("\n", 0, m.start()) + 1)
+            for m in re.finditer(r'\[\[package\]\]\s*\nname\s*=\s*"([^"]+)"\s*\nversion\s*=\s*"([^"]+)"', text)]
+
+
+def conanfile(path: Path, root: Path) -> list[Component]:
+    rel = str(path.relative_to(root))
+    out = []
+    sect = ""
+    for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+        s = line.split("#", 1)[0].strip()
+        if path.suffix == ".py":
+            refs = re.findall(r"""requires\s*(?:=|\()\s*\[?\s*["']([^"'\s]+)["']""", s) + re.findall(r"""["']([A-Za-z][\w.+-]*/[^"'\s@]+)(?:@[^"']*)?["']""", s if "requires" in s or "tool_requires" in s else "")
+        else:
+            if s.startswith("["):
+                sect = s.strip("[]").lower()
+                continue
+            refs = [s.split("@", 1)[0]] if sect in ("requires", "tool_requires", "build_requires") and "/" in s else []
+        for ref in refs:
+            name, _, ver = ref.partition("/")
+            ver = ver.split("@", 1)[0].strip()
+            pinned = ver if re.fullmatch(r"\d+(\.\d+)*([.-][A-Za-z0-9]+)*", ver) else None
+            if name:
+                out.append(Component(name.lower(), "conan", ver, pinned, rel, n))
+    return out
+
+
+def vcpkg_json(path: Path, root: Path) -> list[Component]:
+    try:
+        d = json.loads(path.read_text(errors="replace"))
+    except ValueError:
+        return []
+    rel = str(path.relative_to(root))
+    overrides = {o.get("name"): o.get("version") or o.get("version-string") or o.get("version-semver") or "" for o in d.get("overrides", []) if isinstance(o, dict)}
+    out = []
+    for dep in d.get("dependencies", []):
+        name = dep if isinstance(dep, str) else dep.get("name", "")
+        if not name:
+            continue
+        floor = "" if isinstance(dep, str) else dep.get("version>=", "")
+        ver = overrides.get(name, "")
+        pinned = ver if re.fullmatch(r"\d+(\.\d+)*([.-][A-Za-z0-9]+)*", ver or "") else None
+        out.append(Component(name.lower(), "vcpkg", (("==" + ver) if pinned else (">=" + floor if floor else "")), pinned, rel, 0))
+    return out
+
+
+_CMAKE_CMD = re.compile(r"(?is)\b(find_package|FetchContent_Declare|ExternalProject_Add|CPMAddPackage|CPMFindPackage|pkg_check_modules|pkg_search_module)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)")
+_LIBNAME = {"ssl": "openssl", "crypto": "openssl", "z": "zlib", "xml2": "libxml2", "png": "libpng", "png16": "libpng", "jpeg": "libjpeg", "sqlite3": "sqlite",
+            "curl": "curl", "yaml": "libyaml", "expat": "expat", "bz2": "bzip2", "lzma": "xz", "zstd": "zstd", "pcre": "pcre", "pcre2-8": "pcre2", "gcrypt": "libgcrypt",
+            "gnutls": "gnutls", "tiff": "libtiff", "freetype": "freetype", "protobuf": "protobuf", "boost_system": "boost", "ffi": "libffi", "event": "libevent"}
+
+
+def cmake_file(path: Path, root: Path) -> list[Component]:
+    """CMakeLists.txt / *.cmake: find_package(Name 1.2 [EXACT]), FetchContent_Declare / ExternalProject_Add (GIT_TAG, URL), CPMAddPackage, pkg_check_modules. Only what is written."""
+    text = re.sub(r"(?m)#.*$", "", path.read_text(errors="replace"))
+    rel = str(path.relative_to(root))
+    out = []
+    for m in _CMAKE_CMD.finditer(text):
+        cmd, body = m.group(1).lower(), " ".join(m.group(2).split())
+        ln = text.count("\n", 0, m.start()) + 1
+        toks = body.split()
+        if cmd == "find_package" and toks:
+            ver = toks[1] if len(toks) > 1 and re.fullmatch(r"\d+(\.\d+)*", toks[1]) else ""
+            exact = "EXACT" in toks
+            out.append(Component(toks[0].lower(), "cmake", (("==" if exact else ">=") + ver) if ver else "", ver if (ver and exact) else None, rel, ln))
+        elif cmd in ("pkg_check_modules", "pkg_search_module"):
+            for t in toks[2:] if len(toks) > 2 else []:
+                pm = re.match(r"^([A-Za-z0-9_.+-]+)\s*(?:(>=|=|<=|>|<)\s*(\d[\w.]*))?$", t)
+                if pm and pm.group(1).upper() not in ("REQUIRED", "QUIET", "IMPORTED_TARGET", "GLOBAL"):
+                    out.append(Component(pm.group(1).lower(), "cmake", (pm.group(2) or "") + (pm.group(3) or ""), pm.group(3) if pm.group(2) == "=" else None, rel, ln))
+        elif cmd in ("fetchcontent_declare", "externalproject_add") and toks:
+            tag = re.search(r"\bGIT_TAG\s+(\S+)", body)
+            url = re.search(r"\bURL\s+(\S+)", body)
+            repo = re.search(r"\bGIT_REPOSITORY\s+(\S+)", body)
+            ver = ""
+            if tag:
+                tm = re.fullmatch(r"(?:[A-Za-z_-]*?)v?(\d+(?:\.\d+)+)", tag.group(1).strip("\"'"))
+                ver = tm.group(1) if tm else ""
+            name = toks[0].lower()
+            if url:
+                got = tarballs(url.group(1), "c", rel, ln)
+                if got:
+                    name, ver = got[0].name, got[0].version or ver
+            if not ver and repo and not tag:
+                ver = ""
+            out.append(Component(name, "cmake", (tag.group(1) if tag else (url.group(1) if url else "")), ver or None, rel, ln))
+        elif cmd in ("cpmaddpackage", "cpmfindpackage"):
+            nm = re.search(r"\bNAME\s+(\S+)", body)
+            vr = re.search(r"\bVERSION\s+(\d+(?:\.\d+)*)", body)
+            gh = re.search(r"\bGITHUB_REPOSITORY\s+\S*/(\S+)", body) or re.search(r"gh:[^/\s]+/([^#\s\"]+)(?:#v?(\d+(?:\.\d+)+))?", body)
+            name = (nm.group(1) if nm else gh.group(1) if gh else "").lower()
+            ver = vr.group(1) if vr else (gh.group(2) if gh and gh.lastindex and gh.lastindex >= 2 and gh.group(2) else "")
+            if name:
+                out.append(Component(name, "cmake", ver, ver or None, rel, ln))
+    return out
+
+
+def makefile(path: Path, root: Path) -> list[Component]:
+    """Makefile / *.mk: `NAME_VERSION = 1.2.3`, tarball names in download commands, `pkg-config` constraints and `-lname` link flags (a link flag names a library, never a version)."""
+    rel = str(path.relative_to(root))
+    out = []
+    seen = set()
+    for n, raw in enumerate(path.read_text(errors="replace").splitlines(), 1):
+        line = raw.split("#", 1)[0]
+        m = re.match(r"^\s*([A-Za-z][A-Za-z0-9_]*?)_(?:VERSION|VER)\s*[:?+]?=\s*v?(\d+(?:\.\d+)+)\s*$", line)
+        if m:
+            out.append(Component(m.group(1).lower().replace("_", "-"), "make", m.group(2), m.group(2), rel, n))
+        out += tarballs(line, "c", rel, n)
+        for pm in re.finditer(r"pkg-config[^\n]*?--(?:atleast-version|exact-version|modversion|cflags|libs)[= ]*([0-9][\w.]*)?\s+([A-Za-z][\w.+-]*)", line):
+            out.append(Component(pm.group(2).lower(), "make", ("==" if "exact" in pm.group(0) else ">=") + pm.group(1) if pm.group(1) else "", pm.group(1) if "exact" in pm.group(0) else None, rel, n))
+        for lm in re.finditer(r"(?<![\w-])-l([A-Za-z][\w+.-]*)", line):
+            name = _LIBNAME.get(lm.group(1).lower(), lm.group(1).lower())
+            if name and name not in seen and not name.startswith(("m", "pthread", "dl", "rt", "c")) or name in _LIBNAME.values():
+                seen.add(name)
+                out.append(Component(name, "make", "", None, rel, n))
+    return out
+
+
 def find_manifests(root: Path) -> tuple[list[Path], bool]:
     """(manifest files under root, whether the search stopped at MAX_FILES). Vendored and generated trees are skipped; a cut is reported, never silent."""
     found: list[Path] = []
@@ -262,7 +501,9 @@ def find_manifests(root: Path) -> tuple[list[Path], bool]:
                     stack.append(p)
                 continue
             n = p.name.lower()
-            if (re.fullmatch(r"requirements[\w.-]*\.(txt|lock)", n) or n in ("pyproject.toml", "package.json", "package-lock.json") or n == "dockerfile" or n.startswith("dockerfile.")
+            if (re.fullmatch(r"requirements[\w.-]*\.(txt|lock)", n) or n in ("pyproject.toml", "package.json", "package-lock.json", "pom.xml", "build.gradle", "build.gradle.kts", "gradle.lockfile",
+                                                                              "libs.versions.toml", "cargo.toml", "cargo.lock", "conanfile.txt", "conanfile.py", "vcpkg.json",
+                                                                              "cmakelists.txt", "makefile", "gnumakefile") or n.endswith((".cmake", ".mk")) or n == "dockerfile" or n.startswith("dockerfile.")
                     or n.endswith(".dockerfile") or re.fullmatch(r"(docker-)?compose[\w.-]*\.ya?ml", n)):
                 try:
                     if p.stat().st_size <= MAX_BYTES:
@@ -282,7 +523,7 @@ def read_project(root: Path) -> tuple[list[Component], list[str], bool]:
     for p in paths:
         n = p.name.lower()
         try:
-            if n.endswith((".txt", ".lock")):
+            if re.fullmatch(r"requirements[\w.-]*\.(txt|lock)", n):
                 if p.resolve() in included:
                     continue
                 got = requirements_txt(p, root, included)
@@ -292,6 +533,26 @@ def read_project(root: Path) -> tuple[list[Component], list[str], bool]:
                 got = package_json(p, root)
             elif n == "package-lock.json":
                 got = package_lock(p, root)
+            elif n == "pom.xml":
+                got = pom_xml(p, root)
+            elif n in ("build.gradle", "build.gradle.kts"):
+                got = gradle_build(p, root)
+            elif n == "gradle.lockfile":
+                got = gradle_lockfile(p, root)
+            elif n == "libs.versions.toml":
+                got = gradle_catalog(p, root)
+            elif n == "cargo.toml":
+                got = cargo_toml(p, root)
+            elif n == "cargo.lock":
+                got = cargo_lock(p, root)
+            elif n.startswith("conanfile."):
+                got = conanfile(p, root)
+            elif n == "vcpkg.json":
+                got = vcpkg_json(p, root)
+            elif n == "cmakelists.txt" or n.endswith(".cmake"):
+                got = cmake_file(p, root)
+            elif n in ("makefile", "gnumakefile") or n.endswith(".mk"):
+                got = makefile(p, root)
             elif "compose" in n:
                 got = compose_file(p, root)
             else:

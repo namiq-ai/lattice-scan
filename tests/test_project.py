@@ -121,8 +121,130 @@ class ProjectMatching(unittest.TestCase):
         self.assertIsNotNone(self.hit("Google", "Angular", **{"@angular/core": "17.0.0"}))   # the scope is the product
 
     def test_every_declared_version_of_the_name_is_returned(self):
-        why, installed, vers = self.hit("Example", "Examplelib", **{"examplelib": "2.14.0", "examplelib#2": "2.17.1"})
+        why, installed, vers, comparable = self.hit("Example", "Examplelib", **{"examplelib": "2.14.0", "examplelib#2": "2.17.1"})
         self.assertEqual(sorted(vers), ["2.14.0", "2.17.1"])
+
+
+class MoreEcosystems(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def comps(self):
+        return {(c.name, c.ecosystem): c for c in manifests.read_project(self.root)[0]}
+
+    def test_maven_pom_resolves_properties_and_leaves_unresolved_unpinned(self):
+        write(self.root, "pom.xml", """<project xmlns="http://maven.apache.org/POM/4.0.0"><version>3.1.0</version>
+          <properties><log.v>2.14.1</log.v></properties>
+          <dependencies>
+            <dependency><groupId>org.example.logging</groupId><artifactId>examplelog-core</artifactId><version>${log.v}</version></dependency>
+            <dependency><groupId>org.example</groupId><artifactId>other</artifactId><version>${missing}</version></dependency>
+            <dependency><groupId>org.example</groupId><artifactId>managed</artifactId></dependency>
+          </dependencies></project>""")
+        c = self.comps()
+        self.assertEqual(c[("org.example.logging:examplelog-core", "maven")].version, "2.14.1")
+        self.assertIsNone(c[("org.example:other", "maven")].version)
+        self.assertIsNone(c[("org.example:managed", "maven")].version)
+
+    def test_gradle_build_lockfile_and_catalog(self):
+        write(self.root, "build.gradle", "dependencies {\n  implementation 'org.example:lib:1.2.3'\n  api(\"org.example:ranged:1.+\")\n  testImplementation 'org.example:noversion'\n}\n")
+        write(self.root, "gradle.lockfile", "org.example:locked:4.5.6=compileClasspath,runtimeClasspath\nempty=\n")
+        write(self.root, "gradle/libs.versions.toml", '[versions]\nv = "9.9.9"\n[libraries]\nviaref = { module = "org.example:viaref", version.ref = "v" }\n')
+        c = self.comps()
+        self.assertEqual(c[("org.example:lib", "maven")].version, "1.2.3")
+        self.assertIsNone(c[("org.example:ranged", "maven")].version)
+        self.assertEqual(c[("org.example:locked", "maven")].version, "4.5.6")
+        self.assertEqual(c[("org.example:viaref", "maven")].version, "9.9.9")
+
+    def test_cargo_toml_and_lock(self):
+        write(self.root, "Cargo.toml", '[dependencies]\nexactcrate = "=1.4.2"\ncaret = "1.4.2"\nfull = { version = "0.9", features = ["x"] }\nlocal = { path = "../x" }\n'
+              '[dev-dependencies]\ndevcrate = "2"\n')
+        write(self.root, "Cargo.lock", '[[package]]\nname = "caret"\nversion = "1.4.9"\n\n[[package]]\nname = "openssl-sys"\nversion = "0.9.1"\n')
+        c = self.comps()
+        self.assertEqual(c[("exactcrate", "cargo")].version, "1.4.2")
+        self.assertIsNone(c[("caret", "cargo")].version if ("caret", "cargo") in c and c[("caret", "cargo")].spec == "1.4.2" else None)
+        self.assertNotIn(("local", "cargo"), c)
+        self.assertEqual(c[("openssl-sys", "cargo")].version, "0.9.1")      # the lock says what is built
+
+    def test_cmake_find_package_fetchcontent_cpm_and_pkgconfig(self):
+        write(self.root, "CMakeLists.txt", "# find_package(Ignored 9.9)\nfind_package(OpenSSL 1.1.1 REQUIRED)\nfind_package(Exact 2.0 EXACT)\n"
+              "FetchContent_Declare(\n  examplelib\n  GIT_REPOSITORY https://example.invalid/x.git\n  GIT_TAG v2.14.0\n)\n"
+              "FetchContent_Declare(floaty GIT_REPOSITORY https://example.invalid/y.git GIT_TAG main)\n"
+              "CPMAddPackage(NAME cpmlib VERSION 3.4.5 GITHUB_REPOSITORY example/cpmlib)\n"
+              "pkg_check_modules(ZL REQUIRED zlib>=1.2.8)\n"
+              "ExternalProject_Add(zdep URL https://example.invalid/zlib-1.2.11.tar.gz)\n")
+        c = self.comps()
+        self.assertEqual(c[("openssl", "cmake")].spec, ">=1.1.1"); self.assertIsNone(c[("openssl", "cmake")].version)   # a minimum, not a pin
+        self.assertEqual(c[("exact", "cmake")].version, "2.0")
+        self.assertEqual(c[("examplelib", "cmake")].version, "2.14.0")
+        self.assertIsNone(c[("floaty", "cmake")].version)                                                              # a branch is not a version
+        self.assertEqual(c[("cpmlib", "cmake")].version, "3.4.5")
+        self.assertIsNone(c[("zl", "cmake")].version if ("zl", "cmake") in c else None)
+        self.assertEqual(c[("zlib", "cmake")].version, "1.2.11")      # the name comes from the tarball, not from the target name zdep
+        self.assertNotIn(("ignored", "cmake"), c)
+
+    def test_makefile_versions_tarballs_pkgconfig_and_link_flags(self):
+        write(self.root, "Makefile", "ZLIB_VERSION = 1.2.11  # pinned\nLDLIBS += -lssl -lcrypto -lm\nPKG := $(shell pkg-config --atleast-version=1.0 libfoo)\n"
+              "fetch:\n\tcurl -O https://example.invalid/curl-7.88.1.tar.gz\nPYTHON_VERSION ?= 3.12.1\n")
+        c = self.comps()
+        self.assertEqual(c[("zlib", "make")].version, "1.2.11")
+        self.assertEqual(c[("curl", "c")].version, "7.88.1")
+        self.assertEqual(c[("python", "make")].version, "3.12.1")
+        self.assertIn(("openssl", "make"), c); self.assertIsNone(c[("openssl", "make")].version)    # -lssl names a library, never a version
+        self.assertNotIn(("m", "make"), c)
+
+    def test_conan_and_vcpkg(self):
+        write(self.root, "conanfile.txt", "[requires]\nzlib/1.2.13\nboost/[>=1.70]\nfmt/9.1.0@user/channel\n[generators]\nCMakeDeps\n")
+        write(self.root, "conanfile.py", 'class P:\n    requires = "openssl/3.0.8"\n    def requirements(self):\n        self.requires("sqlite3/3.40.1")\n')
+        write(self.root, "vcpkg.json", json.dumps({"dependencies": ["zlib", {"name": "curl", "version>=": "7.80"}], "overrides": [{"name": "zlib", "version": "1.2.13"}]}))
+        c = self.comps()
+        self.assertEqual(c[("zlib", "conan")].version, "1.2.13")
+        self.assertIsNone(c[("boost", "conan")].version)
+        self.assertEqual(c[("fmt", "conan")].version, "9.1.0")
+        self.assertEqual(c[("openssl", "conan")].version, "3.0.8")
+        self.assertEqual(c[("sqlite3", "conan")].version, "3.40.1")
+        self.assertEqual(c[("zlib", "vcpkg")].version, "1.2.13")
+        self.assertIsNone(c[("curl", "vcpkg")].version)
+
+    def test_docker_tags(self):
+        write(self.root, "docker-compose.yml", "services:\n  a:\n    image: exampledb:16\n  b:\n    image: exampledb:13.0.1-security-01\n  c:\n    image: tool:2.4-alpine\n  d:\n    image: ex:v1.4.1\n")
+        v = {c.spec: c.version for c in manifests.read_project(self.root)[0]}
+        self.assertIsNone(v["exampledb:16"])                # a major-only tag floats
+        self.assertEqual(v["exampledb:13.0.1-security-01"], "13.0.1")
+        self.assertEqual(v["tool:2.4-alpine"], "2.4")
+        self.assertEqual(v["ex:v1.4.1"], "1.4.1")
+
+
+class FamilyAndRanges(unittest.TestCase):
+    def inv(self, eco, **pk):
+        return {"packages": dict(pk), "ecosystems": {k: eco for k in pk}, "snaps": {}, "images": [], "kernel": "", "node": ""}
+
+    def hit(self, vendor, product, eco, **pk):
+        return cli.project_candidate({"cve": "CVE-2099-1", "vendor": vendor, "product": product, "title": ""}, self.inv(eco, **pk))
+
+    def test_a_maven_coordinate_carries_the_product_as_a_token(self):
+        m = self.hit("Apache", "Log4j2", "maven", **{"org.apache.logging.log4j:log4j-core": "2.14.1"})
+        self.assertTrue(m and m[3])                                    # same family: its version is comparable
+        self.assertTrue(self.hit("VMware", "Spring Framework", "maven", **{"org.springframework:spring-core": "5.3.0"}))
+        self.assertIsNone(self.hit("Apache", "Log4j2", "pypi", **{"log4j-core": "2.14.1"}))     # the family rule is not for pypi/npm
+        self.assertTrue(self.hit("OpenSSL", "OpenSSL", "cargo", **{"openssl-sys": "0.9.1"}))
+        self.assertIsNone(self.hit("Example", "Core", "maven", **{"org.example:core-utils": "1"}))   # a generic product never matches by token
+
+    def test_a_scope_only_match_is_a_lead_and_its_version_is_not_compared(self):
+        m = self.hit("Vite", "Vitejs", "npm", **{"@vitejs/plugin-react": "6.0.3"})
+        self.assertTrue(m)
+        self.assertFalse(m[3])
+        self.assertTrue(self.hit("Vite", "Vitejs", "npm", vite="5.4.0")[3])           # the product's own package is compared (js suffix dropped)
+
+    def test_vendor_difference_does_not_hide_the_same_product_name(self):
+        R = [{"product": "encode/starlette", "end_excluding": "1.0.1", "start_including": "0.8.3"}]
+        self.assertEqual(cli.version_check({"vendor": "Kludex", "product": "Starlette", "ranges": R}, ["0.9.0"])["verdict"], "in-range")
+        self.assertEqual(cli.version_check({"vendor": "Sudo", "product": "Sudo", "ranges": [{"product": "sudo_project/sudo", "end_excluding": "1.9.5"}]}, ["1.8.0"])["verdict"], "in-range")
+        self.assertEqual(cli.version_check({"vendor": "Microsoft", "product": "Kernel", "ranges": [{"product": "linux/linux_kernel", "end_excluding": "9"}]}, ["1"])["verdict"], "undetermined")
+        self.assertEqual(cli.version_check({"vendor": "Vite", "product": "Vitejs", "ranges": [{"product": "vitejs/vite", "end_excluding": "5.4.16"}]}, ["5.4.0"])["verdict"], "in-range")
 
 
 class ProjectCommand(unittest.TestCase):
