@@ -751,6 +751,7 @@ def cmd_project(a) -> int:
     started = False
     stopped = ""
     catalogue = load_catalogue(a.kev_catalogue) if a.kev_catalogue else []
+    entries: dict[str, dict | None] = {}   # one read per id for the whole run, however many folders match it: the keyless day is 60 reads
     for root_s in a.paths:
         root = Path(root_s).resolve()
         if not root.is_dir():
@@ -778,10 +779,12 @@ def cmd_project(a) -> int:
                 unread.append(cve)
                 continue
             try:
-                if not started:
-                    lat.start()
-                    started = True
-                e = kev_entry(lat, cve)
+                if cve not in entries:
+                    if not started:
+                        lat.start()
+                        started = True
+                    entries[cve] = kev_entry(lat, cve)
+                e = entries[cve]
             except LatticeError as err:
                 stopped = str(err)
                 unread.append(cve)

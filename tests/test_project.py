@@ -205,6 +205,16 @@ class ProjectCommand(unittest.TestCase):
         rc, out, _ = self.run_cli("project", str(self.root), "--cve-file", str(cve), "--max-read", "1")
         self.assertIn("NOT READ (2)", out)
 
+    def test_one_read_per_id_across_folders(self):
+        other = self.root.parent / "proj2"
+        other.mkdir()
+        write(self.root, "requirements.txt", "examplelib==2.14.0\n")
+        write(other, "requirements.txt", "examplelib==2.16.0\n")
+        rc, out, _ = self.run_cli("project", str(self.root), str(other), "--cve", "CVE-2099-0001")
+        self.assertEqual(len([m for m, _, _ in Stub.seen if m == "tools/call"]), 1)
+        self.assertIn("version check: in-range", out)         # the first folder
+        self.assertIn("version check: outside-range", out)    # the second, from the same single read
+
     def test_json_and_fail_on(self):
         write(self.root, "requirements.txt", "examplelib==2.14.0\n")
         j = Path(self.tmp.name) / "r.json"
