@@ -155,7 +155,7 @@ an id is read from Lattice only when its product is the same as a declared packa
 Matching is by identity. The product must be the package, its npm scope, or vendor and product together; a prefix counts when the shorter name has six or more characters and covers
 70% of the longer (postgres, PostgreSQL). A generic one\-word product (Core, Client) also needs its vendor in the name. For Maven, Cargo, Conan, vcpkg, CMake and Make names the
 product as one whole token of a longer coordinate matches too (\fBorg.apache.logging.log4j:log4j\-core\fR is Log4j2) and its versions are compared. A match through an npm scope
-alone (\fB@vitejs/plugin\-react\fR for Vite) is a lead only: that package's version is not the product's, so no range is compared and the result is \fBundetermined\fR.
+alone (\fB@vitejs/plugin\-react\fR for Vite) is a lead only: that package's version is not the product's, so no range is compared and the result is \fBlead\fR. So is a client library that carries the server's name (the PyPI \fBminio\fR is not the MinIO server).
 .SS Options
 .TP
 .BI \-\-cve " ID[,ID...]" ", " \-\-cve\-file " FILE"
@@ -215,7 +215,7 @@ listed  due  due_status  action  why
 .PP
 .B verdict
 is one of
-.BR in\-range ", " undetermined ", " outside\-range ", " not\-read .
+.BR in\-range ", " undetermined ", " outside\-range ", " lead ", " not\-read .
 Rows are ordered by project, then verdict (in\-range first, not\-read last), then CVE.
 .B declared
 is the text as written (\fB==2.14.0\fR);
@@ -241,8 +241,10 @@ A declared, pinned version lies inside a range NVD lists as affected. Check what
 what runs.
 .TP
 .B undetermined
-The declaration is a range, a minimum, a floating tag or has no version; or NVD's bounds are dates or build ids; or Lattice listed no range for this product; or the package is not the product
-itself. It could not be judged.
+The declaration is a range, a minimum, a floating tag or has no version; or NVD's bounds are dates or build ids; or Lattice listed no range for this product. It could not be judged.
+.TP
+.B lead
+The declared package only shares a scope or name with the product, or is its client library. Its version says nothing about the product, so no range was compared.
 .TP
 .B outside\-range
 Every pinned version declared lies outside every usable range. This does not close a finding.

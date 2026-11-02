@@ -487,7 +487,20 @@ class ProjectCommand(unittest.TestCase):
         import csv as _csv
         rows = {r["component"].lstrip("'"): r for r in _csv.DictReader(out_text.splitlines())}
         self.assertEqual(rows["vite"]["verdict"], "outside-range")                  # its own version, judged on its own
-        self.assertEqual(rows["@vitejs/plugin-react"]["verdict"], "undetermined")    # the lead stays a lead
+        self.assertEqual(rows["@vitejs/plugin-react"]["verdict"], "lead")    # the lead stays a lead, ranked below every real comparison
+
+    def test_a_client_library_with_the_servers_name_is_a_lead(self):
+        """OCO-5828: the PyPI minio is the Python SDK, not the MinIO server; its 7.2.7 must not be compared with the server's ranges."""
+        write(self.root, "requirements.txt", "minio==7.2.7\n")
+        Stub.answers = {"CVE-2099-0008": lookup("CVE-2099-0008", product="MinIO", vendor="MinIO", ranges=[{"product": "minio/minio", "end_excluding": "9.0.0"}])}
+        rc, out_text, _ = self.run_cli("project", str(self.root), "--cve", "CVE-2099-0008", "--format", "csv")
+        import csv as _csv
+        rows = list(_csv.DictReader(out_text.splitlines()))
+        self.assertEqual([r["verdict"] for r in rows], ["lead"])
+        self.assertIn("client library", rows[0]["why"])
+        rc, text, _ = self.run_cli("project", str(self.root), "--cve", "CVE-2099-0008")
+        self.assertIn("[LEAD]", text)
+        self.assertIn("Leads", text)                  # its own column in the summary, not counted as undetermined
 
     def test_csv_to_stdout_has_a_fixed_header_and_one_row_per_finding(self):
         import csv as _csv
