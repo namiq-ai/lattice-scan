@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=77"]  # 77 is the first to read an SPDX licence expression
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lattice-scan"
+dynamic = ["version"]
+description = "Match CISA-exploited CVEs, looked up through Lattice, against what is installed on this host. Prints evidence for a person to read."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []  # standard library only, on purpose: it runs on hosts where nothing else can be installed
+license = "MIT"
+license-files = ["LICENSE"]
+
+[project.scripts]
+lattice-scan = "lattice_scan.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "lattice_scan.__version__" }

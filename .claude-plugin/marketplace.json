@@ -1,0 +1,17 @@
+{
+  "name": "namiq-lattice",
+  "description": "Claude Code plugins from NamiQ for working with Lattice.",
+  "owner": {
+    "name": "NamiQ",
+    "email": "contact@namiq.io"
+  },
+  "plugins": [
+    {
+      "name": "lattice-scan",
+      "description": "Check the machine Claude is running on against CISA-exploited CVEs, looked up through Lattice. Prints evidence for a person to read.",
+      "source": "./",
+      "category": "security",
+      "homepage": "https://github.com/namiq-ai/lattice-scan"
+    }
+  ]
+}
