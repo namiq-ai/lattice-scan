@@ -58,4 +58,6 @@ publicly. See `SECURITY.md`.
 
 ## Licence
 
-MIT. See `LICENSE`.
+Apache License 2.0. See `LICENSE` and `NOTICE`. Copyright 2026 NamiQ LLC.
+
+The licence does not grant the right to use the names "NamiQ" or "Lattice" or their logos. Releases up to v0.1.0 were published under MIT; see `NOTICE`.

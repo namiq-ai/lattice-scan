@@ -14,7 +14,7 @@ DIST = HERE / "dist"
 sys.path.insert(0, str(HERE / "src"))
 from lattice_scan import __version__ as VERSION  # noqa: E402
 
-MAINTAINER = "NamiQ <contact@namiq.io>"  # the contact Lattice itself gives in its answers
+MAINTAINER = "NamiQ LLC <contact@namiq.io>"  # the contact Lattice itself gives in its answers
 MODULES = ("__init__.py", "__main__.py", "cli.py")
 
 
@@ -29,6 +29,8 @@ def pyz() -> None:
         (Path(t) / "lattice_scan").mkdir()
         for m in MODULES:
             shutil.copy(SRC / m, Path(t) / "lattice_scan" / m)
+        for lic in ("LICENSE", "NOTICE"):  # Apache-2.0 asks that a redistributed copy carry the licence and notice
+            shutil.copy(HERE / lic, Path(t) / lic)
         (Path(t) / "__main__.py").write_text("import sys\nfrom lattice_scan.cli import main\nsys.exit(main())\n")
         out = DIST / "lattice-scan.pyz"
         zipapp.create_archive(t, out, interpreter="/usr/bin/env python3")
@@ -58,8 +60,14 @@ def deb() -> None:
         shutil.copy(HERE / "README.md", doc / "README.md")
         with gzip.open(doc / "changelog.Debian.gz", "wt") as f:
             f.write(f"lattice-scan ({VERSION}) stable; urgency=low\n\n  * First packaged release.\n\n -- {MAINTAINER}  Mon, 02 Nov 2026 00:00:00 +0000\n")
-        # The licence text travels with the package, as Debian expects.
-        shutil.copy(HERE / "LICENSE", doc / "copyright")
+        # DEP-5 copyright file. The licence text is the one Debian already ships in /usr/share/common-licenses, which a .deb should reference, not repeat.
+        (doc / "copyright").write_text(
+            "Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\n"
+            "Upstream-Name: lattice-scan\nUpstream-Contact: contact@namiq.io\nSource: https://github.com/namiq-ai/lattice-scan\n\n"
+            "Files: *\nCopyright: 2026 NamiQ LLC\nLicense: Apache-2.0\n\n"
+            "License: Apache-2.0\n On Debian systems the full text of the Apache License, Version 2.0 is in /usr/share/common-licenses/Apache-2.0.\n"
+            " The names NamiQ and Lattice are not licensed for use; see the NOTICE file.\n")
+        shutil.copy(HERE / "NOTICE", doc / "NOTICE")
         man = root / "usr/share/man/man1"
         man.mkdir(parents=True)
         with gzip.open(man / "lattice-scan.1.gz", "wt") as f:

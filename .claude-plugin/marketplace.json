@@ -2,7 +2,7 @@
   "name": "namiq-lattice",
   "description": "Claude Code plugins from NamiQ for working with Lattice.",
   "owner": {
-    "name": "NamiQ",
+    "name": "NamiQ LLC",
     "email": "contact@namiq.io"
   },
   "plugins": [

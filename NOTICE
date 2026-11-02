@@ -1,0 +1,11 @@
+lattice-scan
+Copyright 2026 NamiQ LLC
+
+This product includes software developed by NamiQ LLC (https://namiq.io).
+
+The names "NamiQ" and "Lattice", and any associated logos, identify NamiQ LLC and its services. The Apache License, Version 2.0, grants no
+permission to use them (see section 6 of the licence): you may say that your work is based on or works with lattice-scan, but you may not use
+these names in a way that suggests NamiQ LLC made, endorsed or supports your work or your changes to it.
+
+Licence history: releases up to and including v0.1.0 were published under the MIT licence, and anyone who received one keeps that licence for that
+release. Later releases are licensed under the Apache License, Version 2.0 (see LICENSE).
