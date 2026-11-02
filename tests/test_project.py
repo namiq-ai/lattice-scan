@@ -121,7 +121,7 @@ class ProjectMatching(unittest.TestCase):
         self.assertIsNotNone(self.hit("Google", "Angular", **{"@angular/core": "17.0.0"}))   # the scope is the product
 
     def test_every_declared_version_of_the_name_is_returned(self):
-        why, installed, vers, comparable = self.hit("Example", "Examplelib", **{"examplelib": "2.14.0", "examplelib#2": "2.17.1"})
+        why, installed, vers, comparable, matches = self.hit("Example", "Examplelib", **{"examplelib": "2.14.0", "examplelib#2": "2.17.1"})
         self.assertEqual(sorted(vers), ["2.14.0", "2.17.1"])
 
 
@@ -432,6 +432,16 @@ class ProjectCommand(unittest.TestCase):
         self.assertEqual(d["candidates"][0]["versionCheck"]["verdict"], "in-range")
         self.assertEqual(d["candidates"][0]["declared"][0]["file"], "requirements.txt")
         self.assertEqual(self.run_cli("project", str(self.root), "--cve", "CVE-2099-0001")[0], 0)   # default: report only
+
+    def test_a_lead_never_changes_the_verdict_of_the_products_own_package(self):
+        """The dogfood run showed it: @vitejs/plugin-react in the same project made vite's own pinned version 'undetermined' instead of 'outside-range'."""
+        write(self.root, "package-lock.json", json.dumps({"lockfileVersion": 3, "packages": {"node_modules/vite": {"version": "5.4.21"}, "node_modules/@vitejs/plugin-react": {"version": "4.7.0"}}}))
+        Stub.answers = {"CVE-2099-0007": lookup("CVE-2099-0007", product="Vitejs", vendor="Vite", ranges=[{"product": "vitejs/vite", "end_excluding": "5.4.16"}])}
+        rc, out_text, _ = self.run_cli("project", str(self.root), "--cve", "CVE-2099-0007", "--format", "csv")
+        import csv as _csv
+        rows = {r["component"].lstrip("'"): r for r in _csv.DictReader(out_text.splitlines())}
+        self.assertEqual(rows["vite"]["verdict"], "outside-range")                  # its own version, judged on its own
+        self.assertEqual(rows["@vitejs/plugin-react"]["verdict"], "undetermined")    # the lead stays a lead
 
     def test_csv_to_stdout_has_a_fixed_header_and_one_row_per_finding(self):
         import csv as _csv

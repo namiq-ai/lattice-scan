@@ -62,9 +62,9 @@ def findings(results: list[dict]) -> list[dict]:
         for h in r["candidates"]:
             decl = h["declared"] or [{}]
             for d in decl:
-                out.append({"project": name, "cve": h["cve"], "title": h["title"], "verdict": h["versionCheck"]["verdict"], "component": d.get("name", ""),
+                out.append({"project": name, "cve": h["cve"], "title": h["title"], "verdict": d.get("verdict", h["versionCheck"]["verdict"]), "component": d.get("name", ""),
                             "ecosystem": d.get("ecosystem", ""), "declared": d.get("spec", ""), "version": d.get("version") or "", "file": d.get("file", ""),
-                            "line": d.get("line") or "", "listed": h["listed"], "due": h["due"], "action": h["action"], "why": h["versionCheck"]["why"]})
+                            "line": d.get("line") or "", "listed": h["listed"], "due": h["due"], "action": h["action"], "why": d.get("why", h["versionCheck"]["why"])})
         for cve in r["unread"]:
             out.append({"project": name, "cve": cve, "title": "", "verdict": "not-read", "component": "", "ecosystem": "", "declared": "", "version": "", "file": "", "line": "",
                         "listed": "", "due": "", "action": "", "why": "not read from Lattice" + (f": {r['stopped']}" if r.get("stopped") else " (over the read limit)")})
@@ -169,18 +169,20 @@ def console(results: list[dict], today: str, tool: str, width: int = 100, color:
         n = 0
         for cve, group in by_cve.items():
             n += 1
-            v = group[0]["verdict"]
+            v = min((g["verdict"] for g in group), key=lambda x: VERDICT_ORDER[x])
             L += ["", f"{n}. {cve}  " + paint(f"[{VERDICT_LABEL[v]}]", tag_color[v])]
             L += textwrap.wrap(group[0]["title"], width - 3, initial_indent="   ", subsequent_indent="   ")
             for g in group:
                 d = f"{g['component']} {g['declared'] or '(no version)'}".strip()
                 loc = f"{g['file']}:{g['line']}" if g["line"] else g["file"]
-                L += textwrap.wrap(f"{d}  [{g['ecosystem']}]  {loc}", width - 14, initial_indent="   Declared   ", subsequent_indent="              ", break_long_words=False, break_on_hyphens=False)
+                mark = "" if g["verdict"] == v else f"  [{VERDICT_LABEL[g['verdict']].lower()}]"
+                L += textwrap.wrap(f"{d}  [{g['ecosystem']}]  {loc}{mark}", width - 14, initial_indent="   Declared   ", subsequent_indent="              ", break_long_words=False, break_on_hyphens=False)
             listed, due = group[0]["listed"], group[0]["due"]
             if listed or due:
                 L += textwrap.wrap(f"listed {listed or '-'}" + (f" ({_rel(listed, today)})" if _rel(listed, today) else "") + f", due {due or '-'}"
                                    + (f" ({due_status(due, today).removeprefix('due ')})" if due_status(due, today) else ""), width - 14, initial_indent="   CISA       ", subsequent_indent="              ")
-            L += textwrap.wrap(group[0]["why"], width - 14, initial_indent="   Check      ", subsequent_indent="              ")
+            for why in dict.fromkeys(g["why"] for g in sorted(group, key=lambda g: VERDICT_ORDER[g["verdict"]])):
+                L += textwrap.wrap(why, width - 14, initial_indent="   Check      ", subsequent_indent="              ")
             if group[0]["action"]:
                 L += textwrap.wrap(group[0]["action"], width - 14, initial_indent="   Required   ", subsequent_indent="              ", max_lines=3, placeholder=" ...")
             if v == "in-range":

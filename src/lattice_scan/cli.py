@@ -725,7 +725,7 @@ def _flat(s: str) -> str:
     return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
-def project_candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str], bool] | None:
+def project_candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str], bool, list[tuple[str, str, str, bool]]] | None:
     """A declared dependency that IS this entry's product, or None. Stricter than the host's word match, on purpose.
 
     A host's package list is flat and a product word may sit anywhere in a name; a project's names are single identifiers, and a loose match is noise
@@ -736,7 +736,7 @@ def project_candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str]
     Beyond identity: for Maven, Cargo, Conan, vcpkg, CMake and Makefile names, which carry the product inside a longer coordinate (org.apache.logging.log4j:log4j-core is
     Log4j2; openssl-sys is OpenSSL), the product as one whole token of the name is a match of the same product family, whose versions are comparable. A match through an npm
     SCOPE only (@vitejs/plugin-react for Vite) is a lead and nothing more: its version is not the product's, so the fourth value is False and no range is compared.
-    Returns (why, "name version" list, versions, whether those versions may be compared with the product's ranges).
+    Returns (why, "name version" list, versions, whether every match is comparable, the matches as (key, name, version, comparable) so each can be judged on its own).
     """
     product = _flat(entry.get("product", ""))
     basis = "product"
@@ -778,7 +778,7 @@ def project_candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str]
     names = sorted({n for _, n, _, _ in hit})
     comparable = all(c for _, _, _, c in hit)
     vers = [v for _, _, v, _ in hit] if comparable else ["not the product's own package"]
-    return (f"{basis} {product} is declared as " + ", ".join(names), [f"{n} {v}" for _, n, v, _ in hit], vers, comparable)
+    return (f"{basis} {product} is declared as " + ", ".join(names), [f"{n} {v}" for _, n, v, _ in hit], vers, comparable, hit)
 
 
 def load_catalogue(path: str) -> list[dict]:
@@ -880,12 +880,21 @@ def cmd_project(a) -> int:
             m = project_candidate(e, inv)
             if not m:
                 continue
-            why, installed, vers, comparable = m
-            names = [k for k, v in inv["packages"].items() if f"{k.split('#')[0]} {v}" in installed]
-            vc = version_check(e, vers) if comparable else {"verdict": "undetermined", "why": "the declared package shares a scope or name with the product but is not the product, so its version says nothing about the product's affected ranges"}
-            hits.append({"cve": cve, "title": e["title"], "why": why, "listed": e["added"], "due": e["due"], "action": e["action"][:400], "versionCheck": vc,
-                         "declared": [{"name": c.name, "spec": c.spec, "version": c.version, "file": c.file, "line": c.line, "ecosystem": c.ecosystem}
-                                      for n in names for c in where.get(n, [])]})
+            why, installed, vers, comparable, matches = m
+            declared, verdicts = [], []
+            for key, name, val, comp in matches:
+                if comp:
+                    vc_one = version_check(e, [val])
+                else:
+                    vc_one = {"verdict": "undetermined", "why": "the declared package shares a scope or name with the product but is not the product, so its version says nothing about the product's affected ranges"}
+                verdicts.append(vc_one)
+                for c in where.get(key, []):
+                    declared.append({"name": c.name, "spec": c.spec, "version": c.version, "file": c.file, "line": c.line, "ecosystem": c.ecosystem,
+                                     "verdict": vc_one["verdict"], "why": vc_one["why"]})
+            # The finding's own verdict is the most pressing of its components': a lead (undetermined) must never hide a pinned version that is outside, or the other way round.
+            order = {"in-range": 0, "undetermined": 1, "outside-range": 2}
+            vc = min(verdicts, key=lambda v: order[v["verdict"]])
+            hits.append({"cve": cve, "title": e["title"], "why": why, "listed": e["added"], "due": e["due"], "action": e["action"][:400], "versionCheck": vc, "declared": declared})
         results.append({"root": str(root), "files": files, "filesCut": cut, "components": len(comps), "pinned": pinned, "read": read, "candidates": hits,
                         "notListed": not_listed, "unread": unread, "stopped": stopped})
     from lattice_scan import report
