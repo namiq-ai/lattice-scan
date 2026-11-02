@@ -38,6 +38,8 @@ lattice-scan --debug --cve CVE-...                         # every request, resp
 
 ## Check a project's dependencies
 
+Not sure whether you want this command line, the Claude skill or the Lattice MCP server? The [channel guide](https://namiq.io/lattice/guides/choose-your-channel) compares them, lists what works without a key, and has a CI recipe.
+
 **Who can scan what.** Reading many ids is for a key whose owner has confirmed their email. With a confirmed key, `--kev-catalogue` lets CISA's catalogue choose the ids. A key whose email is not
 confirmed yet (tier `trial`) is refused with a message to confirm it; no id is read. **Without a key you name the CVEs yourself**, comma separated:
 `lattice-scan project . --cve CVE-2026-46300,CVE-2021-44228` (at most 40 a run, inside the keyless daily allowance).
