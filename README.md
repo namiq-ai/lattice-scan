@@ -9,11 +9,22 @@ Standard library only. Python 3.9 or newer.
 ## Install
 
 ```bash
-uv tool install git+https://github.com/namiq-ai/lattice-scan      # or: pipx install git+https://github.com/namiq-ai/lattice-scan
+pipx install lattice-scan                    # or: pip install lattice-scan
 ```
 
-It is not on PyPI or in an apt repository yet. When a release exists, its single-file `lattice-scan.pyz` and `SHA256SUMS` are on the
-[releases page](https://github.com/namiq-ai/lattice-scan/releases): `python3 lattice-scan.pyz --cve CVE-...`.
+On Debian and Ubuntu, from the signed apt repository:
+
+```bash
+sudo curl -fsSL https://namiq.io/apt/lattice-scan.gpg -o /usr/share/keyrings/lattice-scan.gpg
+echo "deb [signed-by=/usr/share/keyrings/lattice-scan.gpg] https://namiq.io/apt stable main" | sudo tee /etc/apt/sources.list.d/lattice-scan.list
+sudo apt update && sudo apt install lattice-scan
+```
+
+The signing key's fingerprint is `C473 6154 4115 8A3E 775C 2EC2 7E61 15F4 0A41 061D`. Check it against the key you downloaded
+(`gpg --show-keys /usr/share/keyrings/lattice-scan.gpg`). It is also published at https://namiq.io/lattice/docs, apart from the repository.
+
+Or take the single-file `lattice-scan.pyz` or the `.deb` from the [releases page](https://github.com/namiq-ai/lattice-scan/releases) and check it with
+`sha256sum -c SHA256SUMS`: `python3 lattice-scan.pyz --cve CVE-...`.
 
 ## Use
 
