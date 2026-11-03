@@ -23,6 +23,9 @@ jobs:
         run: |
           v=$(python -c "import sys; sys.path.insert(0,'src'); from lattice_scan import __version__ as v; print(v)")
           test "v$v" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} != package version v$v"; exit 1; }
+      - name: Release notes must exist for this tag
+        run: |
+          test -s "release-notes/${GITHUB_REF_NAME}.md" || { echo "release-notes/${GITHUB_REF_NAME}.md is missing or empty. Write the release notes before tagging (see RELEASING.md)."; exit 1; }
       - run: python -W error::ResourceWarning -m unittest discover -s tests
       - run: python packaging/build.py
       - run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
@@ -37,6 +40,7 @@ jobs:
     permissions:
       contents: write   # only this job may create the (draft) release
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: dist
@@ -45,7 +49,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --draft --title "${GITHUB_REF_NAME}" \
-            --notes "Draft. Checksums are in SHA256SUMS; publish after checking them."
+            --notes-file "release-notes/${GITHUB_REF_NAME}.md"
 
   pypi:
     needs: build
