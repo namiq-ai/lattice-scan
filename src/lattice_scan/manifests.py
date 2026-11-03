@@ -611,7 +611,17 @@ def find_manifests(root: Path) -> tuple[list[Path], bool]:
     return sorted(found), cut
 
 
-def read_project(root: Path) -> tuple[list[Component], list[str], bool]:
+def _kind(n: str) -> str:
+    """What a dependency file is, in words a person knows: the ecosystem and whether it pins versions (a lockfile) or declares them."""
+    table = [("requirements", "Python requirements"), ("pyproject.toml", "Python project metadata"), ("package-lock.json", "JavaScript lockfile"),
+             ("package.json", "JavaScript package file"), ("pom.xml", "Java Maven file"), ("gradle.lockfile", "Java Gradle lockfile"),
+             ("libs.versions.toml", "Java Gradle version catalog"), ("build.gradle", "Java Gradle build file"), ("cargo.lock", "Rust lockfile"),
+             ("cargo.toml", "Rust package file"), ("conanfile", "C/C++ Conan file"), ("vcpkg.json", "C/C++ vcpkg file"), ("cmake", "C/C++ CMake file"),
+             ("makefile", "Make file"), (".mk", "Make file"), ("compose", "Docker compose file"), ("dockerfile", "Docker image file")]
+    return next((label for key, label in table if key in n), "dependency file")
+
+
+def read_project(root: Path, on_file=None) -> tuple[list[Component], list[str], bool]:
     """(components, files read, whether the file search was cut at MAX_FILES) for everything declared under root. A file that cannot be read is skipped, never fatal."""
     root = root.resolve()
     comps: list[Component] = []
@@ -659,4 +669,6 @@ def read_project(root: Path) -> tuple[list[Component], list[str], bool]:
             continue
         files.append(str(p.relative_to(root)))
         comps += got
+        if on_file:   # OCO-5837: lets the caller say which file was just read
+            on_file(files[-1], _kind(p.name.lower()), len(got))
     return comps, files, cut

@@ -67,6 +67,14 @@ online windows microsoft google apple oracle cisco adobe""".split())
 
 
 DEBUG = False
+PROGRESS = False
+
+
+def progress(msg: str) -> None:
+    """OCO-5837: what the scan is doing now, one line on stderr (never stdout, so csv, json and pipes are untouched). Nothing else is
+    written, no key and no package list: only counts, file names under the folder given, and CVE ids."""
+    if PROGRESS:
+        print(msg, file=sys.stderr, flush=True)
 
 
 def dbg(msg: str, file_only: bool = False) -> None:
@@ -220,30 +228,40 @@ def inventory() -> dict:
     if fixed:
         inv = json.loads(Path(fixed).read_text())
         inv.setdefault("hash", "fixed")
+        progress("[host] inventory read from a fixed file (LATTICE_SCAN_INVENTORY), nothing collected from this machine")
         return inv
     pk: dict[str, str] = {}
+    manager = "dpkg"
+    progress("[host] collecting installed packages ...")
     for line in run(["dpkg-query", "-W", "-f", "${Package}\t${Version}\n"]).splitlines():
         n, _, v = line.partition("\t")
         if n:
             pk[n] = v
     if not pk:  # rpm and apk hosts
+        manager = "rpm"
         for line in run(["rpm", "-qa", "--qf", "%{NAME}\t%{VERSION}-%{RELEASE}\n"]).splitlines():
             n, _, v = line.partition("\t")
             if n:
                 pk[n] = v
     if not pk:
+        manager = "apk"
         for line in run(["apk", "info", "-v"]).splitlines():
             m = re.match(r"(.+?)-(\d[^-]*-r\d+)$", line)
             if m:
                 pk[m.group(1)] = m.group(2)
+    progress(f"[host] packages: {len(pk)} installed ({manager if pk else 'no package manager found'})")
     snaps = {f[0]: f[1] for f in (l.split() for l in run(["snap", "list"]).splitlines()[1:]) if len(f) >= 2}
+    progress(f"[host] snaps: {len(snaps)}")
     images = sorted({i for i in run(["docker", "ps", "--format", "{{.Image}}"]).splitlines() if i})
+    progress(f"[host] container images running (names only): {len(images)}")
     osr = ""
     try:
         osr = next((l.split("=", 1)[1].strip('"') for l in Path("/etc/os-release").read_text().splitlines() if l.startswith("PRETTY_NAME=")), "")
     except OSError:
         pass
-    inv = {"kernel": run(["uname", "-r"]).strip(), "os": osr, "packages": pk, "snaps": snaps, "images": images, "node": run(["node", "-v"]).strip(),
+    kernel = run(["uname", "-r"]).strip()
+    progress(f"[host] kernel: {kernel or 'unknown'}" + (f", os: {osr}" if osr else ""))
+    inv = {"kernel": kernel, "os": osr, "packages": pk, "snaps": snaps, "images": images, "node": run(["node", "-v"]).strip(),
            "restartRequired": Path("/var/run/reboot-required").exists()}
     inv["hash"] = hashlib.sha256(json.dumps({k: inv[k] for k in ("kernel", "packages", "snaps", "images", "node")}, sort_keys=True).encode()).hexdigest()[:12]
     return inv
@@ -600,23 +618,34 @@ def cmd_run(a) -> int:
     try:
         lat.start()
         if a.discover:
+            progress(f"[host] discovering exploited CVEs added since {floor} (needs a key) ...")
             ids += discover(lat, floor)
+            progress(f"[host] discovery found {len(set(ids))} id(s) to read")
             dbg(f"discover: {len(set(ids))} exploited ids to read")
-        for cve in sorted(set(ids)):
+        order_ids = sorted(set(ids))
+        for n_cve, cve in enumerate(order_ids, 1):
+            tag = f"[{n_cve}/{len(order_ids)}] {cve}"
             if cve in seen and cve not in named and not (a.again or a.refresh):
                 dbg(f"{cve}: skipped, already read (--again to re-read)")
+                progress(f"{tag}  skipped, already read (--again to read it again)")
                 continue
+            progress(f"{tag}  asking Lattice (only this id is sent) ...")
             e = kev_entry(lat, cve)
             dbg(f"{cve}: CHECK lattice says " + ("no CISA exploited entry in this snapshot (not the same as safe)" if e is None else
                 f"CISA exploited: title={e['title']!r} vendor={e['vendor'] or '-'} product={e['product'] or '-'} added={e['added'] or '-'} due={e['due'] or '-'} nvd-affected={len(e['affected'])} ranges={len(e['ranges'])}"))
             if e is None:
                 not_listed.append(cve)
+                progress(f"{tag}  not in CISA's exploited list in this snapshot (that is not the same as safe)")
                 continue
             if e["added"] and not (floor <= e["added"] <= TODAY) and not a.cve and not a.cve_file:
                 dbg(f"{cve}: outside window {floor}..{TODAY} (added {e['added']}), skipped")
+                progress(f"{tag}  outside the discovery window (added {e['added']}), skipped")
                 continue  # discovery only reports the window; ids you named are always read
             read += 1
+            progress(f"{tag}  CISA lists {e['vendor'] or '-'} {e['product'] or '-'}; comparing with {len(inv['packages'])} packages, {len(inv['snaps'])} snaps, "
+                     f"{len(inv['images'])} container image names and the kernel ({inv['kernel'] or 'unknown'}) ...")
             m = candidate(e, inv)
+            progress(f"{tag}  " + (f"CANDIDATE: {m[0]}" if m else "no installed package, snap, image or kernel matches the product"))
             if m and cve in known:
                 imp = impact(e, inv, m[1], m[2])
                 if a.refresh or not state()[cve].get("impact"):
@@ -803,6 +832,10 @@ def load_catalogue(path: str) -> list[dict]:
     return [r for r in rows if r["cve"].startswith("CVE-")]
 
 
+def _file_progress(rel: str, kind: str, n: int) -> None:
+    progress(f"[project] read {rel}  ({kind}, {n} component{'' if n == 1 else 's'})")
+
+
 def cmd_project(a) -> int:
     """Declared dependencies of one or more project folders against CISA-exploited CVEs, through Lattice. Evidence for a person; it decides nothing, writes no host records."""
     from lattice_scan import manifests
@@ -848,7 +881,9 @@ def cmd_project(a) -> int:
         if not root.is_dir():
             print(f"not a folder: {root_s}", file=sys.stderr)
             return 2
-        comps, files, cut = manifests.read_project(root)
+        progress(f"[project] {root.name or root}: looking for dependency files under {root}")
+        comps, files, cut = manifests.read_project(root, on_file=_file_progress)
+        progress(f"[project] {root.name or root}: {len(files)} file(s) read, {len(comps)} declared component(s)" + (" (file search was cut at the limit)" if cut else ""))
         inv, where = project_inventory(comps)
         pinned = sum(1 for c in comps if c.version)
         # Which ids to read: the ones named, plus catalogue entries whose product words are all declared here (a name match, nothing more).
@@ -865,7 +900,8 @@ def cmd_project(a) -> int:
             unread = todo[a.max_read:]
             todo = todo[:a.max_read]
         hits, read, not_listed = [], 0, []
-        for cve in todo:
+        for n_cve, cve in enumerate(todo, 1):
+            tag = f"[{n_cve}/{len(todo)}] {cve}"
             if stopped:
                 unread.append(cve)
                 continue
@@ -874,19 +910,25 @@ def cmd_project(a) -> int:
                     if not started:
                         lat.start()
                         started = True
+                    progress(f"{tag}  asking Lattice (only this id is sent) ...")
                     entries[cve] = kev_entry(lat, cve)
                 e = entries[cve]
             except LatticeError as err:
                 stopped = str(err)
+                progress(f"{tag}  stopped: {err}")
                 unread.append(cve)
                 continue
             read += 1
             if e is None:
                 not_listed.append(cve)
+                progress(f"{tag}  not in CISA's exploited list in this snapshot (that is not the same as safe)")
                 continue
+            progress(f"{tag}  CISA lists {e['vendor'] or '-'} {e['product'] or '-'}; comparing with {len(comps)} declared component(s) in {len(files)} file(s) ...")
             m = project_candidate(e, inv)
             if not m:
+                progress(f"{tag}  no declared component matches the product")
                 continue
+            progress(f"{tag}  CANDIDATE: {m[0]}")
             why, installed, vers, comparable, matches = m
             declared, verdicts = [], []
             for key, name, val, comp in matches:
@@ -996,6 +1038,8 @@ def main() -> int:
     p.add_argument("--debug", action="store_true", help="detailed execution log to stderr and debug.log (also LATTICE_SCAN_DEBUG=1)")
     p.add_argument("--refresh", action="store_true", help="collect the inventory again now and print all of it; with ids, also re-read them. Alone it makes no Lattice call")
     p.add_argument("--again", action="store_true", help="re-read ids already read before")
+    p.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print what is being checked, step by step, on stderr (the default on a terminal)")
+    p.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress, even on a terminal")
     sub = p.add_subparsers(dest="c")
     r = sub.add_parser("resolve"); r.add_argument("cve"); r.add_argument("--status", required=True, choices=["verified", "fixed", "not-applicable"]); r.add_argument("--proof", default=""); r.add_argument("--on")
     im = sub.add_parser("impact", help="the recorded impact detail of one finding"); im.add_argument("cve")
@@ -1004,6 +1048,8 @@ def main() -> int:
                         formatter_class=argparse.RawDescriptionHelpFormatter,
                         epilog=PROJECT_EPILOG)
     pj.add_argument("paths", nargs="*", default=["."], help="project folders (default: the current folder)")
+    pj.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each file and CVE as it is checked, on stderr (the default on a terminal)")
+    pj.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress, even on a terminal")
     pj.add_argument("--cve", action="append", help="CVE ids, comma separated (CVE-A,CVE-B); repeatable"); pj.add_argument("--cve-file", help="file of ids, one or several per line, # comments")
     pj.add_argument("--kev-catalogue", help="CISA's known_exploited_vulnerabilities.json; chooses which ids to read. Needs a key whose email is confirmed. Nothing from the file is sent")
     pj.add_argument("--max-read", type=int, default=None, help="most ids to read from Lattice per run (default 200 with a key, 40 without: the keyless day is 60)")
@@ -1018,8 +1064,11 @@ def main() -> int:
     il = sub.add_parser("inventory", help="show inventory.log: counts and changes per run"); il.add_argument("-n", type=int, default=20)
     lg = sub.add_parser("log"); lg.add_argument("-n", type=int, default=20, help="last N lines (default 20)")
     a = p.parse_args()
-    global DEBUG
+    global DEBUG, PROGRESS
     DEBUG = a.debug or env("DEBUG") == "1"
+    # OCO-5837: progress goes to stderr; on by default only when stderr is a terminal, so a script or CI log stays as it was.
+    PROGRESS = (not getattr(a, "quiet", False)) and (getattr(a, "progress", False) or env("PROGRESS") == "1"
+                                                      or (env("PROGRESS") != "0" and sys.stderr.isatty()))
     if a.c == "project": return cmd_project(a)
     if a.c == "impact": return cmd_impact(a)
     if a.c == "resolve": return cmd_resolve(a)

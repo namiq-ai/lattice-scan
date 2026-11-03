@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Progress: `--progress` prints on stderr which part of the host (packages, snaps, container image names, kernel) or project (each dependency file, with its kind) is being read, and for each CVE which one it is (n of N), what CISA lists and whether anything matched. It is on by default only when stderr is a terminal; `--quiet` (`-q`) turns it off; `LATTICE_SCAN_PROGRESS=1` or `0` forces it. Standard output, exit codes and records are unchanged (OCO-5837).
+
 - Every release now has notes: `release-notes/vX.Y.Z.md` is required by the release workflow and becomes the release body (see RELEASING.md).
 
 - A package that only shares a scope or name with the product (`@vitejs/plugin-react` for Vite), or is its client library (the PyPI `minio`), is a new verdict, `lead`: it has its own summary column and ranks below every real comparison, so it no longer inflates `undetermined`.
