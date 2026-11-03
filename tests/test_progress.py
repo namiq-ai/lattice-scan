@@ -51,27 +51,20 @@ class Progress(unittest.TestCase):
         self.assertNotIn("[1/3]", out)                      # progress never reaches stdout
 
     def test_stdout_is_identical_with_and_without_progress(self):
-        _, quiet_out, quiet_err = self.run_cli("--cve", "CVE-2099-0001")
-        self.assertEqual(quiet_err, "")                     # not a terminal, no flag: nothing extra
+        _, quiet_out, quiet_err = self.run_cli("--quiet", "--cve", "CVE-2099-0001")
+        self.assertEqual(quiet_err, "")
         (cli.OUT / "findings.jsonl").unlink(); (cli.OUT / "seen.json").unlink()
-        _, loud_out, _ = self.run_cli("--progress", "--cve", "CVE-2099-0001")
+        _, loud_out, loud_err = self.run_cli("--cve", "CVE-2099-0001")   # no flag: progress is the default
         self.assertEqual(quiet_out, loud_out)
+        self.assertIn("asking Lattice", loud_err)
 
-    def test_quiet_wins_even_on_a_terminal(self):
-        with mock.patch.object(sys.stderr, "isatty", create=True, return_value=True):
-            pass
-        class Tty(io.StringIO):
-            def isatty(self): return True
-        out, err = io.StringIO(), Tty()
-        sys.argv = ["lattice-scan", "-q", "--cve", "CVE-2099-0001"]
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            cli.main()
-        self.assertEqual(err.getvalue(), "")
-        out, err = io.StringIO(), Tty()
-        sys.argv = ["lattice-scan", "--again", "--cve", "CVE-2099-0001"]
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            cli.main()
-        self.assertIn("asking Lattice", err.getvalue())    # a terminal shows it by default
+    def test_on_by_default_and_off_with_quiet_or_the_environment(self):
+        _, _, err = self.run_cli("--cve", "CVE-2099-0001")
+        self.assertIn("asking Lattice", err)               # no flag, not a terminal: still shown
+        for argv, env in ((["-q"], None), (["--quiet", "--progress"], None), ([], "0")):
+            with mock.patch.dict("os.environ", {"LATTICE_SCAN_PROGRESS": env} if env else {}):
+                _, _, err = self.run_cli(*argv, "--again", "--cve", "CVE-2099-0001")
+            self.assertEqual(err, "", (argv, env))
 
     def test_inventory_parts_are_named_with_counts_and_no_package_names(self):
         cli.inventory = self.saved[5]
@@ -103,12 +96,44 @@ class Progress(unittest.TestCase):
         root.mkdir()
         (root / "requirements.txt").write_text("examplelib==2.14.0\n")
         _, with_p, _ = self.run_cli("project", str(root), "--format", "csv", "--progress", "--cve", "CVE-2099-0001")
-        _, without, err = self.run_cli("project", str(root), "--format", "csv", "--cve", "CVE-2099-0001")
+        _, without, err = self.run_cli("project", str(root), "--format", "csv", "--quiet", "--cve", "CVE-2099-0001")
         self.assertEqual(with_p, without); self.assertEqual(err, "")
 
     def test_kind_names(self):
         self.assertEqual(manifests._kind("package-lock.json"), "JavaScript lockfile")
         self.assertEqual(manifests._kind("pom.xml"), "Java Maven file")
+
+    def test_host_result_table_and_detail_files(self):
+        rc, out, _ = self.run_cli("--quiet", "--cve", "CVE-2099-0001", "--cve", "CVE-2099-0002", "--cve", "CVE-2099-0003")
+        self.assertEqual(rc, 0)
+        self.assertIn("RESULT BY CVE", out)
+        for want in ("CVE-2099-0001", "Exampleco Examplelib", "CANDIDATE", "CVE-2099-0002", "no match", "CVE-2099-0003", "not listed"):
+            self.assertIn(want, out)
+        self.assertIn("DETAILED RESULT FILES", out)
+        for want in (str(cli.OUT), "findings.jsonl", "scan.log", "inventory.json", "lattice-scan impact CVE-..."):
+            self.assertIn(want, out)
+
+    def test_project_result_table_and_detail_files(self):
+        root = Path(self.tmp.name) / "p3"
+        root.mkdir()
+        (root / "requirements.txt").write_text("examplelib==2.14.0\n")
+        csv_path = Path(self.tmp.name) / "f.csv"
+        _, out, _ = self.run_cli("project", str(root), "--quiet", "--cve", "CVE-2099-0001,CVE-2099-0003", "--csv", str(csv_path))
+        self.assertIn("RESULT BY CVE", out)
+        self.assertIn("CVE-2099-0001", out); self.assertIn("IN RANGE", out); self.assertIn("examplelib2.14.0(requirements.txt)", "".join(out.split()))
+        self.assertIn("CVE-2099-0003", out); self.assertIn("not listed", out)
+        self.assertIn("DETAILED RESULT FILES", out); self.assertIn(str(csv_path), out)
+        _, out2, _ = self.run_cli("project", str(root), "--quiet", "--cve", "CVE-2099-0001")
+        self.assertIn("No detail file was written", out2)
+
+    def test_table_wraps_to_the_width(self):
+        from lattice_scan import report
+        lines = report.table(["A", "B"], [["x", "word " * 40]], 60)
+        self.assertTrue(all(len(l) <= 62 for l in lines), lines)
+
+
+if __name__ == "__main__":
+    unittest.main()
 
 
 if __name__ == "__main__":

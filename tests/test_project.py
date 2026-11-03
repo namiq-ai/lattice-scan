@@ -425,7 +425,7 @@ class ProjectCommand(unittest.TestCase):
         for tier in ("trial_accepted", "commercial"):
             cli.KEY, Stub.tier, Stub.seen = "k", tier, []
             rc, out, err = self.run_cli("project", str(self.root), "--kev-catalogue", str(cat))
-            self.assertEqual((rc, err), (0, ""), tier)
+            self.assertEqual((rc, [l for l in err.splitlines() if not l.startswith("[")]), (0, []), tier)   # stderr holds progress lines only (OCO-5837)
             self.assertIn("CVE-2099-0001", out)
 
     def test_without_a_key_named_ids_work_and_may_be_comma_separated(self):

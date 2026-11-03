@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Progress: `--progress` prints on stderr which part of the host (packages, snaps, container image names, kernel) or project (each dependency file, with its kind) is being read, and for each CVE which one it is (n of N), what CISA lists and whether anything matched. It is on by default only when stderr is a terminal; `--quiet` (`-q`) turns it off; `LATTICE_SCAN_PROGRESS=1` or `0` forces it. Standard output, exit codes and records are unchanged (OCO-5837).
+- Progress: `--progress` prints on stderr which part of the host (packages, snaps, container image names, kernel) or project (each dependency file, with its kind) is being read, and for each CVE which one it is (n of N), what CISA lists and whether anything matched. It is on by default; `--quiet` (`-q`) or `LATTICE_SCAN_PROGRESS=0` turns it off, for a script or CI log that must stay silent. Standard output, exit codes and records are unchanged (OCO-5837).
+- Results: the host check and the console project report now print a RESULT BY CVE table (CVE, on CISA's list, product, result, what matched or was compared) and a DETAILED RESULT FILES section that names where the full detail is: the host's records folder and what each file holds, or the `--csv` and `--json` files you asked for (OCO-5837). The JSON result gains a `checked` list per project with the same rows.
 
 - Every release now has notes: `release-notes/vX.Y.Z.md` is required by the release workflow and becomes the release body (see RELEASING.md).
 

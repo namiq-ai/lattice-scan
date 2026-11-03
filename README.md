@@ -33,7 +33,7 @@ lattice-scan --cve CVE-2021-44228 --cve CVE-2026-46300     # works without a key
 LATTICE_API_KEY=... lattice-scan --discover                # a key lists what was added in the last week
 lattice-scan --refresh                                     # collect and print the inventory; no network call
 lattice-scan list | impact CVE-... | resolve CVE-... --status fixed --proof "..."
-lattice-scan --progress --cve CVE-...                      # which CVE, and which part of the host or project, as it runs (on by default in a terminal; -q silences)
+lattice-scan --progress --cve CVE-...                      # which CVE, and which part of the host or project, as it runs (on by default; -q silences)
 lattice-scan --debug --cve CVE-...                         # every request, response and match decision
 ```
 
