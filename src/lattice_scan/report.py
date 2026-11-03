@@ -110,7 +110,23 @@ def width_for(requested: int | None) -> int:
     return max(72, min(shutil.get_terminal_size((100, 24)).columns, 110))
 
 
-def console(results: list[dict], today: str, tool: str, width: int = 100, color: bool = False) -> str:
+def table(headers: list[str], rows: list[list[str]], width: int = 100) -> list[str]:
+    """A plain-text table that fits `width`: every column is as wide as its longest cell, and the last column takes what is left and wraps."""
+    cols = len(headers)
+    w = [max(len(headers[i]), *(len(str(r[i])) for r in rows)) if rows else len(headers[i]) for i in range(cols)]
+    for i in range(cols - 1):
+        w[i] = min(w[i], 24)
+    w[-1] = max(12, min(w[-1], width - sum(w[:-1]) - 2 * (cols - 1)))
+    def fmt(cells: list[str]) -> list[str]:
+        parts = [textwrap.wrap(str(c), w[i], break_long_words=True, break_on_hyphens=False) or [""] for i, c in enumerate(cells)]
+        return ["  ".join(f"{(p[k] if k < len(p) else ''):<{w[i]}}" for i, p in enumerate(parts)).rstrip() for k in range(max(len(p) for p in parts))]
+    out = fmt(headers) + ["  ".join("-" * x for x in w)]
+    for r in rows:
+        out += fmt(r)
+    return out
+
+
+def console(results: list[dict], today: str, tool: str, width: int = 100, color: bool = False, outputs: dict | None = None) -> str:
     def paint(text: str, code: str) -> str:
         return f"\033[{code}m{text}\033[0m" if color else text
 
@@ -155,6 +171,13 @@ def console(results: list[dict], today: str, tool: str, width: int = 100, color:
         L += wrap(f"Lattice stopped this run: {stops[0]} {n_unread} id(s) were not read; they are listed under each project and are neither safe nor affected. "
                   "Run it again after the limit resets, or use a key.", "  ", "  ")
     L.append("")
+    checked = [(r.get("name") or r["root"].rstrip("/").rsplit("/", 1)[-1], c) for r in results for c in r.get("checked", [])]
+    if checked:
+        multi = len(results) > 1
+        L += [paint("RESULT BY CVE", "1"), thin]
+        L += table((["Project"] if multi else []) + ["CVE", "CISA list", "Product", "Result", "Declared component that matched"],
+                   [([n] if multi else []) + [c["cve"], c["listed"], c["product"] or "-", c["result"], c["matched"] or "-"] for n, c in checked], width)
+        L.append("")
     for r in results:
         name = r.get("name") or r["root"].rstrip("/").rsplit("/", 1)[-1]
         L += [paint(f"PROJECT {name}", "1"), thin]
@@ -196,6 +219,17 @@ def console(results: list[dict], today: str, tool: str, width: int = 100, color:
             L += ["", "Not in the graph's CISA list (not 'safe', only 'not listed in this snapshot'):"]
             L += textwrap.wrap(", ".join(r["notListed"]), width - 3, initial_indent="   ", subsequent_indent="   ", max_lines=4, placeholder=" ...")
         L.append("")
+    L += [paint("DETAILED RESULT FILES", "1"), thin]
+    out = outputs or {}
+    if out.get("csv") or out.get("json"):
+        if out.get("csv"):
+            L += wrap(f"{out['csv']}  one row per finding and declared component (columns: see man lattice-scan)", "  ", "    ")
+        if out.get("json"):
+            L += wrap(f"{out['json']}  the full result: files read, components, every CVE checked, findings", "  ", "    ")
+    else:
+        L += wrap("No detail file was written. Add --csv FILE for one row per finding, or --json FILE for the full result.", "  ", "  ")
+    L += wrap("This command writes no records on this machine; the host command does.", "  ", "  ")
+    L.append("")
     L += [paint("HOW TO READ THIS", "1"), thin]
     for k, text in MEANING:
         L += textwrap.wrap(f"{VERDICT_LABEL[k]:<14}{text}", width, subsequent_indent=" " * 14)

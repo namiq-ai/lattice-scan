@@ -5,7 +5,7 @@
 lattice-scan \- check this host, or a project's declared dependencies, against the CVEs CISA lists as exploited, through Lattice
 .SH SYNOPSIS
 .B lattice-scan
-[\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-discover\fR] [\fB\-\-refresh\fR] [\fB\-\-again\fR] [\fB\-\-debug\fR]
+[\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-discover\fR] [\fB\-\-refresh\fR] [\fB\-\-again\fR] [\fB\-\-debug\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
 .br
 .B lattice-scan project
 [\fIPATH\fR...] [\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-kev\-catalogue\fR \fIFILE\fR] [\fB\-\-max\-read\fR \fIN\fR]
@@ -57,6 +57,12 @@ Collect the inventory again now and print all of it. With no ids it makes no net
 .TP
 .B \-\-again
 Read ids that were read before.
+.TP
+.B \-\-progress
+Print, on standard error, what is being checked: each part of the host collected (packages, snaps, container image names, kernel) with counts, each project file read with its kind, and for each CVE which one it is (n of N), what CISA lists, and whether anything matched. Standard output is unchanged. On by default.
+.TP
+.B \-\-quiet\fR, \fB\-q
+Print no progress.
 .TP
 .B \-\-debug
 Write every request, response and match decision to stderr and
@@ -280,6 +286,9 @@ Days that \fB\-\-discover\fR looks back (default 6).
 .TP
 .B LATTICE_SCAN_INVENTORY
 A JSON inventory to use instead of collecting one (tests, other tools).
+.TP
+.B LATTICE_SCAN_PROGRESS
+Progress is on by default. Set to 0 to turn it off, like \fB\-\-quiet\fR.
 .TP
 .B LATTICE_SCAN_DEBUG
 Set to 1 for \fB\-\-debug\fR.
