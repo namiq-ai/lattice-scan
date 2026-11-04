@@ -5,7 +5,7 @@
 lattice-scan \- check this host, or a project's declared dependencies, against the CVEs CISA lists as exploited, through Lattice
 .SH SYNOPSIS
 .B lattice-scan
-[\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-discover\fR] [\fB\-\-refresh\fR] [\fB\-\-again\fR] [\fB\-\-debug\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
+[\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-discover\fR] [\fB\-\-refresh\fR] [\fB\-\-again\fR] [\fB\-\-keep\fR] [\fB\-\-debug\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
 .br
 .B lattice-scan project
 [\fIPATH\fR...] [\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-kev\-catalogue\fR \fIFILE\fR] [\fB\-\-max\-read\fR \fIN\fR]
@@ -74,6 +74,10 @@ Print, on standard error, what is being checked: each part of the host collected
 .TP
 .B \-\-quiet\fR, \fB\-q
 Print no progress.
+.TP
+.B \-\-keep
+Keep this run's records in the default folder even when there is no terminal. Without it, a run with no terminal on standard input or error (an agent, a cron job) and no records folder yet writes its records to a temporary folder that is deleted when the run ends, so nothing is left in the home folder. A folder that already exists is used as before, and so is any folder named by
+.BR LATTICE_SCAN_DIR .
 .TP
 .B \-\-debug
 Write every request, response and match decision to stderr and
@@ -304,7 +308,10 @@ A Lattice key. Raises the daily allowance and enables \fB\-\-discover\fR. Never 
 The Lattice MCP endpoint (default https://lattice.namiq.io/mcp).
 .TP
 .B LATTICE_SCAN_DIR
-Where host records go (default ~/.lattice-scan). Project mode writes nothing there.
+Where host records go (default ~/.lattice-scan). Set it to a folder the user can write when running as an agent in a sandbox. Project mode writes nothing there.
+.TP
+.B LATTICE_SCAN_KEEP
+Set to 1 for \fB\-\-keep\fR.
 .TP
 .B LATTICE_SCAN_WINDOW
 Days that \fB\-\-discover\fR looks back (default 6).
@@ -340,8 +347,9 @@ Respected by \fB\-\-color auto\fR.
 .SH FILES
 .TP
 .I ~/.lattice-scan/
-Host mode and \fBget\-key\fR, mode 0700: findings.jsonl, runs.jsonl, scan.log, inventory.json and inventory.log, seen.json, debug.log. They name this host's software. Do not commit, publish or share them.
+Host mode and \fBget\-key\fR, mode 0700, every file 0600: findings.jsonl, runs.jsonl, scan.log, inventory.json and inventory.log, seen.json, debug.log. They name this host's software. Do not commit, publish or share them.
 The file \fBkey\fR (mode 0600), written by \fBget\-key\fR, holds a Lattice key; it is read only while no one else can read it. \fBenrich\fR and \fBproject\fR write nothing there.
+If the folder cannot be created and \fBLATTICE_SCAN_DIR\fR was not set, the run says so on one line and uses a temporary folder. If \fBLATTICE_SCAN_DIR\fR was set and cannot be used, the run stops with exit status 1 and one line naming it. \fBget\-key\fR never uses a temporary folder, because the key must outlive the run.
 .SH LIMITS
 Without a key Lattice allows 5 calls a minute, 20 reads an hour and 60 a day. lattice\-scan keeps the times of its recent calls (in the user's cache folder, not in the records), so separate runs one after another space themselves out and stay under 5 a minute; it prints a line when it waits. If Lattice still answers "too many requests, retry after N seconds" with N about a minute or less, it waits that long and tries again, twice at most. A run that reaches the hourly or daily limit stops, lists what it did not read, and exits 3.
 A key is for a real person (https://namiq.io/lattice/docs). The tool asks for one only through \fBget\-key\fR, with the person's own details and only after \fB\-\-accept\-terms\fR; it never opens a link from a reply.

@@ -46,6 +46,8 @@ python3 scripts/lattice-scan.pyz list                               # findings r
 python3 scripts/lattice-scan.pyz impact CVE-2026-1234               # the evidence for one finding
 ```
 
+**Running in a sandbox or as an agent with no home folder you may write to:** set `LATTICE_SCAN_DIR` to a folder you own (and `LATTICE_API_KEY` if the user gave you a key) before the first command. Without a terminal and without a records folder, a host run keeps its records in a temporary folder that is deleted when it ends; add `--keep` only if the user wants them kept. `recent`, `enrich` and `project` write nothing.
+
 Use only CVE ids the user gave you, that appear in the task or the text they pasted, or that `recent` listed. Do not invent ids. `--discover` (list what CISA added this week, read from
 Lattice itself) needs a Lattice key; `recent` does not.
 

@@ -136,8 +136,10 @@ CVE ids, and the key if you set one. The inventory (package names and versions) 
 
 ## What it writes
 
-`~/.lattice-scan/` (or `LATTICE_SCAN_DIR`; records from the earlier internal name `~/.host-scan` are still found), mode 0700: findings, scan, inventory and debug logs. They name this host's installed software. Do not commit,
+`~/.lattice-scan/` (or `LATTICE_SCAN_DIR`; records from the earlier internal name `~/.host-scan` are still found), mode 0700, every file 0600: findings, scan, inventory and debug logs. They name this host's installed software. Do not commit,
 publish or share them. `lattice-scan get-key` also stores a key there as the file `key` (mode 0600, never printed). `enrich` and `project` write nothing.
+
+**Running as an agent, in a sandbox.** With no terminal and no records folder yet, a host run writes to a temporary folder that is deleted when it ends, so nothing stays in the home folder; `--keep` (or `LATTICE_SCAN_KEEP=1`) keeps the records. If the home is read-only or missing the run says so in one line and does the same. Set `LATTICE_SCAN_DIR` to a folder the agent owns to choose where records go, and `LATTICE_API_KEY` for a key; if `LATTICE_SCAN_DIR` is set and cannot be written, the run stops with one line naming it.
 
 ## What it cannot tell you
 

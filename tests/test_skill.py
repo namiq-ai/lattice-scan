@@ -45,6 +45,14 @@ class Bundle(unittest.TestCase):
         self.assertNotRegex(t, r"(/home/|/Users/|C:\\\\)")      # no one's machine path
 
 
+class Sandbox(unittest.TestCase):
+    def test_skill_tells_a_sandboxed_agent_to_set_the_records_folder_and_key(self):
+        t = SKILL.read_text()
+        sec2 = t[t.index("## 2. Run it"):t.index("## 3. Report what it printed")]
+        for needle in ("LATTICE_SCAN_DIR", "LATTICE_API_KEY", "--keep"):
+            self.assertIn(needle, sec2, f"section 2 must tell a sandboxed agent about {needle}")
+
+
 class Licence(unittest.TestCase):
     def test_apache_everywhere_it_is_declared(self):
         self.assertIn("Apache License", (ROOT / "LICENSE").read_text()[:200])
