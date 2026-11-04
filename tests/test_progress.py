@@ -113,6 +113,18 @@ class Progress(unittest.TestCase):
         for want in (str(cli.OUT), "findings.jsonl", "scan.log", "inventory.json", "lattice-scan impact CVE-..."):
             self.assertIn(want, out)
 
+    def test_open_finding_from_an_earlier_run_is_in_the_same_table(self):
+        self.run_cli("--cve", "CVE-2099-0001")                     # run 1 records the finding
+        rc, out, _ = self.run_cli("--cve", "CVE-2099-0002")        # run 2 names a different id
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.count("RESULT BY CVE"), 1)
+        table = out.split("RESULT BY CVE")[1].split("DETAILED RESULT FILES")[0]
+        self.assertNotIn("not yet fixed", out)                     # said once, in the table, not again below it
+        self.assertIn("CVE-2099-0002", table)                      # this run's result
+        self.assertIn("CVE-2099-0001", table)                      # the earlier open finding, same table
+        self.assertIn("OPEN (open)", table)
+        self.assertIn("by an earlier run", table)
+
     def test_project_result_table_and_detail_files(self):
         root = Path(self.tmp.name) / "p3"
         root.mkdir()
@@ -126,14 +138,36 @@ class Progress(unittest.TestCase):
         _, out2, _ = self.run_cli("project", str(root), "--quiet", "--cve", "CVE-2099-0001")
         self.assertIn("No detail file was written", out2)
 
-    def test_table_wraps_to_the_width(self):
+    def test_ransomware_column_reads_the_cisa_field(self):
+        Stub.answers["CVE-2099-0001"]["items"][1]["known_ransomware_use"] = "Known"
+        Stub.answers["CVE-2099-0002"]["items"][1]["known_ransomware_use"] = "Unknown"
+        _, out, _ = self.run_cli("--cve", "CVE-2099-0001", "--cve", "CVE-2099-0002")
+        rows = {l.split()[0]: l for l in out.splitlines() if l.startswith("CVE-2099")}
+        self.assertIn("known", rows["CVE-2099-0001"]); self.assertNotIn("not recorded", rows["CVE-2099-0001"])
+        self.assertIn("not recorded", rows["CVE-2099-0002"])
+        _, out2, _ = self.run_cli("--cve", "CVE-2099-0003")          # an earlier finding keeps its ransomware cell
+        self.assertRegex(out2, r"CVE-2099-0001\s+yes\s+-\s+2026-10-30\s+2026-11-20 \(in 19d\)\s+known\s+-\s+OPEN")
+
+    def test_table_carries_exploited_cvss_dates_and_patch_due(self):
+        Stub.answers["CVE-2099-0001"]["items"][0]["cvss_score"] = 9.8
+        _, out, _ = self.run_cli("--cve", "CVE-2099-0001", "--cve", "CVE-2099-0003")
+        head = next(l for l in out.splitlines() if l.startswith("CVE "))
+        for col in ("EXPLOITED", "CVSS", "LISTED", "PATCH DUE", "RANSOMWARE", "PRODUCT", "RESULT"):
+            self.assertIn(col, head)
+        rows = {l.split()[0]: l for l in out.splitlines() if l.startswith("CVE-2099")}
+        self.assertRegex(rows["CVE-2099-0001"], r"yes\s+9\.8\s+2026-10-30\s+2026-11-20 \(in 19d\)")
+        self.assertRegex(rows["CVE-2099-0003"], r"\bno\b")
+
+    def test_table_is_one_line_per_row_without_a_rule_line(self):
         from lattice_scan import report
-        lines = report.table(["A", "B"], [["x", "word " * 40]], 60)
-        self.assertTrue(all(len(l) <= 62 for l in lines), lines)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        long = "word " * 40
+        lines = report.table(["CVE", "NOTE"], [["x", long]], 60, fit=False)
+        self.assertEqual(len(lines), 2, lines)                    # header + one row: no wrapping, no dashed rule
+        self.assertEqual(lines[0].split(), ["CVE", "NOTE"])
+        self.assertTrue(lines[1].endswith(long.strip()))          # piped output keeps the whole cell for grep/awk
+        cut = report.table(["CVE", "NOTE"], [["x", long]], 60)
+        self.assertLessEqual(len(cut[1]), 60)                     # with a width to hold the last column is cut with an ellipsis
+        self.assertTrue(cut[1].endswith("\u2026"), cut)
 
 
 if __name__ == "__main__":

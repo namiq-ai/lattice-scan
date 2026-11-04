@@ -460,6 +460,36 @@ def impact(entry: dict, inv: dict, installed: list[str], vers: list[str]) -> dic
     return out
 
 
+def ransom(v: str) -> str:
+    """CISA's known_ransomware_use as a table cell. 'Unknown' means CISA has not recorded it, which is not the same as no ransomware use."""
+    v = (v or "").strip().lower()
+    return "known" if v == "known" else "not recorded" if v == "unknown" else "-"
+
+
+def due_cell(due: str) -> str:
+    """The patch-due date with how far away it is: '2026-11-20 (in 17d)', '2026-10-01 (33d late)'."""
+    try:
+        left = (dt.date.fromisoformat(due) - dt.date.fromisoformat(TODAY)).days
+    except ValueError:
+        return "-"
+    return f"{due} ({'today' if left == 0 else f'in {left}d' if left > 0 else f'{-left}d late'})"
+
+
+def cvss_cell(v) -> str:
+    try:
+        return f"{float(v):.1f}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def cells(e: dict | None) -> list[str]:
+    """EXPLOITED, CVSS, LISTED, PATCH DUE, RANSOMWARE, PRODUCT for one table row; '-' where Lattice gave nothing."""
+    if e is None:
+        return ["no", "-", "-", "-", "-", "-"]
+    return ["yes", cvss_cell(e.get("cvss")), e.get("added") or "-", due_cell(e.get("due", "")), ransom(e.get("ransomware", "")),
+            f"{e['vendor'] or '-'} {e['product'] or '-'}".strip()]
+
+
 def kev_entry(lat: Lattice, cve: str) -> dict | None:
     """The CISA exploited entry for one CVE, or None when the graph has no kev node (which is not 'safe', only 'not listed in this snapshot').
 
@@ -473,7 +503,7 @@ def kev_entry(lat: Lattice, cve: str) -> dict | None:
         return None
     nvd = next((i for i in items if i.get("source") == "nvd"), {})
     e = {"cve": cve, "title": clean(kev.get("title", "")), "added": clean(str(kev.get("date_added", ""))), "due": clean(str(kev.get("due_date", ""))),
-         "vendor": clean(kev.get("vendor_project", "")), "product": clean(kev.get("product", "")), "action": clean(kev.get("required_action", "")),
+         "vendor": clean(kev.get("vendor_project", "")), "product": clean(kev.get("product", "")), "ransomware": clean(str(kev.get("known_ransomware_use", ""))), "cvss": nvd.get("cvss_score"), "action": clean(kev.get("required_action", "")),
          "affected": [clean(x.strip()) for x in str(nvd.get("affected_products", "")).split(";") if x.strip()],
          "ranges": [{k: clean(v) for k, v in r.items()} for r in (nvd.get("affected_ranges") or []) if isinstance(r, dict)]}
     if not e["product"] and KEY:
@@ -548,7 +578,7 @@ def state() -> dict[str, dict]:
     for e in events():
         f = s.setdefault(e["ref"], {"ref": e["ref"], "status": "open"})
         if e["event"] == "found":
-            f.update(listed=e.get("listed", ""), found=e["on"], why=e.get("why", ""), title=e.get("title", ""), due=e.get("due", ""), kind=e.get("kind", "kev"), impact=e.get("impact"))
+            f.update(listed=e.get("listed", ""), found=e["on"], why=e.get("why", ""), title=e.get("title", ""), due=e.get("due", ""), kind=e.get("kind", "kev"), ransomware=e.get("ransomware", ""), cvss=e.get("cvss"), impact=e.get("impact"))
         elif e["event"] == "impact":
             f["impact"] = e["impact"]
         elif e["event"] in ("verified", "fixed", "not-applicable"):
@@ -631,8 +661,7 @@ def cmd_run(a) -> int:
     lat = Lattice()
     known = {e["ref"] for e in events()}
     hits, again_hits, read, not_listed = [], [], 0, []
-    rows: list[list[str]] = []   # the result table: CVE, on CISA's list, product, result, what matched
-    prods: dict[str, str] = {}
+    rows: list[list[str]] = []   # the result table, one row per CVE (columns in the report.table call below)
     try:
         lat.start()
         if a.discover:
@@ -646,7 +675,7 @@ def cmd_run(a) -> int:
             if cve in seen and cve not in named and not (a.again or a.refresh):
                 dbg(f"{cve}: skipped, already read (--again to re-read)")
                 progress(f"{tag}  skipped, already read (--again to read it again)")
-                rows.append([cve, "-", "-", "skipped", "already read; use --again to read it again"])
+                rows.append([cve, *["-"] * 6, "skipped", "already read; use --again to read it again"])
                 continue
             progress(f"{tag}  asking Lattice (only this id is sent) ...")
             e = kev_entry(lat, cve)
@@ -655,20 +684,19 @@ def cmd_run(a) -> int:
             if e is None:
                 not_listed.append(cve)
                 progress(f"{tag}  not in CISA's exploited list in this snapshot (that is not the same as safe)")
-                rows.append([cve, "no", "-", "not listed", "not the same as safe: only not listed in this snapshot"])
+                rows.append([cve, *cells(None), "not listed", "not the same as safe: only not listed in this snapshot"])
                 continue
-            prods[cve] = f"{e['vendor'] or '-'} {e['product'] or '-'}".strip()
             if e["added"] and not (floor <= e["added"] <= TODAY) and not a.cve and not a.cve_file:
                 dbg(f"{cve}: outside window {floor}..{TODAY} (added {e['added']}), skipped")
                 progress(f"{tag}  outside the discovery window (added {e['added']}), skipped")
-                rows.append([cve, "yes", prods[cve], "skipped", f"added {e['added']}, outside the discovery window"])
+                rows.append([cve, *cells(e), "skipped", f"added {e['added']}, outside the discovery window"])
                 continue  # discovery only reports the window; ids you named are always read
             read += 1
             progress(f"{tag}  CISA lists {e['vendor'] or '-'} {e['product'] or '-'}; comparing with {len(inv['packages'])} packages, {len(inv['snaps'])} snaps, "
                      f"{len(inv['images'])} container image names and the kernel ({inv['kernel'] or 'unknown'}) ...")
             m = candidate(e, inv)
             progress(f"{tag}  " + (f"CANDIDATE: {m[0]}" if m else "no installed package, snap, image or kernel matches the product"))
-            rows.append([cve, "yes", prods[cve], ("CANDIDATE" + (" (already recorded)" if cve in known else "")) if m else "no match",
+            rows.append([cve, *cells(e), ("CANDIDATE" + (" (already recorded)" if cve in known else "")) if m else "no match",
                          m[0] if m else "packages, snaps, container image names and kernel: none match"])
             if m and cve in known:
                 imp = impact(e, inv, m[1], m[2])
@@ -679,7 +707,7 @@ def cmd_run(a) -> int:
                 why, installed, vers = m
                 imp = impact(e, inv, installed, vers)
                 dbg(f"{cve}: IMPACT {json.dumps(imp)}")
-                append("findings.jsonl", {"event": "found", "ref": cve, "on": TODAY, "listed": e["added"], "due": e["due"], "title": e["title"], "why": why, "kind": "kev", "impact": imp})
+                append("findings.jsonl", {"event": "found", "ref": cve, "on": TODAY, "listed": e["added"], "due": e["due"], "title": e["title"], "why": why, "kind": "kev", "ransomware": e["ransomware"], "cvss": e["cvss"], "impact": imp})
                 hits.append((e, why, imp))
             seen.add(cve)
     except LatticeError as err:
@@ -693,9 +721,16 @@ def cmd_run(a) -> int:
             + "".join(f" [{e['cve']}: {why}]" for e, why, imp in hits) + (f" not-listed={','.join(not_listed)}" if not_listed else "")
             + (" restart-required" if inv["restartRequired"] else ""))
     print(f"host scan {TODAY}: {read} exploited entries read, {len(hits)} candidates (a person must read each against the installed version)")
+    open_n = [f for f in state().values() if f["status"] in ("open", "verified")]
+    listed_now = {r[0] for r in rows}
+    for f in open_n:   # an open finding from an earlier run stays in the table, so it is listed once, in the table
+        if f["ref"] not in listed_now:
+            rows.append([f["ref"], "yes" if f.get("kind", "kev") == "kev" else "-", cvss_cell(f.get("cvss")), f.get("listed") or "-", due_cell(f.get("due", "")),
+                         ransom(f.get("ransomware", "")), "-", f"OPEN ({f['status']})",
+                         f"recorded {f.get('found', '?')} by an earlier run, not read in this one: {f.get('why', '')}"[:200]])
     if rows:
         print("\nRESULT BY CVE")
-        print("\n".join(report.table(["CVE", "CISA list", "Product", "Result", "Matched / compared"], rows, report.width_for(None))))
+        print("\n".join(report.table(["CVE", "Exploited", "CVSS", "Listed", "Patch due", "Ransomware", "Product", "Result", "Matched / compared"], rows, report.width_for(None), fit=sys.stdout.isatty())))
         print()
     for e, why, imp in hits:
         print(f"  {e['cve']}  {e['title'][:70]}\n      because: {why}")
@@ -705,9 +740,6 @@ def cmd_run(a) -> int:
         print_impact(imp)
     if not_listed:
         print(f"not in the graph's CISA list (not 'safe', only 'not listed in this snapshot'): {', '.join(not_listed)}")
-    open_n = [f for f in state().values() if f["status"] in ("open", "verified")]
-    if open_n:
-        print(f"{len(open_n)} finding(s) not yet fixed: " + ", ".join(f["ref"] for f in open_n))
     if inv["restartRequired"]:
         print("restart required: an installed update is waiting for a reboot")
     detail_files(inv)
