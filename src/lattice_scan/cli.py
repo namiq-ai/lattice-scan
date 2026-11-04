@@ -54,6 +54,24 @@ def records_dir() -> Path:
 URL = os.environ.get("LATTICE_URL", "https://lattice.namiq.io/mcp")
 KEY = os.environ.get("LATTICE_API_KEY", "")
 OUT = records_dir()
+FEED_URL = env("FEED", "https://namiq.io/lattice/recent.json")
+KEY_API = env("KEY_URL", "https://namiq.io/api/v1/lattice/agent-keys")
+TERMS_DOC = env("TERMS_URL", "https://namiq.io/lattice/openapi.json")
+
+
+def saved_key() -> str:
+    """The key `get-key` stored, if the file is still private to this user. A key file anyone else can read is ignored, not used."""
+    f = OUT / "key"
+    try:
+        if f.is_file() and (f.stat().st_mode & 0o077) == 0:
+            return f.read_text().strip()
+    except OSError:
+        pass
+    return ""
+
+
+if not KEY:
+    KEY = saved_key()
 WINDOW = int(env("WINDOW", "6"))
 TODAY = env("TODAY") or dt.date.today().isoformat()
 
@@ -623,6 +641,19 @@ def detail_files(inv: dict) -> None:
           "  lattice-scan resolve CVE-... --status fixed --proof \"...\"   record the outcome")
 
 
+def print_table(rows: list[list[str]]) -> None:
+    """The RESULT BY CVE table of the host check, `recent` and `enrich` (nine columns, see cells())."""
+    if not rows:
+        return
+    print("\nRESULT BY CVE")
+    lines, hidden = report.table(["CVE", "Exploit", "CVSS", "Listed", "Patch due", "Ransom", "Product", "Result", "Matched / compared"], rows,
+                                 report.width_for(None), fit=sys.stdout.isatty(), drop=("Listed", "Product", "CVSS"), min_last=45)
+    print("\n".join(lines))
+    if hidden:
+        print(f"(narrow terminal: hidden {', '.join(h.upper() for h in hidden)}; pipe the output, for example `| cat`, to see every column)")
+    print()
+
+
 def cmd_run(a) -> int:
     private_dir()
     seen_f = OUT / "seen.json"
@@ -656,7 +687,7 @@ def cmd_run(a) -> int:
         print("--discover needs a key (graph_search and graph_node are not keyless). Set LATTICE_API_KEY, or pass ids with --cve.", file=sys.stderr)
         return 2
     floor = (dt.date.fromisoformat(TODAY) - dt.timedelta(days=WINDOW)).isoformat()
-    inv = inventory()
+    inv = getattr(a, "inv", None) or inventory()
     dbg(f"inventory: os={inv['os']!r} kernel={inv['kernel']} packages={len(inv['packages'])} snaps={len(inv['snaps'])} images={len(inv['images'])} "
         f"node={inv.get('node') or '-'} hash={inv['hash']} restartRequired={inv['restartRequired']}")
     dbg(f"inventory kernel={inv['kernel']} node={inv.get('node') or '-'} images={inv['images']}")
@@ -742,14 +773,8 @@ def cmd_run(a) -> int:
             rows.append([f["ref"], "yes" if f.get("kind", "kev") == "kev" else "-", cvss_cell(f.get("cvss")), f.get("listed") or "-", due_cell(f.get("due", "")),
                          ransom(f.get("ransomware", "")), "-", f["status"].upper(),
                          f"{f.get('why', '')} (recorded {f.get('found', '?')}, not read in this run)"[:240]])
-    if rows:
-        print("\nRESULT BY CVE")
-        lines, hidden = report.table(["CVE", "Exploit", "CVSS", "Listed", "Patch due", "Ransom", "Product", "Result", "Matched / compared"], rows,
-                                     report.width_for(None), fit=sys.stdout.isatty(), drop=("Listed", "Product", "CVSS"), min_last=45)
-        print("\n".join(lines))
-        if hidden:
-            print(f"(narrow terminal: hidden {', '.join(h.upper() for h in hidden)}; pipe the output, for example `| cat`, to see every column)")
-        print()
+    rows += getattr(a, "extra_rows", [])   # `recent`: the feed's ids that were ruled out on this host and never sent to Lattice
+    print_table(rows)
     for e, why, imp in hits:
         print(f"  {e['cve']}  {e['title'][:70]}\n      because: {why}")
         print_impact(imp)
@@ -1056,6 +1081,220 @@ def cmd_project(a) -> int:
     return 1 if (bad and a.fail_on != "never") else (3 if stopped else 0)
 
 
+CVE_ID = re.compile(r"\bCVE-\d{4}-\d{4,}\b", re.I)
+
+
+def fetch_json(url: str, what: str, limit: int = 1024 * 1024) -> dict:
+    """GET a small JSON document: https only (http only for this machine), no redirect, size-capped, the same three tries as a Lattice request."""
+    from urllib.parse import urlparse
+    u = urlparse(url)
+    if not (u.scheme == "https" or (u.scheme == "http" and u.hostname in ("127.0.0.1", "localhost", "::1"))):
+        raise LatticeError(f"refusing {what}: {url} is not https")
+    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": f"lattice-scan/{__version__}"})
+    for attempt in range(len(RETRY_DELAYS) + 1):
+        try:
+            with _OPENER.open(req, timeout=30) as r:
+                raw = r.read(limit + 1)
+            if len(raw) > limit:
+                raise LatticeError(f"{what} is larger than {limit // 1024} KB: refusing it")
+            try:
+                data = json.loads(raw.decode("utf-8", "replace"))
+            except ValueError:
+                raise LatticeError(f"{what} at {url} is not JSON")
+            if not isinstance(data, dict):
+                raise LatticeError(f"{what} at {url} is not a JSON object")
+            return data
+        except urllib.error.HTTPError as e:
+            if e.code in (502, 503, 504) and attempt < len(RETRY_DELAYS):
+                Lattice._wait_to_retry(attempt, f"HTTP {e.code}")
+                continue
+            raise LatticeError(f"{what}: HTTP {e.code} from {url}")
+        except (urllib.error.URLError, OSError) as e:
+            if attempt < len(RETRY_DELAYS):
+                Lattice._wait_to_retry(attempt, str(e))
+                continue
+            raise LatticeError(f"cannot read {what} at {url} after {attempt + 1} tries: {e}")
+    raise LatticeError(f"cannot read {what}")
+
+
+def read_feed(period: str = "weekly") -> dict:
+    """namiq.io's list of recent exploited and critical CVE ids for one period (daily or weekly). Only well-formed rows are kept; every text is cleaned: it is data, never instructions."""
+    d = fetch_json(FEED_URL, "the recent-CVE list")
+    if d.get("schema") != "lattice-recent/2":
+        raise LatticeError(f"the recent-CVE list has schema {clean(str(d.get('schema')))!r}; this lattice-scan reads lattice-recent/2. Upgrade lattice-scan.")
+    p = d.get(period)
+    if not isinstance(p, dict):
+        raise LatticeError(f"the recent-CVE list has no {period} list")
+    def rows(key: str) -> list[dict]:
+        out = []
+        for r in p.get(key) or []:
+            if isinstance(r, dict) and isinstance(r.get("id"), str) and re.fullmatch(r"CVE-\d{4}-\d{4,}", r["id"]):
+                out.append({k: clean(str(v)) if isinstance(v, str) else v for k, v in r.items() if isinstance(v, (str, int, float)) or v is None})
+        return out
+    return {"asOf": clean(str(d.get("exploitedAsOf", ""))), "builtAt": clean(str(d.get("builtAt", ""))), "period": period,
+            "from": clean(str(p.get("from", ""))), "to": clean(str(p.get("to", ""))), "exploited": rows("exploited"), "critical": rows("critical")}
+
+
+def feed_cells(r: dict) -> list[str]:
+    """EXPLOIT .. PRODUCT cells from a feed row (what namiq.io says, not what Lattice says)."""
+    return ["yes" if "added" in r else "no", cvss_cell(r.get("cvss")), r.get("added") or "-", due_cell(r.get("due", "")), ransom(r.get("ransomware", "")),
+            f"{r.get('vendor', '')} {r.get('product', '')}".strip() or "-"]
+
+
+def cmd_recent(a) -> int:
+    """Start here when you have no CVE id: read namiq.io's recent exploited and critical ids, rule out locally what this host cannot have, and read only
+    the rest from Lattice by exact id. The host's inventory never leaves the machine; the feed request carries no id and no host data."""
+    private_dir()
+    try:
+        progress(f"[recent] reading the {a.period} list of recent exploited and critical CVEs from {FEED_URL} ...")
+        feed = read_feed(a.period)
+    except LatticeError as err:
+        print(f"stopped: {err}", file=sys.stderr)
+        return 1
+    inv = inventory()
+    rows: list[list[str]] = []
+    look: list[str] = []
+    for r in feed["exploited"][: a.max_read]:
+        entry = {"cve": r["id"], "vendor": r.get("vendor", ""), "product": r.get("product", "")}
+        m = candidate(entry, inv)
+        progress(f"[recent] {r['id']}  {entry['vendor']} {entry['product']}: " + ("something installed may match, will read it from Lattice" if m else "nothing installed matches, not sent to Lattice"))
+        if m:
+            look.append(r["id"])
+        else:
+            rows.append([r["id"], *feed_cells(r), "unmatch", "no package, snap, image or kernel matches (not sent to Lattice)"])
+    watch = 0
+    if not a.no_critical:
+        for r in feed["critical"]:
+            m = candidate({"cve": r["id"], "vendor": r.get("vendor", ""), "product": r.get("product", "")}, inv)
+            if m:
+                watch += 1
+                rows.append([r["id"], "no", cvss_cell(r.get("cvss")), "-", "-", "-", f"{r.get('vendor', '')} {r.get('product', '')}".strip() or "-", "WATCH",
+                             f"critical, not known exploited: {m[0]}"])
+    progress(f"[recent] {a.period} list {feed['from'] or '?'} to {feed['to'] or '?'}: {len(feed['exploited'])} exploited and {len(feed['critical'])} critical ids (CISA catalogue as of {feed['asOf'] or '?'}); "
+             f"{len(look)} exploited may match this host, {watch} critical may match")
+    a.inv, a.extra_rows = inv, rows
+    if look:
+        a.cve, a.cve_file, a.discover, a.refresh, a.again = look, None, False, False, False
+        return cmd_run(a)
+    print(f"recent {TODAY} ({a.period}, {feed['from'] or '?'} to {feed['to'] or '?'}): {len(feed['exploited'])} exploited and {len(feed['critical'])} critical CVEs read from namiq.io (as of {feed['asOf'] or '?'}); "
+          f"none of the exploited ones match this host's installed software, so nothing was sent to Lattice")
+    print_table(rows)
+    print("That is not the same as safe: the list holds only what was recently added. To check a CVE you know of, run: lattice-scan --cve CVE-YYYY-NNNN")
+    return 0
+
+
+def cmd_enrich(a) -> int:
+    """Look up CVE ids that already exist somewhere (an audit, an advisory, a ticket): is each one exploited, listed when, due when, ransomware. By exact id,
+    no comparison with this host, nothing written to the records."""
+    ids: list[str] = []
+    for v in a.cve or []:
+        ids += [x.upper() for x in CVE_ID.findall(v)]
+    sources = list(a.file or [])
+    if not sources and not a.cve and not sys.stdin.isatty():   # stdin only when nothing else was named: a bare `enrich` in a pipe
+        sources = ["-"]
+    for f in sources:
+        try:
+            text = sys.stdin.read() if f == "-" else Path(f).read_text(errors="replace")
+        except OSError as err:
+            print(f"cannot read {f}: {err}", file=sys.stderr)
+            return 2
+        ids += [x.upper() for x in CVE_ID.findall(text)]
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        print("no CVE ids found: pipe text in (npm audit, pip-audit, an advisory), or pass --cve CVE-... / --file FILE", file=sys.stderr)
+        return 2
+    cap = a.max_read or (200 if KEY else 20)
+    todo, rest = ids[:cap], ids[cap:]
+    rows: list[list[str]] = []
+    done: list[tuple[str, dict | None]] = []
+    stopped = ""
+    lat = Lattice()
+    try:
+        lat.start()
+        for n, cve in enumerate(todo, 1):
+            progress(f"[{n}/{len(todo)}] {cve}  asking Lattice (only this id is sent) ...")
+            done.append((cve, kev_entry(lat, cve)))
+    except LatticeError as err:
+        stopped = str(err)
+        print(f"stopped: {err}", file=sys.stderr)
+    read_ids = {c for c, _ in done}
+    for cve, e in done:
+        rows.append([cve, *cells(e), "EXPLOITED" if e else "unlisted", clean((e or {}).get("title", "")) or "not in CISA's list in this snapshot (not the same as safe)"])
+    unread = [c for c in todo if c not in read_ids] + rest
+    rows.sort(key=lambda r: (r[7] != "EXPLOITED", r[4] if r[4] != "-" else "9999"))
+    rows += [[c, "-", "-", "-", "-", "-", "-", "not read", "over the limit for one run" if c in rest else "stopped before this id"] for c in unread]
+    n_exp = sum(1 for _, e in done if e)
+    print(f"enrich {TODAY}: {len(ids)} CVE ids found, {len(done)} read, {n_exp} exploited (CISA), {sum(1 for _, e in done if e and ransom(e.get('ransomware', '')) == 'known')} with known ransomware use")
+    print_table(rows)
+    if unread:
+        print(f"{len(unread)} id(s) not read: " + (f"keyless access allows about 20 reads an hour and 60 a day. For more, ask the person for a key: lattice-scan get-key --help" if not KEY else "run again later"))
+    if a.fail_on == "exploited" and n_exp:
+        return 1
+    return 3 if unread else 0
+
+
+def terms_version() -> str:
+    """The terms version the key API wants, read from its own published OpenAPI document (it must be sent exactly as published)."""
+    d = fetch_json(TERMS_DOC, "the key API description")
+    try:
+        v = d["components"]["schemas"]["AgentKeyRequest"]["properties"]["terms"]["properties"]["version"]["const"]
+    except (KeyError, TypeError):
+        raise LatticeError("the key API description has no terms version")
+    return clean(str(v))
+
+
+def cmd_get_key(a) -> int:
+    """Ask for a Lattice key on behalf of a real person who gave these details and agreed to the terms. The key goes to a private file and is never printed."""
+    terms_page = "https://namiq.io/lattice/docs"
+    plan = f"for {a.name} ({a.position}, {a.company}), confirmation email to {a.email}"
+    if not a.accept_terms:
+        print(f"Not sent. A key would be requested {plan}.\n"
+              f"Show the person the beta terms ({terms_page}) and the purpose below, and ask whether they agree and read that mailbox. Only then run the same command again with --accept-terms.\n"
+              f"purpose: {a.purpose}", file=sys.stderr)
+        return 2
+    if (OUT / "key").exists() and not a.force:
+        print(f"A key is already stored in {OUT / 'key'}: use it (it is read automatically). One key per person; asking again counts against the organisation. --force asks anyway.", file=sys.stderr)
+        return 2
+    try:
+        version = terms_version()
+        body = {"terms": {"version": version, "accepted": True}, "agent": {"name": "lattice-scan", "version": __version__},
+                "principal": {"name": a.name, "position": a.position, "company": a.company, "email": a.email}, "purpose": a.purpose, "consent": True}
+        req = urllib.request.Request(KEY_API, json.dumps(body).encode(), {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": f"lattice-scan/{__version__}"})
+        try:
+            with _OPENER.open(req, timeout=30) as r:
+                status, raw = r.status, r.read(MAX_REPLY).decode(errors="replace")
+        except urllib.error.HTTPError as e:
+            status, raw = e.code, e.read(MAX_REPLY).decode(errors="replace")
+        except (urllib.error.URLError, OSError) as e:
+            raise LatticeError(f"cannot reach the key service: {e}")
+    except LatticeError as err:
+        print(f"stopped: {err}", file=sys.stderr)
+        return 1
+    try:
+        d = json.loads(raw)
+    except ValueError:
+        d = {}
+    if status == 202:
+        print("The address has asked not to be contacted, so no key was issued. Stop here; do not try again.", file=sys.stderr)
+        return 1
+    if status != 201 or not isinstance(d, dict) or not d.get("key"):
+        print(f"no key issued (HTTP {status}): {clean(str(d.get('error', 'unknown')))}: {clean(str(d.get('message', '')))[:300]}", file=sys.stderr)
+        for i in d.get("issues", [])[:5] if isinstance(d.get("issues"), list) else []:
+            print(f"  {clean(str(i.get('path', '')))}: {clean(str(i.get('message', '')))[:150]}", file=sys.stderr)
+        return 1
+    private_dir()
+    fd = os.open(OUT / "key", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(str(d["key"]) + "\n")
+    os.chmod(OUT / "key", 0o600)
+    print(f"A key was issued and stored in {OUT / 'key'} (private to this user; it is not printed, and later runs read it by themselves).\n"
+          f"key id {clean(str(d.get('key_id', '')))}, tier {clean(str(d.get('tier', '')))}, expires {clean(str(d.get('expires_at', '')))}\n"
+          f"A confirmation email went to {a.email}. The person should open it: 'not me' withdraws the key, and the key is withdrawn if the mail cannot be delivered.")
+    for line in (d.get("next") or [])[:4] if isinstance(d.get("next"), list) else []:
+        print(f"  {clean(str(line))[:200]}")
+    return 0
+
+
 def print_impact(imp: dict) -> None:
     print(f"      installed: {'; '.join(imp['installed'])}")
     print(f"      listed {imp.get('listed') or '-'}" + (f" ({imp['daysSinceListed']} days ago)" if "daysSinceListed" in imp else "") + f", due {imp.get('due') or '-'}" + (f", {imp['dueStatus']}" if "dueStatus" in imp else ""))
@@ -1149,6 +1388,26 @@ def main() -> int:
     pj.add_argument("--color", choices=["auto", "always", "never"], default="auto", help="colour the console report (auto: only on a terminal, never with NO_COLOR)")
     pj.add_argument("--width", type=int, help="console report width in columns (default: the terminal's, between 72 and 110)")
     pj.add_argument("--fail-on", choices=["never", "in-range", "candidate"], default="never", help="exit 1 when a candidate (or an in-range one) is found; default never: a person reads it")
+    rc = sub.add_parser("recent", help="start here with no CVE id: read namiq.io's recent exploited and critical CVEs, check what this host could have, read only those from Lattice")
+    rc.add_argument("--period", choices=["daily", "weekly"], default="weekly", help="daily: added or published in the last day or two; weekly: the last seven days, which includes daily (default weekly)")
+    rc.add_argument("--daily", dest="period", action="store_const", const="daily", help="same as --period daily")
+    rc.add_argument("--weekly", dest="period", action="store_const", const="weekly", help="same as --period weekly")
+    rc.add_argument("--max-read", type=int, default=40, help="most exploited ids to consider from the list (default 40)")
+    rc.add_argument("--no-critical", action="store_true", help="leave out the critical (not known exploited) ids")
+    rc.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each step on stderr (the default)")
+    rc.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
+    en = sub.add_parser("enrich", help="CVE ids you already have (audit, advisory, ticket): exploited? ransomware? patch due? No comparison with this host")
+    en.add_argument("--cve", action="append", help="CVE ids or any text containing them (repeatable)")
+    en.add_argument("--file", action="append", help="a file to find CVE ids in; - or a pipe on stdin works too")
+    en.add_argument("--max-read", type=int, default=None, help="most ids to read from Lattice (default 200 with a key, 20 without)")
+    en.add_argument("--fail-on", choices=["never", "exploited"], default="never", help="exit 1 when any id is exploited (default never)")
+    en.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each step on stderr (the default)")
+    en.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
+    gk = sub.add_parser("get-key", help="request a Lattice key for a real person who has read the terms and gave these details; the key is stored, never printed")
+    for flag in ("name", "position", "company", "email", "purpose"):
+        gk.add_argument(f"--{flag}", required=True, help=f"the person's {flag}" if flag != "purpose" else "what the key will be used for, one or two sentences (at least 20 characters)")
+    gk.add_argument("--accept-terms", action="store_true", help="the person has read the beta terms and agreed, and reads that mailbox (without this nothing is sent)")
+    gk.add_argument("--force", action="store_true", help="ask even though a key is already stored")
     sub.add_parser("list"); sub.add_parser("stats")
     il = sub.add_parser("inventory", help="show inventory.log: counts and changes per run"); il.add_argument("-n", type=int, default=20)
     lg = sub.add_parser("log"); lg.add_argument("-n", type=int, default=20, help="last N lines (default 20)")
@@ -1158,6 +1417,9 @@ def main() -> int:
     # OCO-5837: progress goes to stderr and is on by default; --quiet or LATTICE_SCAN_PROGRESS=0 turns it off. stdout is never touched.
     PROGRESS = not getattr(a, "quiet", False) and (getattr(a, "progress", False) or env("PROGRESS") != "0")
     if a.c == "project": return cmd_project(a)
+    if a.c == "recent": return cmd_recent(a)
+    if a.c == "enrich": return cmd_enrich(a)
+    if a.c == "get-key": return cmd_get_key(a)
     if a.c == "impact": return cmd_impact(a)
     if a.c == "resolve": return cmd_resolve(a)
     if a.c == "add": return cmd_add(a)

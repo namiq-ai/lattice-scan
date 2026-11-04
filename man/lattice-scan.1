@@ -1,6 +1,6 @@
 .\" SPDX-License-Identifier: Apache-2.0
 .\" Copyright 2026 NamiQ LLC
-.TH LATTICE-SCAN 1 "November 2026" "lattice-scan 0.2.3" "User Commands"
+.TH LATTICE-SCAN 1 "November 2026" "lattice-scan 0.3.0" "User Commands"
 .SH NAME
 lattice-scan \- check this host, or a project's declared dependencies, against the CVEs CISA lists as exploited, through Lattice
 .SH SYNOPSIS
@@ -11,6 +11,15 @@ lattice-scan \- check this host, or a project's declared dependencies, against t
 [\fIPATH\fR...] [\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-kev\-catalogue\fR \fIFILE\fR] [\fB\-\-max\-read\fR \fIN\fR]
 [\fB\-\-format\fR \fBconsole\fR|\fBcsv\fR|\fBjson\fR] [\fB\-\-csv\fR \fIFILE\fR] [\fB\-\-json\fR \fIFILE\fR] [\fB\-\-name\fR \fILABEL\fR]...
 [\fB\-\-color\fR \fBauto\fR|\fBalways\fR|\fBnever\fR] [\fB\-\-width\fR \fIN\fR] [\fB\-\-fail\-on\fR \fBnever\fR|\fBin\-range\fR|\fBcandidate\fR]
+.br
+.B lattice-scan recent
+[\fB\-\-period\fR \fBdaily\fR|\fBweekly\fR] [\fB\-\-daily\fR|\fB\-\-weekly\fR] [\fB\-\-max\-read\fR \fIN\fR] [\fB\-\-no\-critical\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
+.br
+.B lattice-scan enrich
+[\fB\-\-cve\fR \fITEXT\fR]... [\fB\-\-file\fR \fIFILE\fR]... [\fB\-\-max\-read\fR \fIN\fR] [\fB\-\-fail\-on\fR \fBnever\fR|\fBexploited\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
+.br
+.B lattice-scan get\-key
+\fB\-\-name\fR \fINAME\fR \fB\-\-position\fR \fITEXT\fR \fB\-\-company\fR \fITEXT\fR \fB\-\-email\fR \fIADDRESS\fR \fB\-\-purpose\fR \fITEXT\fR [\fB\-\-accept\-terms\fR] [\fB\-\-force\fR]
 .br
 .B lattice-scan
 .RB { list | impact " \fICVE\fR" | resolve " \fICVE\fR \fB\-\-status\fR \fISTATUS\fR [\fB\-\-proof\fR \fITEXT\fR] | add | stats | inventory | log }
@@ -257,6 +266,19 @@ Every pinned version declared lies outside every usable range. This does not clo
 .TP
 .B not\-read
 An id that matches a dependency by name was not read from Lattice (the read limit, or a stop). It is neither safe nor affected.
+.SH STARTING WITHOUT A CVE ID
+.SS recent
+Reads two lists published at namiq.io, one of CVEs CISA lists as exploited and one of CVEs scored critical and not known to be exploited, for a period: \fBdaily\fR (added or published in the last day or two) or \fBweekly\fR (the last seven days, which includes daily; the default).
+The request carries no id and nothing about this host. Each exploited entry is then compared with this host's inventory, locally, by product name. Only the entries that may match are read from Lattice, by exact id, and shown like a host check.
+The others are listed as \fBunmatch\fR and are not sent to Lattice. A critical entry that may match is shown as \fBWATCH\fR: it is not known to be exploited, so Lattice is not asked about it.
+When nothing matches, nothing is sent to Lattice. That is not the same as safe: the lists hold only what was recently added; to check a CVE you know of, use \fB\-\-cve\fR.
+\fB\-\-max\-read\fR limits how many exploited entries are considered (default 40); \fB\-\-no\-critical\fR leaves out the critical list.
+.SS enrich
+Takes CVE ids from \fB\-\-cve\fR (any text containing ids), from \fB\-\-file\fR, or from standard input when neither is given (an audit report, an advisory, a ticket), reads each once from Lattice by exact id, and prints for each: whether CISA lists it as exploited, since when, the patch due date, the CVSS score and whether CISA records ransomware use.
+It does not compare with this host and writes no records. Without a key it reads at most 20 ids a run (\fB\-\-max\-read\fR changes this); ids not read are listed and the exit status is 3. \fB\-\-fail\-on exploited\fR exits 1 when any id is exploited.
+.SS get\-key
+Asks for a Lattice key for a real person. Without \fB\-\-accept\-terms\fR nothing is sent: it prints who the key would be for, where the beta terms are, and stops with status 2. The person must have read the terms and agreed, and must read the mailbox given: the key and a confirmation email are sent there, and a click on "not me" withdraws the key.
+The terms version is read from the key service's own published description and sent exactly. The key is stored in the records folder as the file \fBkey\fR (mode 0600), never printed, and used automatically by later runs while the file stays private to the user. If a key is already stored it asks for nothing more unless \fB\-\-force\fR is given.
 .SH EXIT STATUS
 .TP
 .B 0
@@ -269,7 +291,7 @@ The run finished. (Without \fB\-\-fail\-on\fR this does not mean nothing was fou
 Bad usage, or an input could not be read (a folder, a catalogue, an id file), or the catalogue was asked for without a key, or with a key whose email is not confirmed.
 .TP
 .B 3
-\fBproject\fR stopped part\-way because Lattice's allowance ran out or it could not be reached. The ids not read are listed; the report is otherwise complete.
+\fBproject\fR or \fBenrich\fR stopped part\-way, or hit the read limit, because Lattice's allowance ran out or it could not be reached. The ids not read are listed; the report is otherwise complete.
 .SH ENVIRONMENT
 .TP
 .B LATTICE_API_KEY
@@ -290,6 +312,15 @@ A JSON inventory to use instead of collecting one (tests, other tools).
 .B LATTICE_SCAN_PROGRESS
 Progress is on by default. Set to 0 to turn it off, like \fB\-\-quiet\fR.
 .TP
+.B LATTICE_SCAN_FEED
+Where \fBrecent\fR reads the lists (default https://namiq.io/lattice/recent.json).
+.TP
+.B LATTICE_SCAN_KEY_URL
+The key service \fBget\-key\fR asks (default https://namiq.io/api/v1/lattice/agent-keys).
+.TP
+.B LATTICE_SCAN_TERMS_URL
+The description of the key service from which \fBget\-key\fR reads the current terms version (default https://namiq.io/lattice/openapi.json).
+.TP
 .B LATTICE_SCAN_DEBUG
 Set to 1 for \fB\-\-debug\fR.
 .TP
@@ -303,12 +334,14 @@ Respected by \fB\-\-color auto\fR.
 .SH FILES
 .TP
 .I ~/.lattice-scan/
-Host mode only, mode 0700: findings.jsonl, runs.jsonl, scan.log, inventory.json and inventory.log, seen.json, debug.log. They name this host's software. Do not commit, publish or share them.
+Host mode and \fBget\-key\fR, mode 0700: findings.jsonl, runs.jsonl, scan.log, inventory.json and inventory.log, seen.json, debug.log. They name this host's software. Do not commit, publish or share them.
+The file \fBkey\fR (mode 0600), written by \fBget\-key\fR, holds a Lattice key; it is read only while no one else can read it. \fBenrich\fR and \fBproject\fR write nothing there.
 .SH LIMITS
 Without a key Lattice allows 5 calls a minute and 60 reads a day; lattice\-scan waits between calls to stay under that. A run that hits the limit stops, lists what it did not read, and exits 3.
-A key is requested by a person (https://namiq.io/lattice/docs); the tool never requests one.
+A key is for a real person (https://namiq.io/lattice/docs). The tool asks for one only through \fBget\-key\fR, with the person's own details and only after \fB\-\-accept\-terms\fR; it never opens a link from a reply.
 .SH WHAT LEAVES THE MACHINE
 CVE ids, and the key if one is set. Package names, versions, file names and the inventory are never sent; matching happens locally.
+\fBrecent\fR downloads a public list: that request carries no id and nothing about this host. \fBget\-key\fR sends the name, position, company, email address and purpose it is given, after \fB\-\-accept\-terms\fR, to the key service.
 .SH EXAMPLES
 Check a host for two CVEs:
 .PP

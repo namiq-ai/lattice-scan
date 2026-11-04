@@ -79,6 +79,35 @@ class Licence(unittest.TestCase):
                 self.assertNotIn('"license": "MIT"', t)
 
 
+class AgentStart(unittest.TestCase):
+    """0.3.0: an agent with no CVE id must find its first command at the top of the skill, and the key procedure must keep a person in the loop."""
+    def test_the_skill_opens_with_a_which_command_table_that_names_every_start(self):
+        t = SKILL.read_text()
+        top = t.split("## 1. Before running anything", 1)[0]
+        for cmd in ("`recent`", "`enrich`", "`--cve", "`project FOLDER"):
+            with self.subTest(cmd):
+                self.assertIn(cmd, top)
+
+    def test_every_command_the_skill_teaches_exists(self):
+        from lattice_scan import cli
+        src = (ROOT / "src/lattice_scan/cli.py").read_text()
+        for name in ("recent", "enrich", "get-key"):
+            self.assertIn(f'sub.add_parser("{name}"', src)
+            self.assertIn(f"{name}", SKILL.read_text())
+
+    def test_a_key_is_requested_only_with_the_person_present(self):
+        t = SKILL.read_text()
+        for must in ("Never request one on your own", "Never make up a detail", "Only after a clear yes", "--accept-terms", "not me", "Do not retry with other details"):
+            with self.subTest(must):
+                self.assertIn(must, t)
+        self.assertNotIn("do not request a key", t.lower().replace("never request one on your own", ""))
+
+    def test_the_inventory_dump_is_not_the_first_thing_an_agent_runs(self):
+        t = SKILL.read_text()
+        self.assertIn("--refresh > /dev/null", t)
+        self.assertNotIn("python3 scripts/lattice-scan.pyz --refresh   ", t)
+
+
 class Wording(unittest.TestCase):
     """Descriptions are what a stranger reads first. They may say the tool compares and shows evidence; they may not say it judges."""
     TEXTS = {
