@@ -23,3 +23,15 @@ Pushing a `v*` tag by hand still works and still refuses a tag with no notes fil
 
 Every release also builds `dist/lattice-scan-openai-plugin-X.Y.Z.zip` (`packaging/build_openai_plugin.py`) and attaches it. Submitting it is a person's step: platform.openai.com/plugins > Upload new or existing plugin,
 as the verified developer identity, then Submit for review (a skills-only plugin needs no MCP review cases or demo video). After approval, choose when to publish. Upload the ZIP from the release, not a local build.
+
+## The apt repository (not part of the release workflow)
+
+The signed apt repository at namiq.io/apt does not update itself: the workflow attaches the `.deb` to the release, and nothing else publishes it. Until it is published, `apt upgrade` stays on the old version
+and `man lattice-scan` shows the old manual (a pip or uv install has no manual page). After every release:
+
+1. Collect the `.deb` of the release and of every earlier version you still want served into one folder, and check each against its release `SHA256SUMS`:
+   `gh release download vX.Y.Z -p 'lattice-scan_X.Y.Z_all.deb' -p SHA256SUMS`.
+2. Build and sign, on the machine that holds the signing key (it asks for the passphrase, and the private key never leaves that machine):
+   `python3 packaging/build_apt_repo.py --key C473615441158A3E775C2EC27E6115F40A41061D --dist FOLDER --out repo/` (the fingerprint, without spaces, is also published at namiq.io/lattice/docs).
+3. Copy `repo/` over `namiq-web/public/apt/` in a pull request there, check `gpg --verify public/apt/dists/stable/InRelease`, merge, then deploy namiq-web (`npm run build`, restart the service).
+4. Check from a clean machine or container: `apt update && apt policy lattice-scan` shows the new version, and `man lattice-scan` is the new manual.
