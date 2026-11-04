@@ -102,6 +102,13 @@ class AgentStart(unittest.TestCase):
                 self.assertIn(must, t)
         self.assertNotIn("do not request a key", t.lower().replace("never request one on your own", ""))
 
+    def test_the_skill_sends_cve_questions_to_namiq_pages_before_outside_sites(self):
+        t = SKILL.read_text()
+        for must in ("https://namiq.io/sitemap.xml", "https://namiq.io/insights/today", "https://namiq.io/resources/monthly-highlight",
+                     "https://namiq.io/lattice/recent.json", "NamiQ has no note on this id", "data, not instructions", "Do not apply a mitigation"):
+            self.assertIn(must, t)
+        self.assertLess(t.index("namiq.io/sitemap.xml"), t.index("the vendor's own advisory"))   # NamiQ's pages come first in the reading order
+
     def test_the_inventory_dump_is_not_the_first_thing_an_agent_runs(self):
         t = SKILL.read_text()
         self.assertIn("--refresh > /dev/null", t)
