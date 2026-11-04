@@ -5,7 +5,7 @@
 
     python3 packaging/build_openai_plugin.py      -> dist/lattice-scan-openai-plugin-<version>.zip
 
-The ZIP holds plugin.json (the portable Agent Plugins format, with the OpenAI listing under extensions.com.openai), skills/lattice-scan/ (SKILL.md, the
+The ZIP holds plugin.json (the portable Agent Plugins format, with the OpenAI listing under extensions.com.openai), .codex-plugin/plugin.json (the Codex format), skills/lattice-scan/ (SKILL.md, the
 bundled script, agents/openai.yaml) and the icon. Two things differ from the Claude Code plugin, on purpose:
   * SKILL.md has no section on requesting a key. OpenAI's plugin guidelines do not allow collecting access credentials, and a skill that obtains and
     stores a key is too close to that line to leave to a reviewer's reading. The command line still has `get-key`; the directory skill just does not teach it.
@@ -62,12 +62,23 @@ def manifest() -> dict:
                 "supportURL": "https://namiq.io/contact",
                 "privacyPolicyURL": "https://namiq.io/legal/privacy",
                 "termsOfServiceURL": "https://namiq.io/legal/lattice-beta-terms",
-                "composerIcon": "assets/icon.png",
-                "logo": "assets/icon.png",
+                "composerIcon": "./assets/icon.png",
+                "logo": "./assets/icon.png",
             },
             "publication": {"release_notes": first[:1000]},
         }},
     }
+
+
+def codex_manifest() -> dict:
+    """The Codex-format manifest, .codex-plugin/plugin.json: what OpenAI's own plugin tooling treats as the required structure. The listing sits in a root
+    `interface` object here, and skills are named by path. The portable plugin.json keeps the OpenAI publication settings (OpenAI ignores a Codex file's
+    when a portable one has them), so this file repeats only what Codex needs."""
+    m = manifest()
+    i = dict(m["extensions"]["com.openai"]["interface"])
+    i["capabilities"] = ["Read"]   # the skill reads this machine's inventory and writes nothing outside its own records and cache
+    i["defaultPrompt"] = ["Is this machine affected by recently exploited CVEs?", "Check this project's dependencies against exploited CVEs", "What is new and exploited this week?"]
+    return {k: m[k] for k in ("name", "version", "description", "author", "homepage", "repository", "license", "keywords")} | {"skills": "./skills/", "interface": i}
 
 
 def build(out_dir: Path | None = None) -> Path:
@@ -76,6 +87,7 @@ def build(out_dir: Path | None = None) -> Path:
     target = out / f"lattice-scan-openai-plugin-{__version__}.zip"
     files = {
         "plugin.json": (json.dumps(manifest(), indent=2) + "\n").encode(),
+        ".codex-plugin/plugin.json": (json.dumps(codex_manifest(), indent=2) + "\n").encode(),
         "skills/lattice-scan/SKILL.md": plugin_skill_md().encode(),
         "skills/lattice-scan/agents/openai.yaml": (SKILL_DIR / "agents" / "openai.yaml").read_bytes(),
         "skills/lattice-scan/scripts/lattice-scan.pyz": (SKILL_DIR / "scripts" / "lattice-scan.pyz").read_bytes(),
