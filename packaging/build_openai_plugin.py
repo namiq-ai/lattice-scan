@@ -20,6 +20,9 @@ sys.path.insert(0, str(ROOT / "src"))
 from lattice_scan import __version__  # noqa: E402
 
 SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
+# Who the listing says published it. It must be the identity verified on platform.openai.com, because OpenAI requires submissions to come from a verified
+# individual or organisation: the owner verified as an individual, so this is a person, not the company. The links (namiq.io) are the project's own pages.
+PUBLISHER = "Hung Le"
 SKILL_DIR = ROOT / "skills" / "lattice-scan"
 FIXED_TIME = (2026, 1, 1, 0, 0, 0)   # the same sources always give the same bytes
 
@@ -41,7 +44,7 @@ def manifest() -> dict:
         "name": "lattice-scan",
         "version": __version__,
         "description": "Check the machine your agent runs on, or a project's dependencies, against CISA-known-exploited CVEs read through Lattice. Prints evidence for a person to read.",
-        "author": {"name": "NamiQ LLC", "email": "contact@namiq.io", "url": "https://namiq.io"},
+        "author": {"name": PUBLISHER, "url": "https://namiq.io"},   # no email: this is public on every release; support is the contact page below
         "homepage": "https://github.com/namiq-ai/lattice-scan",
         "repository": "https://github.com/namiq-ai/lattice-scan",
         "license": "Apache-2.0",
@@ -55,8 +58,9 @@ def manifest() -> dict:
                     "running container image names and the kernel. It can also read the dependencies a project folder declares. With no CVE id to start from, it reads a daily "
                     "or weekly list of recently exploited and critical CVEs and checks only the ones that could apply. It prints evidence for a person to read: each match is a "
                     "candidate to check, not a finding that anything is vulnerable. Only CVE ids leave the machine. The inventory is never sent. It does not install, change or "
-                    "remove anything. It needs Python 3.9 or newer and runs on your own computer, not in a hosted sandbox."),
-                "developerName": "NamiQ LLC",
+                    "remove anything. It needs Python 3.9 or newer and runs on your own computer, not in a hosted sandbox. The tool is open source under the Apache-2.0 licence; the Lattice "
+                    "service it reads is the one at namiq.io."),
+                "developerName": PUBLISHER,
                 "category": "security",
                 "websiteURL": "https://namiq.io/lattice",
                 "supportURL": "https://namiq.io/contact",

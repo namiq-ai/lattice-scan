@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.3.5 — 2026-11-04
+
+- The OpenAI plugin package now names Hung Le as its publisher (`developerName` and author), the identity verified on platform.openai.com, instead of NamiQ LLC. Its manifests no longer carry an email address. `packaging/check_openai_plugin.py` rejects a package whose listing publisher differs from its author. Package only; the command-line tool and the skill are unchanged.
+
 ## 0.3.4 — 2026-11-04
 
 - The OpenAI plugin package now also carries the Codex-format manifest (`.codex-plugin/plugin.json`, with `skills`, `capabilities`, `defaultPrompt` and the listing under `interface`), and the icon paths in both manifests begin with `./`, as OpenAI's plugin-creator spec requires. `packaging/check_openai_plugin.py` checks a package against OpenAI's published rules, and the release workflow runs it. Package only; the command-line tool and the skill are unchanged.

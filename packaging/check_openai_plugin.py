@@ -107,6 +107,10 @@ def check(path: str) -> list[tuple[str, str]]:
             if not (s.startswith("./assets/") and s.lower().endswith(".png")):
                 err(f"{label}: screenshots must be PNG files under ./assets/ ({s!r})")
 
+    for label, i in ifaces:
+        who = (portable or codex or {}).get("author", {}).get("name")
+        if i.get("developerName") and who and i["developerName"] != who:
+            err(f"{label}: developerName {i['developerName']!r} differs from the author {who!r}; the listing must name the verified publisher")
     skills = sorted({n.split("/")[1] for n in names if n.startswith("skills/") and n.count("/") >= 2})
     if not skills:
         err("no skills/<name>/ folder")
