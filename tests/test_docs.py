@@ -48,6 +48,14 @@ class Manual(unittest.TestCase):
         self.assertTrue((ROOT / "man" / "lattice-scan.1").read_text().startswith(".\\\" SPDX-License-Identifier: Apache-2.0"))
         self.assertIn(f'"lattice-scan {__version__}"', (ROOT / "man" / "lattice-scan.1").read_text(), "bump the .TH line with the version")
 
+    def test_no_published_text_claims_what_the_list_cannot_know_about_other_peoples_machines(self):
+        """The recent list says what CISA lists and when its due date falls. It cannot know whether any machine is patched, so no text may say machines are 'still unfixed'."""
+        out = subprocess.run([sys.executable, "-m", "lattice_scan", "recent", "--help"], capture_output=True, text=True, cwd=ROOT, env={"PYTHONPATH": str(ROOT / "src"), "PATH": "/usr/bin:/bin"}).stdout
+        texts = {"manual": MAN, "README": README, "recent --help": out, "SKILL.md": (ROOT / "skills/lattice-scan/SKILL.md").read_text(),
+                 **{p.name: p.read_text() for p in (ROOT / "release-notes").glob("*.md")}}
+        for name, text in texts.items():
+            self.assertNotRegex(" ".join(text.split()), r"(?i)many machines|still unfixed|still have unfixed", name)
+
     def test_the_changelog_has_a_section_for_this_version(self):
         text = (ROOT / "CHANGELOG.md").read_text()
         self.assertRegex(text, rf"(?m)^## {re.escape(__version__)} ")

@@ -1473,7 +1473,7 @@ def main() -> int:
     pj.add_argument("--width", type=int, help="console report width in columns (default: the terminal's, between 72 and 110)")
     pj.add_argument("--fail-on", choices=["never", "in-range", "candidate"], default="never", help="exit 1 when a candidate (or an in-range one) is found; default never: a person reads it")
     rc = sub.add_parser("recent", help="start here with no CVE id: read namiq.io's recent exploited and critical CVEs, check what this host could have, read only those from Lattice")
-    rc.add_argument("--period", choices=["daily", "weekly", "open"], default="weekly", help="daily: added or published in the last day or two; weekly: the last seven days, which includes daily (default); open: exploited CVEs added before the weekly window but within 30 days, overdue first, which many machines still have unfixed")
+    rc.add_argument("--period", choices=["daily", "weekly", "open"], default="weekly", help="daily: added or published in the last day or two; weekly: the last seven days, which includes daily (default); open: exploited CVEs added before the weekly window but within 30 days, overdue first (overdue means CISA's due date has passed; it says nothing about any machine)")
     rc.add_argument("--open", dest="period", action="store_const", const="open", help="same as --period open")
     rc.add_argument("--daily", dest="period", action="store_const", const="daily", help="same as --period daily")
     rc.add_argument("--weekly", dest="period", action="store_const", const="weekly", help="same as --period weekly")
