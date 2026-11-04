@@ -84,6 +84,27 @@ class Plugin(unittest.TestCase):
         self.assertNotIn(b"test_credentials", blob); self.assertNotIn(b"reviewer_instructions", blob)
         self.assertIsNone(re.search(rb"lat_[A-Za-z0-9]{20,}", blob))
 
+    def test_the_listing_names_the_verified_publisher_consistently_and_publishes_no_personal_email(self):
+        self.assertEqual(self.i["developerName"], "Hung Le")
+        self.assertEqual(self.m["author"]["name"], "Hung Le")
+        self.assertEqual(json.loads(self.z.read(".codex-plugin/plugin.json"))["interface"]["developerName"], "Hung Le")
+        self.assertNotIn("email", self.m["author"])
+        blob = b"".join(self.z.read(n) for n in self.z.namelist() if n.endswith((".json", ".md", ".yaml")))
+        self.assertNotIn(b"@gmail.com", blob)
+        self.assertNotIn(b"NamiQ LLC", blob)                             # the company is not the publisher here
+
+    def test_the_checker_rejects_a_listing_whose_publisher_is_not_the_author(self):
+        import io
+        buf = io.BytesIO()
+        with zipfile.ZipFile(self.zip) as src, zipfile.ZipFile(buf, "w") as dst:
+            for n in src.namelist():
+                b = src.read(n)
+                if n == "plugin.json":
+                    b = b.replace(b'"developerName": "Hung Le"', b'"developerName": "Someone Else"')
+                dst.writestr(n, b)
+        p = Path(self.tmp.name) / "mismatch.zip"; p.write_bytes(buf.getvalue())
+        self.assertTrue(any("differs from the author" in m for l, m in chk.check(str(p)) if l == "ERROR"))
+
     def test_the_codex_manifest_has_what_openais_tooling_requires(self):
         c = json.loads(self.z.read(".codex-plugin/plugin.json"))
         self.assertEqual((c["name"], c["version"]), (self.m["name"], self.m["version"]))
