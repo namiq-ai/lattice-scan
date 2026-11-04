@@ -2,11 +2,10 @@
 
 ## Unreleased
 
-- Wording: the help for `recent --open`, the manual and the 0.3.1 release notes no longer say that "many machines are still unfixed". Nothing in the list supports that; it says only that CISA's due date has passed, and nothing about any machine.
-
 ## 0.3.5 — 2026-11-04
 
 - The OpenAI plugin package now names Hung Le as its publisher (`developerName` and author), the identity verified on platform.openai.com, instead of NamiQ LLC. Its manifests no longer carry an email address. `packaging/check_openai_plugin.py` rejects a package whose listing publisher differs from its author. Package only; the command-line tool and the skill are unchanged.
+- Wording: the help for `recent --open`, the manual and the 0.3.1 release notes no longer say that "many machines are still unfixed". Nothing in the list supports that; it says only that CISA's due date has passed, and nothing about any machine.
 
 ## 0.3.4 — 2026-11-04
 
