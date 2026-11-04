@@ -111,6 +111,7 @@ class LatticeError(Exception):
     pass
 
 
+RETRY_DELAYS = (2.0, 6.0)   # seconds before the 2nd and 3rd try of a request that failed on the network or with 502/503/504
 MAX_REPLY = 8 * 1024 * 1024  # a reply bigger than this is not a Lattice answer
 
 
@@ -154,6 +155,13 @@ class Lattice:
         self.n = 0
         self.last_gap = 0.0
 
+    @staticmethod
+    def _wait_to_retry(attempt: int, why: str) -> None:
+        """A lookup only reads, so asking again is safe. Say so on stderr, wait, and let the caller go round once more."""
+        delay = RETRY_DELAYS[attempt]
+        progress(f"Lattice did not answer ({why}); trying again in {delay:g}s ({attempt + 2} of {len(RETRY_DELAYS) + 1})")
+        time.sleep(delay)
+
     def _post(self, body: dict) -> dict | None:
         h = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "User-Agent": f"lattice-scan/{__version__}"}
         if KEY:
@@ -163,20 +171,28 @@ class Lattice:
         req = urllib.request.Request(URL, json.dumps(body).encode(), h)
         t0 = time.time()
         dbg(f"-> POST {URL} {body.get('method')} {json.dumps(body.get('params', {}).get('arguments', ''))} key={'set' if KEY else 'none'} session={self.session or '-'}")
-        try:
-            with _OPENER.open(req, timeout=30) as r:
-                self.session = r.headers.get("Mcp-Session-Id", self.session)
-                raw = r.read(MAX_REPLY + 1).decode(errors="replace")
-                if len(raw) > MAX_REPLY:
-                    raise LatticeError("reply from Lattice is larger than 8 MB: refusing it")
-                dbg(f"<- HTTP {r.status} {len(raw)} bytes in {time.time() - t0:.2f}s content-type={r.headers.get('Content-Type')}")
-        except urllib.error.HTTPError as e:
-            detail = e.read().decode()[:200]
-            dbg(f"<- HTTP {e.code} in {time.time() - t0:.2f}s body={detail}")
-            raise LatticeError(f"HTTP {e.code} from Lattice: {detail}")
-        except (urllib.error.URLError, OSError) as e:
-            dbg(f"<- failed in {time.time() - t0:.2f}s: {e!r}")
-            raise LatticeError(f"cannot reach Lattice: {e}")
+        for attempt in range(len(RETRY_DELAYS) + 1):
+            try:
+                with _OPENER.open(req, timeout=30) as r:
+                    self.session = r.headers.get("Mcp-Session-Id", self.session)
+                    raw = r.read(MAX_REPLY + 1).decode(errors="replace")
+                    if len(raw) > MAX_REPLY:
+                        raise LatticeError("reply from Lattice is larger than 8 MB: refusing it")
+                    dbg(f"<- HTTP {r.status} {len(raw)} bytes in {time.time() - t0:.2f}s content-type={r.headers.get('Content-Type')}")
+                break
+            except urllib.error.HTTPError as e:
+                detail = e.read().decode()[:200]
+                dbg(f"<- HTTP {e.code} in {time.time() - t0:.2f}s body={detail}")
+                if e.code in (502, 503, 504) and attempt < len(RETRY_DELAYS):
+                    self._wait_to_retry(attempt, f"HTTP {e.code}")
+                    continue
+                raise LatticeError(f"HTTP {e.code} from Lattice: {detail}")
+            except (urllib.error.URLError, OSError) as e:   # includes a TLS handshake or read timeout
+                dbg(f"<- failed in {time.time() - t0:.2f}s: {e!r}")
+                if attempt < len(RETRY_DELAYS):
+                    self._wait_to_retry(attempt, str(e))
+                    continue
+                raise LatticeError(f"cannot reach Lattice after {attempt + 1} tries: {e}")
         dbg(f"   body: {raw[:300]}{' ...' if len(raw) > 300 else ''}")
         dbg(f"   full body: {raw}", file_only=True)
         if not raw.strip():
