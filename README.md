@@ -31,6 +31,9 @@ Or take the single-file `lattice-scan.pyz` or the `.deb` from the [releases page
 ```bash
 lattice-scan --cve CVE-2021-44228 --cve CVE-2026-46300     # works without a key
 LATTICE_API_KEY=... lattice-scan --discover                # a key lists what was added in the last week
+lattice-scan recent                                        # no CVE id? read namiq.io's weekly list of recent exploited/critical CVEs; only likely matches go to Lattice (--daily for the last day or two)
+printf '...' | lattice-scan enrich                         # ids from an audit or advisory: exploited? since when? patch due? ransomware? (no key: 20 ids a run)
+lattice-scan get-key --name ... --position ... --company ... --email ... --purpose "..."   # asks nothing until --accept-terms; for a real person who read the terms
 lattice-scan --refresh                                     # collect and print the inventory; no network call
 lattice-scan list | impact CVE-... | resolve CVE-... --status fixed --proof "..."
 lattice-scan --progress --cve CVE-...                      # which CVE, and which part of the host or project, as it runs (on by default; -q silences)
@@ -121,11 +124,12 @@ The skill refuses to scan a hosted sandbox, because it would scan the sandbox an
 ## What leaves the machine
 
 CVE ids, and the key if you set one. The inventory (package names and versions) is never sent; matching happens locally.
+`recent` also downloads namiq.io's public list of recent CVE ids; that request carries no id and nothing about the host. `get-key` sends the name, position, company, email and purpose you give it, only after `--accept-terms`.
 
 ## What it writes
 
 `~/.lattice-scan/` (or `LATTICE_SCAN_DIR`; records from the earlier internal name `~/.host-scan` are still found), mode 0700: findings, scan, inventory and debug logs. They name this host's installed software. Do not commit,
-publish or share them.
+publish or share them. `lattice-scan get-key` also stores a key there as the file `key` (mode 0600, never printed). `enrich` and `project` write nothing.
 
 ## What it cannot tell you
 

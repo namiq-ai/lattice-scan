@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.3.0 — 2026-11-04
+
+- `lattice-scan recent`: for an agent or person with no CVE id. It reads namiq.io's daily or weekly list of recent exploited (CISA) and critical (not known exploited) CVEs (`--daily`, `--weekly`, default weekly), compares each exploited entry with this host's inventory locally, and reads only the entries that may match from Lattice, by exact id. The others are `unmatch` and are never sent; a critical entry that may match is `WATCH`. The list request carries no id and nothing about the host.
+- `lattice-scan enrich`: CVE ids from `--cve` text, `--file` or standard input (an `npm audit` or `pip-audit` report, an advisory, a ticket), each read once: exploited by CISA's list, since when, patch due, CVSS, ransomware. It does not look at the host and writes no records. Without a key it reads 20 ids a run; the rest are listed as `not read` and the exit status is 3.
+- `lattice-scan get-key`: requests a Lattice key for a real person who gave their name, position, company and a mailbox they read, and agreed to the terms. Nothing is sent without `--accept-terms`. The key is stored as `~/.lattice-scan/key` (mode 0600), never printed, and used by later runs while the file stays private.
+- A request to Lattice that times out or gets 502/503/504 is tried up to three times (2 s, then 6 s apart) instead of stopping the run.
+- The Claude skill now opens with a "which command" table, so an agent with no CVE id starts with `recent`, an agent with audit output uses `enrich`, and it explains how to ask a person for a key (their details, their yes to the terms) and never to request one alone. See `man lattice-scan`.
+
 ## 0.2.3 — 2026-11-04
 
 - The Claude skill (`SKILL.md`) now explains the result table, its columns (`EXPLOIT`, `CVSS`, `LISTED`, `PATCH DUE`, `RANSOM`, `RESULT`), the progress lines and `--quiet`, and how to word `RANSOM -` and `unlisted`.
