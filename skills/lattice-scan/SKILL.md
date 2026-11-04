@@ -15,7 +15,7 @@ Start here. You do not need a CVE id in hand.
 
 | The user gave you | Run | What it does |
 |---|---|---|
-| Nothing but a question ("am I exposed?", "anything new I should check?", "what was exploited this week?") | `recent` (add `--daily` for the last day or two) | Reads namiq.io's list of recent exploited and critical CVEs, rules out locally what this host cannot have, and reads only the likely matches from Lattice |
+| Nothing but a question ("am I exposed?", "anything new I should check?", "what was exploited this week?") | `recent` (`--daily` for the last day or two; `--open` for exploited CVEs from the past month whose deadline has passed) | Reads namiq.io's list of recent exploited and critical CVEs, rules out locally what this host cannot have, and reads only the likely matches from Lattice |
 | One or more CVE ids | `--cve CVE-... --cve CVE-...` | Looks those ids up and compares each with this host |
 | Ids inside text: `npm audit`, `pip-audit`, `trivy`, an advisory, a ticket | `enrich` (pipe the text in, or `--file FILE`) | For each id: exploited by CISA's list? since when? patch due? ransomware? It does not look at this host |
 | A project folder | `project FOLDER --cve ...` | Reads what the folder declares (section 2) |

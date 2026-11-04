@@ -1118,18 +1118,23 @@ def fetch_json(url: str, what: str, limit: int = 1024 * 1024) -> dict:
 
 
 def read_feed(period: str = "weekly") -> dict:
-    """namiq.io's list of recent exploited and critical CVE ids for one period (daily or weekly). Only well-formed rows are kept; every text is cleaned: it is data, never instructions."""
+    """namiq.io's list of recent exploited and critical CVE ids for one period (daily, weekly or open). Only well-formed rows are kept; every text is cleaned: it is data, never instructions.
+
+    The list's schema is lattice-recent/N. Version 2 has daily and weekly; version 3 adds open. A later version that only adds fields still reads: what this needs is
+    checked, not the number, so a feed that grows does not stop every installed tool. Version 1, or a list without the period asked for, is refused with a request to upgrade.
+    """
     d = fetch_json(FEED_URL, "the recent-CVE list")
-    if d.get("schema") != "lattice-recent/2":
-        raise LatticeError(f"the recent-CVE list has schema {clean(str(d.get('schema')))!r}; this lattice-scan reads lattice-recent/2. Upgrade lattice-scan.")
+    m = re.fullmatch(r"lattice-recent/(\d+)", str(d.get("schema")))
+    if not m or int(m.group(1)) < 2:
+        raise LatticeError(f"the recent-CVE list has schema {clean(str(d.get('schema')))!r}; this lattice-scan reads lattice-recent/2 and later. Upgrade lattice-scan.")
     p = d.get(period)
     if not isinstance(p, dict):
-        raise LatticeError(f"the recent-CVE list has no {period} list")
+        raise LatticeError(f"the recent-CVE list (schema {clean(str(d.get('schema')))}) has no {period} list: upgrade lattice-scan, or ask for daily or weekly")
     def rows(key: str) -> list[dict]:
         out = []
         for r in p.get(key) or []:
             if isinstance(r, dict) and isinstance(r.get("id"), str) and re.fullmatch(r"CVE-\d{4}-\d{4,}", r["id"]):
-                out.append({k: clean(str(v)) if isinstance(v, str) else v for k, v in r.items() if isinstance(v, (str, int, float)) or v is None})
+                out.append({k: clean(str(v)) if isinstance(v, str) else v for k, v in r.items() if isinstance(v, (str, int, float, bool)) or v is None})
         return out
     return {"asOf": clean(str(d.get("exploitedAsOf", ""))), "builtAt": clean(str(d.get("builtAt", ""))), "period": period,
             "from": clean(str(p.get("from", ""))), "to": clean(str(p.get("to", ""))), "exploited": rows("exploited"), "critical": rows("critical")}
@@ -1389,7 +1394,8 @@ def main() -> int:
     pj.add_argument("--width", type=int, help="console report width in columns (default: the terminal's, between 72 and 110)")
     pj.add_argument("--fail-on", choices=["never", "in-range", "candidate"], default="never", help="exit 1 when a candidate (or an in-range one) is found; default never: a person reads it")
     rc = sub.add_parser("recent", help="start here with no CVE id: read namiq.io's recent exploited and critical CVEs, check what this host could have, read only those from Lattice")
-    rc.add_argument("--period", choices=["daily", "weekly"], default="weekly", help="daily: added or published in the last day or two; weekly: the last seven days, which includes daily (default weekly)")
+    rc.add_argument("--period", choices=["daily", "weekly", "open"], default="weekly", help="daily: added or published in the last day or two; weekly: the last seven days, which includes daily (default); open: exploited CVEs added before the weekly window but within 30 days, overdue first, which many machines still have unfixed")
+    rc.add_argument("--open", dest="period", action="store_const", const="open", help="same as --period open")
     rc.add_argument("--daily", dest="period", action="store_const", const="daily", help="same as --period daily")
     rc.add_argument("--weekly", dest="period", action="store_const", const="weekly", help="same as --period weekly")
     rc.add_argument("--max-read", type=int, default=40, help="most exploited ids to consider from the list (default 40)")
