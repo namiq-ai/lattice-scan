@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src")); sys.path.insert(0, str(ROOT / "packaging"))
 from lattice_scan import __version__  # noqa: E402
 import build_openai_plugin as bop  # noqa: E402
+import check_openai_plugin as chk  # noqa: E402
 
 SKILL = ROOT / "skills/lattice-scan/SKILL.md"
 
@@ -60,7 +61,8 @@ class Plugin(unittest.TestCase):
             self.assertTrue(self.i[k].startswith("https://"), k)
         for bad in ("MCP", "Plugin"):                                    # the guidelines: do not append these to a product name
             self.assertNotIn(bad, self.i["displayName"])
-        self.assertIn(self.i["composerIcon"], self.z.namelist()); self.assertIn(self.i["logo"], self.z.namelist())
+        for k in ("composerIcon", "logo"):
+            self.assertTrue(self.i[k].startswith("./"), k); self.assertIn(self.i[k][2:], self.z.namelist())
 
     def test_listing_does_not_judge_compare_or_price(self):
         text = json.dumps(self.m)
@@ -81,6 +83,40 @@ class Plugin(unittest.TestCase):
         blob = b"".join(self.z.read(n) for n in self.z.namelist() if not n.endswith((".png", ".pyz")))
         self.assertNotIn(b"test_credentials", blob); self.assertNotIn(b"reviewer_instructions", blob)
         self.assertIsNone(re.search(rb"lat_[A-Za-z0-9]{20,}", blob))
+
+    def test_the_codex_manifest_has_what_openais_tooling_requires(self):
+        c = json.loads(self.z.read(".codex-plugin/plugin.json"))
+        self.assertEqual((c["name"], c["version"]), (self.m["name"], self.m["version"]))
+        self.assertEqual(c["skills"], "./skills/")
+        self.assertTrue(c["author"]["name"] and c["description"])
+        i = c["interface"]
+        self.assertIsInstance(i["capabilities"], list)
+        for k in ("composerIcon", "logo"):
+            self.assertTrue(i[k].startswith("./") and i[k][2:] in self.z.namelist(), k)
+        self.assertLessEqual(len(i["defaultPrompt"]), 3); self.assertTrue(all(len(x) <= 128 for x in i["defaultPrompt"]))
+        for k in ("hooks", "mcpServers", "apps"):
+            self.assertNotIn(k, c)                                       # a skills-only plugin
+
+    def test_the_checker_passes_this_package_with_no_errors(self):
+        res = chk.check(str(self.zip))
+        self.assertEqual([m for lvl, m in res if lvl == "ERROR"], [])
+
+    def test_the_checker_catches_what_the_first_upload_attempt_would_have_been_refused_for(self):
+        import io
+        def mutate(f):
+            buf = io.BytesIO()
+            with zipfile.ZipFile(self.zip) as src, zipfile.ZipFile(buf, "w") as dst:
+                for n in src.namelist():
+                    dst.writestr(n, f(n, src.read(n)))
+            p = Path(self.tmp.name) / "bad.zip"; p.write_bytes(buf.getvalue()); return str(p)
+        no_dot = mutate(lambda n, b: b.replace(b'"./assets/icon.png"', b'"assets/icon.png"') if n.endswith("plugin.json") else b)
+        self.assertTrue(any("must be a relative path beginning with ./" in m for l, m in chk.check(no_dot) if l == "ERROR"))
+        long_name = mutate(lambda n, b: b.replace(b'"displayName": "Lattice Scan"', b'"displayName": "Lattice Scan ' + b"x" * 30 + b'"') if n == "plugin.json" else b)
+        self.assertTrue(any("displayName" in m and "limit is 30" in m for l, m in chk.check(long_name) if l == "ERROR"))
+        with_hooks = mutate(lambda n, b: b)
+        with zipfile.ZipFile(with_hooks, "a") as z2:
+            z2.writestr("hooks.json", "{}")
+        self.assertTrue(any("must not carry apps, hooks or MCP" in m for l, m in chk.check(with_hooks) if l == "ERROR"))
 
     def test_the_same_sources_give_the_same_bytes(self):
         with tempfile.TemporaryDirectory() as d:
