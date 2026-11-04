@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.3.1 — 2026-11-04
+
+- Fix: `recent` stopped with "reads lattice-recent/2" when namiq.io's list moved to version 3. It now reads version 2 and every later version that only adds fields, and checks that the period it needs is there instead of matching one version number. Version 1 and a list that is not one are still refused with a request to upgrade.
+- New: `recent --open` (or `--period open`) reads the list's open part, version 3's addition: exploited CVEs CISA added before the weekly window but within the last 30 days, overdue first. They are checked against the host in the same way as the daily and weekly lists. Without it nothing changes: weekly is still the default.
+
 ## 0.3.0 — 2026-11-04
 
 - OpenAI: the skill folder carries `agents/openai.yaml` for Codex and the repository has `.agents/skills/lattice-scan`, so Codex finds the skill in a clone. `packaging/build_openai_plugin.py` builds `lattice-scan-openai-plugin-<version>.zip` (a skills-only plugin for platform.openai.com/plugins), and the release workflow attaches it. The directory copy of the skill omits the key procedure.

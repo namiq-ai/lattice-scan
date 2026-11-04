@@ -1,6 +1,6 @@
 .\" SPDX-License-Identifier: Apache-2.0
 .\" Copyright 2026 NamiQ LLC
-.TH LATTICE-SCAN 1 "November 2026" "lattice-scan 0.3.0" "User Commands"
+.TH LATTICE-SCAN 1 "November 2026" "lattice-scan 0.3.1" "User Commands"
 .SH NAME
 lattice-scan \- check this host, or a project's declared dependencies, against the CVEs CISA lists as exploited, through Lattice
 .SH SYNOPSIS
@@ -13,7 +13,7 @@ lattice-scan \- check this host, or a project's declared dependencies, against t
 [\fB\-\-color\fR \fBauto\fR|\fBalways\fR|\fBnever\fR] [\fB\-\-width\fR \fIN\fR] [\fB\-\-fail\-on\fR \fBnever\fR|\fBin\-range\fR|\fBcandidate\fR]
 .br
 .B lattice-scan recent
-[\fB\-\-period\fR \fBdaily\fR|\fBweekly\fR] [\fB\-\-daily\fR|\fB\-\-weekly\fR] [\fB\-\-max\-read\fR \fIN\fR] [\fB\-\-no\-critical\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
+[\fB\-\-period\fR \fBdaily\fR|\fBweekly\fR|\fBopen\fR] [\fB\-\-daily\fR|\fB\-\-weekly\fR|\fB\-\-open\fR] [\fB\-\-max\-read\fR \fIN\fR] [\fB\-\-no\-critical\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
 .br
 .B lattice-scan enrich
 [\fB\-\-cve\fR \fITEXT\fR]... [\fB\-\-file\fR \fIFILE\fR]... [\fB\-\-max\-read\fR \fIN\fR] [\fB\-\-fail\-on\fR \fBnever\fR|\fBexploited\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
@@ -268,7 +268,8 @@ Every pinned version declared lies outside every usable range. This does not clo
 An id that matches a dependency by name was not read from Lattice (the read limit, or a stop). It is neither safe nor affected.
 .SH STARTING WITHOUT A CVE ID
 .SS recent
-Reads two lists published at namiq.io, one of CVEs CISA lists as exploited and one of CVEs scored critical and not known to be exploited, for a period: \fBdaily\fR (added or published in the last day or two) or \fBweekly\fR (the last seven days, which includes daily; the default).
+Reads two lists published at namiq.io, one of CVEs CISA lists as exploited and one of CVEs scored critical and not known to be exploited, for a period: \fBdaily\fR (added or published in the last day or two), \fBweekly\fR (the last seven days, which includes daily; the default) or \fBopen\fR (exploited entries CISA added before the weekly window but within the last 30 days, overdue first: the deadline for most has passed and many machines are still unfixed; it has no critical part).
+The list's schema is lattice\-recent/N. This tool reads version 2 and later, so a list that only adds fields keeps working; \fBopen\fR needs version 3.
 The request carries no id and nothing about this host. Each exploited entry is then compared with this host's inventory, locally, by product name. Only the entries that may match are read from Lattice, by exact id, and shown like a host check.
 The others are listed as \fBunmatch\fR and are not sent to Lattice. A critical entry that may match is shown as \fBWATCH\fR: it is not known to be exploited, so Lattice is not asked about it.
 When nothing matches, nothing is sent to Lattice. That is not the same as safe: the lists hold only what was recently added; to check a CVE you know of, use \fB\-\-cve\fR.

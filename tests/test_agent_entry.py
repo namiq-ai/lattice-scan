@@ -41,12 +41,15 @@ class Entry(Stub):
         self.send_response(Entry.key_status); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(raw)
 
 
-def feed(exploited=(), critical=(), schema="lattice-recent/2", daily=None):
-    """A weekly list of everything given; the daily list is `daily` (a (exploited, critical) pair) or empty."""
+def feed(exploited=(), critical=(), schema="lattice-recent/3", daily=None, open_=None):
+    """A weekly list of everything given; the daily list is `daily` (an (exploited, critical) pair) or empty; `open_` is the list of older exploited entries (schema 3)."""
     d_e, d_c = daily if daily is not None else ((), ())
-    return {"schema": schema, "generatedAt": "2026-11-04T00:00:00+00:00", "builtAt": "2026-11-04T01:00:00Z", "exploitedAsOf": "2026-11-03", "note": "n",
-            "daily": {"from": "2026-11-03", "to": "2026-11-04", "exploited": list(d_e), "critical": list(d_c)},
-            "weekly": {"from": "2026-10-29", "to": "2026-11-04", "exploited": list(exploited), "critical": list(critical)}}
+    f = {"schema": schema, "generatedAt": "2026-11-04T00:00:00+00:00", "builtAt": "2026-11-04T01:00:00Z", "exploitedAsOf": "2026-11-03", "note": "n",
+         "daily": {"from": "2026-11-03", "to": "2026-11-04", "exploited": list(d_e), "critical": list(d_c)},
+         "weekly": {"from": "2026-10-29", "to": "2026-11-04", "exploited": list(exploited), "critical": list(critical)}}
+    if open_ is not None:
+        f["open"] = {"windowDays": 30, "from": "2026-10-06", "to": "2026-11-04", "exploited": list(open_)}
+    return f
 
 
 def exp(cve, vendor="Exampleco", product="Examplelib", **kw):
@@ -137,12 +140,47 @@ class AgentEntry(unittest.TestCase):
     def test_recent_refuses_the_first_version_of_the_list(self):
         Entry.feed = {"schema": "lattice-recent/1", "exploited": [], "critical": []}
         rc, _, err = self.run_cli("recent")
-        self.assertEqual(rc, 1); self.assertIn("lattice-recent/2", err)
+        self.assertEqual(rc, 1); self.assertIn("lattice-recent/2 and later", err)
 
-    def test_recent_refuses_a_list_it_does_not_understand(self):
-        Entry.feed = feed(schema="lattice-recent/9")
-        rc, _, err = self.run_cli("recent")
-        self.assertEqual(rc, 1); self.assertIn("Upgrade lattice-scan", err)
+    def test_recent_refuses_a_list_that_is_not_one(self):
+        for bad in ("something-else/3", "lattice-recent/x", None):
+            with self.subTest(bad):
+                Entry.feed = feed(schema=bad)
+                rc, _, err = self.run_cli("recent")
+                self.assertEqual(rc, 1); self.assertIn("Upgrade lattice-scan", err)
+
+    def test_recent_reads_version_2_and_3_and_a_later_version_that_only_adds_fields(self):
+        for schema in ("lattice-recent/2", "lattice-recent/3", "lattice-recent/7"):
+            with self.subTest(schema):
+                Entry.feed = feed([exp("CVE-2099-0001")], schema=schema)
+                Entry.feed["somethingNew"] = {"later": True}
+                Stub.seen.clear()
+                rc, out, err = self.run_cli("recent")
+                self.assertEqual(rc, 0, err); self.assertRegex(out, r"CANDIDATE|RECORDED")   # the second pass sees the first one's record
+
+    def test_recent_open_reads_the_older_overdue_exploited_entries(self):
+        older = exp("CVE-2099-0001", added="2026-10-20", due="2026-10-23", overdue=True, daysOverdue=12)
+        Entry.feed = feed([exp("CVE-2099-0005", vendor="Otherco", product="Otherthing")], open_=[older])
+        rc, out, err = self.run_cli("recent", "--open")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("open list 2026-10-06 to 2026-11-04: 1 exploited", err)
+        row = {l.split()[0]: l for l in out.splitlines() if l.startswith("CVE-2099")}
+        self.assertIn("CANDIDATE", row["CVE-2099-0001"])
+        self.assertNotIn("CVE-2099-0005", out)                          # the weekly list is not mixed in
+        self.assertEqual(self.lattice_reads(), 1)
+        rc, _, _ = self.run_cli("recent", "--period", "open")
+        self.assertEqual(rc, 0)
+
+    def test_recent_open_with_nothing_that_matches_shows_the_feeds_dates_and_the_period(self):
+        Entry.feed = feed(open_=[exp("CVE-2099-0005", vendor="Otherco", product="Otherthing", added="2026-10-20", due="2026-10-23")])
+        rc, out, _ = self.run_cli("recent", "--open")
+        self.assertEqual(rc, 0); self.assertEqual(self.lattice_reads(), 0)
+        self.assertIn("(open, 2026-10-06 to 2026-11-04)", out); self.assertIn("2026-10-23", out)
+
+    def test_recent_open_on_a_list_without_it_says_to_upgrade_or_use_daily_or_weekly(self):
+        Entry.feed = feed([exp("CVE-2099-0001")], schema="lattice-recent/2")     # version 2 has no open list
+        rc, _, err = self.run_cli("recent", "--open")
+        self.assertEqual(rc, 1); self.assertIn("has no open list", err); self.assertIn("daily or weekly", err)
 
     def test_recent_refuses_a_plain_http_list_from_elsewhere(self):
         cli.FEED_URL = "http://example.invalid/recent.json"
