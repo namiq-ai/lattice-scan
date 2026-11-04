@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The Claude skill (`SKILL.md`) now explains the result table, its columns (`EXPLOIT`, `CVSS`, `LISTED`, `PATCH DUE`, `RANSOM`, `RESULT`), the progress lines and `--quiet`, and how to word `RANSOM -` and `unlisted`.
+
+- The host result table is narrower so the last column (what matched) keeps more room: header `EXPLOIT` and `RANSOM` (`known`, or `-` when CISA has not recorded it), results `unmatch`, `unlisted`, `RECORDED` and `OPEN` in place of the longer wordings, columns two spaces apart, and PATCH DUE shows the date only. On a terminal that is too narrow, LISTED, PRODUCT and CVSS are hidden in turn (with a note) so the last column keeps at least 45 characters; piped output always has every column. An open finding from an earlier run now leads with why it matched, then when it was recorded.
+
 ## 0.2.2 — 2026-11-04
 
 - The host check prints one RESULT BY CVE table. An open finding recorded by an earlier run now appears in it (result `OPEN`, with the date and reason it was recorded), and the separate "N finding(s) not yet fixed" line is gone.

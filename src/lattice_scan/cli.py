@@ -461,18 +461,16 @@ def impact(entry: dict, inv: dict, installed: list[str], vers: list[str]) -> dic
 
 
 def ransom(v: str) -> str:
-    """CISA's known_ransomware_use as a table cell. 'Unknown' means CISA has not recorded it, which is not the same as no ransomware use."""
-    v = (v or "").strip().lower()
-    return "known" if v == "known" else "not recorded" if v == "unknown" else "-"
+    """CISA's known_ransomware_use as a table cell: 'known', or '-' when CISA has not recorded it (CISA's 'Unknown'), which is not the same as no ransomware use."""
+    return "known" if (v or "").strip().lower() == "known" else "-"
 
 
 def due_cell(due: str) -> str:
-    """The patch-due date with how far away it is: '2026-11-20 (in 17d)', '2026-10-01 (33d late)'."""
+    """CISA's patch-due date, as the date only (days late or left are not shown: the date says it)."""
     try:
-        left = (dt.date.fromisoformat(due) - dt.date.fromisoformat(TODAY)).days
+        return dt.date.fromisoformat(due).isoformat()
     except ValueError:
         return "-"
-    return f"{due} ({'today' if left == 0 else f'in {left}d' if left > 0 else f'{-left}d late'})"
 
 
 def cvss_cell(v) -> str:
@@ -684,7 +682,7 @@ def cmd_run(a) -> int:
             if e is None:
                 not_listed.append(cve)
                 progress(f"{tag}  not in CISA's exploited list in this snapshot (that is not the same as safe)")
-                rows.append([cve, *cells(None), "not listed", "not the same as safe: only not listed in this snapshot"])
+                rows.append([cve, *cells(None), "unlisted", "not in CISA's list in this snapshot (not the same as safe)"])
                 continue
             if e["added"] and not (floor <= e["added"] <= TODAY) and not a.cve and not a.cve_file:
                 dbg(f"{cve}: outside window {floor}..{TODAY} (added {e['added']}), skipped")
@@ -696,8 +694,8 @@ def cmd_run(a) -> int:
                      f"{len(inv['images'])} container image names and the kernel ({inv['kernel'] or 'unknown'}) ...")
             m = candidate(e, inv)
             progress(f"{tag}  " + (f"CANDIDATE: {m[0]}" if m else "no installed package, snap, image or kernel matches the product"))
-            rows.append([cve, *cells(e), ("CANDIDATE" + (" (already recorded)" if cve in known else "")) if m else "no match",
-                         m[0] if m else "packages, snaps, container image names and kernel: none match"])
+            rows.append([cve, *cells(e), ("RECORDED" if cve in known else "CANDIDATE") if m else "unmatch",
+                         m[0] if m else "no package, snap, image or kernel matches"])
             if m and cve in known:
                 imp = impact(e, inv, m[1], m[2])
                 if a.refresh or not state()[cve].get("impact"):
@@ -726,11 +724,15 @@ def cmd_run(a) -> int:
     for f in open_n:   # an open finding from an earlier run stays in the table, so it is listed once, in the table
         if f["ref"] not in listed_now:
             rows.append([f["ref"], "yes" if f.get("kind", "kev") == "kev" else "-", cvss_cell(f.get("cvss")), f.get("listed") or "-", due_cell(f.get("due", "")),
-                         ransom(f.get("ransomware", "")), "-", f"OPEN ({f['status']})",
-                         f"recorded {f.get('found', '?')} by an earlier run, not read in this one: {f.get('why', '')}"[:200]])
+                         ransom(f.get("ransomware", "")), "-", f["status"].upper(),
+                         f"{f.get('why', '')} (recorded {f.get('found', '?')}, not read in this run)"[:240]])
     if rows:
         print("\nRESULT BY CVE")
-        print("\n".join(report.table(["CVE", "Exploited", "CVSS", "Listed", "Patch due", "Ransomware", "Product", "Result", "Matched / compared"], rows, report.width_for(None), fit=sys.stdout.isatty())))
+        lines, hidden = report.table(["CVE", "Exploit", "CVSS", "Listed", "Patch due", "Ransom", "Product", "Result", "Matched / compared"], rows,
+                                     report.width_for(None), fit=sys.stdout.isatty(), drop=("Listed", "Product", "CVSS"), min_last=45)
+        print("\n".join(lines))
+        if hidden:
+            print(f"(narrow terminal: hidden {', '.join(h.upper() for h in hidden)}; pipe the output, for example `| cat`, to see every column)")
         print()
     for e, why, imp in hits:
         print(f"  {e['cve']}  {e['title'][:70]}\n      because: {why}")
