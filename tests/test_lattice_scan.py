@@ -170,6 +170,7 @@ class Client(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.saved = (cli.URL, cli.KEY, cli.OUT, cli.TODAY, cli.WINDOW)
         cli.URL, cli.KEY, cli.OUT, cli.TODAY, cli.WINDOW = self.url, "", Path(self.tmp.name), "2026-11-01", 6
+        self.saved_pace, cli.PACE_FILE = cli.PACE_FILE, Path(self.tmp.name + ".pace.json")   # call times are remembered per test, not shared
         Stub.mode, Stub.seen = "json", []
         Stub.answers = {"CVE-2099-0001": lookup("CVE-2099-0001")}
         self.inv = cli.inventory
@@ -178,6 +179,7 @@ class Client(unittest.TestCase):
 
     def tearDown(self):
         cli.URL, cli.KEY, cli.OUT, cli.TODAY, cli.WINDOW = self.saved
+        cli.PACE_FILE = self.saved_pace; Path(self.tmp.name + ".pace.json").unlink(missing_ok=True)
         cli.inventory = self.inv
         self.tmp.cleanup()
 

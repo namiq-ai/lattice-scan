@@ -1,6 +1,6 @@
 .\" SPDX-License-Identifier: Apache-2.0
 .\" Copyright 2026 NamiQ LLC
-.TH LATTICE-SCAN 1 "November 2026" "lattice-scan 0.3.2" "User Commands"
+.TH LATTICE-SCAN 1 "November 2026" "lattice-scan 0.3.3" "User Commands"
 .SH NAME
 lattice-scan \- check this host, or a project's declared dependencies, against the CVEs CISA lists as exploited, through Lattice
 .SH SYNOPSIS
@@ -32,6 +32,8 @@ decide whether a host or project is affected, and it never closes a finding by i
 It uses the Python standard library only, needs Python 3.9 or newer, and works without a key. Without a key Lattice allows a small number of reads a day; see
 .B LIMITS
 below.
+.PP
+Run with no arguments at all, \fBlattice\-scan\fR does \fBlattice\-scan recent \-\-daily\fR: it reads the daily list of recent CVEs and checks the likely ones against this host. The daily list is the default here because the weekly list is long, and a keyless run that has to look many entries up reaches Lattice's limit. Any argument or subcommand runs what it names.
 .PP
 There are two modes. The default mode checks the
 .B host
@@ -322,6 +324,9 @@ The key service \fBget\-key\fR asks (default https://namiq.io/api/v1/lattice/age
 .B LATTICE_SCAN_TERMS_URL
 The description of the key service from which \fBget\-key\fR reads the current terms version (default https://namiq.io/lattice/openapi.json).
 .TP
+.B LATTICE_SCAN_PACE_FILE
+Where the times of recent keyless calls are remembered (default ~/.cache/lattice\-scan/pace.json, under XDG_CACHE_HOME if that is set). Times only, no names.
+.TP
 .B LATTICE_SCAN_DEBUG
 Set to 1 for \fB\-\-debug\fR.
 .TP
@@ -338,7 +343,7 @@ Respected by \fB\-\-color auto\fR.
 Host mode and \fBget\-key\fR, mode 0700: findings.jsonl, runs.jsonl, scan.log, inventory.json and inventory.log, seen.json, debug.log. They name this host's software. Do not commit, publish or share them.
 The file \fBkey\fR (mode 0600), written by \fBget\-key\fR, holds a Lattice key; it is read only while no one else can read it. \fBenrich\fR and \fBproject\fR write nothing there.
 .SH LIMITS
-Without a key Lattice allows 5 calls a minute and 60 reads a day; lattice\-scan waits between calls to stay under that. A run that hits the limit stops, lists what it did not read, and exits 3.
+Without a key Lattice allows 5 calls a minute, 20 reads an hour and 60 a day. lattice\-scan keeps the times of its recent calls (in the user's cache folder, not in the records), so separate runs one after another space themselves out and stay under 5 a minute; it prints a line when it waits. If Lattice still answers "too many requests, retry after N seconds" with N about a minute or less, it waits that long and tries again, twice at most. A run that reaches the hourly or daily limit stops, lists what it did not read, and exits 3.
 A key is for a real person (https://namiq.io/lattice/docs). The tool asks for one only through \fBget\-key\fR, with the person's own details and only after \fB\-\-accept\-terms\fR; it never opens a link from a reply.
 .SH WHAT LEAVES THE MACHINE
 CVE ids, and the key if one is set. Package names, versions, file names and the inventory are never sent; matching happens locally.

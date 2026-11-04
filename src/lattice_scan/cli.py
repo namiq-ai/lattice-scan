@@ -111,6 +111,8 @@ class LatticeError(Exception):
     pass
 
 
+RATE_RETRIES, MAX_RATE_WAIT = 2, 70.0   # a 429 that says 'retry after N seconds' is waited out (at most twice, and only if N is a minute or so)
+PACE_CALLS, PACE_WINDOW = 5, 60.5         # keyless: 5 calls a minute, counted across runs; half a second of margin
 RETRY_DELAYS = (2.0, 6.0)   # seconds before the 2nd and 3rd try of a request that failed on the network or with 502/503/504
 MAX_REPLY = 8 * 1024 * 1024  # a reply bigger than this is not a Lattice answer
 
@@ -147,6 +149,54 @@ def check_url() -> None:
     raise LatticeError(f"refusing to use {URL}: a key is set and the address is not https")
 
 
+def retry_after(header: str | None, body: str) -> float | None:
+    """Seconds Lattice asked us to wait: the Retry-After header (seconds), else 'Retry after N seconds' in its message."""
+    if header and re.fullmatch(r"\s*\d+(?:\.\d+)?\s*", header):
+        return float(header)
+    m = re.search(r"retry after\s+(\d+(?:\.\d+)?)\s*second", body, re.I)
+    return float(m.group(1)) if m else None
+
+
+PACE_FILE: Path | None = None   # tests point this at a temp file
+
+
+def pace_path() -> Path:
+    """Where call times are remembered: the user's cache folder, not the records (a project or enrich run writes no records)."""
+    if PACE_FILE:
+        return PACE_FILE
+    if env("PACE_FILE"):
+        return Path(env("PACE_FILE"))
+    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "lattice-scan" / "pace.json"
+
+
+def pace_times() -> list[float]:
+    try:
+        return [t for t in json.loads(pace_path().read_text()) if isinstance(t, (int, float))]
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def pace_wait(now: float | None = None) -> float:
+    """Seconds to wait before the next keyless call so that no more than PACE_CALLS fall in a minute, counting calls made by other runs a moment ago."""
+    now = time.time() if now is None else now
+    recent = sorted(t for t in pace_times() if now - t < PACE_WINDOW)
+    return recent[-PACE_CALLS] + PACE_WINDOW - now if len(recent) >= PACE_CALLS else 0.0
+
+
+def pace_note() -> None:
+    """Remember this call's time (a few numbers, no names), so the next run, even a separate one, can space itself. Best effort: a read-only home just means no memory."""
+    now = time.time()
+    keep = [t for t in pace_times() if now - t < PACE_WINDOW][-(PACE_CALLS - 1):] + [now]
+    f = pace_path()
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        tmp = f.with_name(f"{f.name}.{os.getpid()}")
+        tmp.write_text(json.dumps(keep))
+        os.replace(tmp, f)
+    except OSError:
+        pass
+
+
 class Lattice:
     """Minimal MCP client over streamable HTTP. The server may answer plain JSON or an SSE stream; both are read."""
 
@@ -171,7 +221,8 @@ class Lattice:
         req = urllib.request.Request(URL, json.dumps(body).encode(), h)
         t0 = time.time()
         dbg(f"-> POST {URL} {body.get('method')} {json.dumps(body.get('params', {}).get('arguments', ''))} key={'set' if KEY else 'none'} session={self.session or '-'}")
-        for attempt in range(len(RETRY_DELAYS) + 1):
+        attempt = rate_tries = 0
+        while True:
             try:
                 with _OPENER.open(req, timeout=30) as r:
                     self.session = r.headers.get("Mcp-Session-Id", self.session)
@@ -181,16 +232,25 @@ class Lattice:
                     dbg(f"<- HTTP {r.status} {len(raw)} bytes in {time.time() - t0:.2f}s content-type={r.headers.get('Content-Type')}")
                 break
             except urllib.error.HTTPError as e:
-                detail = e.read().decode()[:200]
+                detail = e.read().decode()[:300]
                 dbg(f"<- HTTP {e.code} in {time.time() - t0:.2f}s body={detail}")
+                if e.code == 429 and rate_tries < RATE_RETRIES:
+                    wait = retry_after(e.headers.get("Retry-After"), detail)
+                    if wait is not None and wait <= MAX_RATE_WAIT:
+                        rate_tries += 1
+                        progress(f"Lattice's keyless limit (5 calls a minute) was reached; waiting {wait:g}s as it asked, then trying again ({rate_tries} of {RATE_RETRIES})")
+                        time.sleep(wait + 1)
+                        continue
                 if e.code in (502, 503, 504) and attempt < len(RETRY_DELAYS):
                     self._wait_to_retry(attempt, f"HTTP {e.code}")
+                    attempt += 1
                     continue
                 raise LatticeError(f"HTTP {e.code} from Lattice: {detail}")
             except (urllib.error.URLError, OSError) as e:   # includes a TLS handshake or read timeout
                 dbg(f"<- failed in {time.time() - t0:.2f}s: {e!r}")
                 if attempt < len(RETRY_DELAYS):
                     self._wait_to_retry(attempt, str(e))
+                    attempt += 1
                     continue
                 raise LatticeError(f"cannot reach Lattice after {attempt + 1} tries: {e}")
         dbg(f"   body: {raw[:300]}{' ...' if len(raw) > 300 else ''}")
@@ -211,12 +271,14 @@ class Lattice:
             pass  # a stateless server may refuse the notification; calls work without it
 
     def call(self, tool: str, **args) -> dict:
-        # Keyless access allows 5 calls a minute: stay under it instead of burning the day's units on 429s.
+        # Keyless access allows 5 calls a minute, counted across every run on this machine: space them out instead of burning the day's units on 429s.
         if not KEY:
-            wait = 12.5 - (time.time() - self.last_gap)
-            if wait > 0:
+            wait = pace_wait()
+            if wait > 1:   # a sub-second shortfall is not worth a message; the 429 handler covers the rare edge
                 dbg(f"keyless pacing: sleeping {wait:.1f}s (5 calls/minute limit)")
+                progress(f"keyless limit: 5 calls a minute, so waiting {wait:.0f}s before the next lookup")
                 time.sleep(wait)
+            pace_note()
         self.n += 1
         r = self._post({"jsonrpc": "2.0", "id": self.n, "method": "tools/call", "params": {"name": tool, "arguments": {k: v for k, v in args.items() if v is not None}}})
         self.last_gap = time.time()
@@ -571,6 +633,21 @@ def append(path: str, rec: dict) -> None:
         fh.write(json.dumps(rec, sort_keys=True) + "\n")
 
 
+def append_found_once(rec: dict) -> bool:
+    """Record a new finding unless one for the same id is already there, under a lock, so two runs at the same moment record it once. True when this call wrote it."""
+    private_dir()
+    with open(OUT / ".lock", "a") as lock:
+        try:
+            import fcntl
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        except ImportError:   # no fcntl (Windows): without a lock the worst case is a repeated line, which the status view already merges
+            pass
+        if any(e.get("event") == "found" and e.get("ref") == rec["ref"] for e in events()):
+            return False
+        append("findings.jsonl", rec)
+        return True
+
+
 def scanlog(line: str) -> None:
     """One human-readable line per run in scan.log, so 'what did the last scan see, and did it fail' is answerable without parsing the jsonl."""
     private_dir()
@@ -752,8 +829,10 @@ def cmd_run(a) -> int:
                 why, installed, vers = m
                 imp = impact(e, inv, installed, vers)
                 dbg(f"{cve}: IMPACT {json.dumps(imp)}")
-                append("findings.jsonl", {"event": "found", "ref": cve, "on": TODAY, "listed": e["added"], "due": e["due"], "title": e["title"], "why": why, "kind": "kev", "ransomware": e["ransomware"], "cvss": e["cvss"], "impact": imp})
-                hits.append((e, why, imp))
+                if append_found_once({"event": "found", "ref": cve, "on": TODAY, "listed": e["added"], "due": e["due"], "title": e["title"], "why": why, "kind": "kev", "ransomware": e["ransomware"], "cvss": e["cvss"], "impact": imp}):
+                    hits.append((e, why, imp))
+                else:   # another run recorded it a moment ago
+                    again_hits.append((e, why, imp))
             seen.add(cve)
     except LatticeError as err:
         seen_f.write_text(json.dumps(sorted(seen)))
@@ -1422,6 +1501,12 @@ def main() -> int:
     DEBUG = a.debug or env("DEBUG") == "1"
     # OCO-5837: progress goes to stderr and is on by default; --quiet or LATTICE_SCAN_PROGRESS=0 turns it off. stdout is never touched.
     PROGRESS = not getattr(a, "quiet", False) and (getattr(a, "progress", False) or env("PROGRESS") != "0")
+    if a.c is None and not (a.cve or a.cve_file or a.discover or a.refresh):
+        # Nothing asked for: do what a person or an agent with no CVE id wants, the daily list (lattice-scan recent --daily). Daily, not weekly: the weekly list is
+        # long, and a keyless run that has to look many entries up reaches Lattice's limit (about 20 reads an hour).
+        a.c, a.period, a.max_read, a.no_critical = "recent", "daily", 40, False
+        progress("[recent] no command and no CVE id given: running the daily list (lattice-scan recent --daily)")
+        return cmd_recent(a)
     if a.c == "project": return cmd_project(a)
     if a.c == "recent": return cmd_recent(a)
     if a.c == "enrich": return cmd_enrich(a)
