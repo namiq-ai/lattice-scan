@@ -21,7 +21,7 @@ Start here. You do not need a CVE id in hand.
 | A project folder | `project FOLDER --cve ...` | Reads what the folder declares (section 2) |
 | A host question and a CVE you can name from the task | `--cve` | Never invent an id |
 
-`recent` is the right first move for a general question. Say that its answer covers what was recently added, and that an empty result is not "safe".
+`recent` is the right first move for a general question. Running the tool with no arguments at all does `recent --daily`. Say that its answer covers what was recently added, and that an empty result is not "safe".
 
 ## 1. Before running anything: whose machine is this?
 

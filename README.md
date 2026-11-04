@@ -31,6 +31,7 @@ Or take the single-file `lattice-scan.pyz` or the `.deb` from the [releases page
 ```bash
 lattice-scan --cve CVE-2021-44228 --cve CVE-2026-46300     # works without a key
 LATTICE_API_KEY=... lattice-scan --discover                # a key lists what was added in the last week
+lattice-scan                                               # no arguments: the same as `recent --daily`
 lattice-scan recent                                        # no CVE id? read namiq.io's weekly list of recent exploited/critical CVEs; only likely matches go to Lattice (--daily: last day or two; --open: older ones, overdue first)
 printf '...' | lattice-scan enrich                         # ids from an audit or advisory: exploited? since when? patch due? ransomware? (no key: 20 ids a run)
 lattice-scan get-key --name ... --position ... --company ... --email ... --purpose "..."   # asks nothing until --accept-terms; for a real person who read the terms

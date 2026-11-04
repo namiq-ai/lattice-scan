@@ -341,12 +341,14 @@ class ProjectCommand(unittest.TestCase):
         self.root.mkdir()
         self.saved = (cli.URL, cli.KEY, cli.OUT, cli.TODAY)
         cli.URL, cli.KEY, cli.OUT, cli.TODAY = self.url, "", Path(self.tmp.name) / "records", "2026-11-01"
+        self.saved_pace, cli.PACE_FILE = cli.PACE_FILE, Path(self.tmp.name + ".pace.json")   # call times are remembered per test, not shared
         Stub.mode, Stub.seen, Stub.tier = "json", [], "keyless"
         Stub.answers = {"CVE-2099-0001": lookup("CVE-2099-0001")}   # examplelib, affected 2.0.1 up to (not including) 2.15.0
         cli.Lattice.last_gap = 0.0
 
     def tearDown(self):
         cli.URL, cli.KEY, cli.OUT, cli.TODAY = self.saved
+        cli.PACE_FILE = self.saved_pace; Path(self.tmp.name + ".pace.json").unlink(missing_ok=True)
         self.tmp.cleanup()
 
     def run_cli(self, *argv):

@@ -30,7 +30,25 @@ class Entry(Stub):
             self.send_response(404); self.end_headers(); return
         self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
 
+    rate_left = 0                                    # answer this many tools/call requests with HTTP 429 first
+    rate_body = '{"jsonrpc": "2.0", "id": 1, "error": {"code": -32002, "message": "Too many keyless requests. Retry after 3 seconds, or get a key"}}'
+    rate_header = None
+    rate_seen = 0                                    # how many tools/call requests reached the server
+
     def do_POST(self):
+        if self.path == "/mcp":
+            raw = self.rfile.read(int(self.headers["Content-Length"]))
+            is_call = b'"tools/call"' in raw
+            if is_call:
+                Entry.rate_seen += 1
+            if is_call and Entry.rate_left > 0:
+                Entry.rate_left -= 1
+                self.send_response(429); self.send_header("Content-Type", "application/json")
+                if Entry.rate_header: self.send_header("Retry-After", Entry.rate_header)
+                self.end_headers(); self.wfile.write(Entry.rate_body.encode()); return
+            import io   # answer it as the normal stub would, from the bytes already read
+            self.rfile = io.BytesIO(raw); self.headers.replace_header("Content-Length", str(len(raw)))
+            return super().do_POST()
         if self.path != "/keys":
             return super().do_POST()
         Entry.key_bodies.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
@@ -56,7 +74,7 @@ def exp(cve, vendor="Exampleco", product="Examplelib", **kw):
     return {"id": cve, "vendor": vendor, "product": product, "added": "2026-11-03", "due": "2026-11-06", "ransomware": "Unknown", "cvss": 9.8, "epss": 0.1, "priority": "today", **kw}
 
 
-class AgentEntry(unittest.TestCase):
+class EntryBase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.srv = HTTPServer(("127.0.0.1", 0), Entry)
@@ -71,17 +89,21 @@ class AgentEntry(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.saved = (cli.URL, cli.KEY, cli.OUT, cli.TODAY, cli.WINDOW, cli.inventory, cli.PROGRESS, cli.FEED_URL, cli.KEY_API, cli.TERMS_DOC)
         cli.URL, cli.KEY, cli.OUT, cli.TODAY, cli.WINDOW = f"{self.base}/mcp", "", Path(self.tmp.name), "2026-11-04", 6
+        self.saved_pace, cli.PACE_FILE = cli.PACE_FILE, Path(self.tmp.name + ".pace.json")   # call times are remembered per test, not shared
         cli.FEED_URL, cli.KEY_API, cli.TERMS_DOC = f"{self.base}/recent.json", f"{self.base}/keys", f"{self.base}/openapi.json"
         cli.inventory = lambda: dict(INV)
         Stub.mode, Stub.seen, Stub.tier = "json", [], "keyless"
         Stub.answers = {"CVE-2099-0001": lookup("CVE-2099-0001"), "CVE-2099-0005": lookup("CVE-2099-0005", product="Otherthing", vendor="Otherco")}
         Entry.feed, Entry.key_status, Entry.key_bodies = feed(), 201, []
+        Entry.rate_left, Entry.rate_header, Entry.rate_seen = 0, None, 0
+        Entry.rate_body = '{"jsonrpc": "2.0", "id": 1, "error": {"code": -32002, "message": "Too many keyless requests. Retry after 3 seconds, or get a key"}}'
         cli.Lattice.last_gap = 0.0
         p = mock.patch.object(cli.time, "sleep")   # the keyless pacing (12.5 s a call) is not what these tests are about
         p.start(); self.addCleanup(p.stop)
 
     def tearDown(self):
         (cli.URL, cli.KEY, cli.OUT, cli.TODAY, cli.WINDOW, cli.inventory, cli.PROGRESS, cli.FEED_URL, cli.KEY_API, cli.TERMS_DOC) = self.saved
+        cli.PACE_FILE = self.saved_pace; Path(self.tmp.name + ".pace.json").unlink(missing_ok=True)
         self.tmp.cleanup()
 
     def run_cli(self, *argv, stdin=None):
@@ -100,6 +122,8 @@ class AgentEntry(unittest.TestCase):
     def lattice_reads(self):
         return sum(1 for m, _, _ in Stub.seen if m == "tools/call")
 
+
+class AgentEntry(EntryBase):
     # ---- recent
     def test_recent_reads_only_what_may_match_this_host(self):
         Entry.feed = feed([exp("CVE-2099-0001"), exp("CVE-2099-0005", vendor="Otherco", product="Otherthing")],

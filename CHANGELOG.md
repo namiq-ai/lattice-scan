@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.3.3 — 2026-11-04
+
+- `lattice-scan` with no arguments now runs `lattice-scan recent --daily` instead of printing "nothing to check". Daily, not weekly, because the weekly list is long and a keyless run that must look many entries up reaches Lattice's limit. Any argument or subcommand behaves as before, and `lattice-scan recent` is still weekly by default.
+- Keyless limit (5 calls a minute): the tool now remembers when it last called Lattice (a small file in the user's cache folder, `LATTICE_SCAN_PACE_FILE`), so separate runs one after another space themselves out. Before, only calls inside one run were spaced, and the sixth call in a minute from an agent running the tool several times failed with HTTP 429.
+- A 429 that says "Retry after N seconds" with N up to about a minute is waited out and retried, at most twice, with a line on stderr. A longer wait (the hourly or daily limit) still stops the run and lists what was not read.
+- Two runs at the same moment record a new finding once, not twice (a lock on the records folder).
+
 ## 0.3.2 — 2026-11-04
 
 - The Claude and Codex skill reads NamiQ's own published notes before any outside site when the user asks what a CVE means, what to do about it or whether a fix exists: the note for the CVE (found through the sitemap), today's watch, the weakness page and the report behind a note. The skill still quotes mitigations and never applies them. Only the skill's text changes; the command-line tool behaves as in 0.3.1.
