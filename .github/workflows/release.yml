@@ -97,6 +97,7 @@ jobs:
           cat notes/body.md
       - run: python -W error::ResourceWarning -m unittest discover -s tests
       - run: python packaging/build.py
+      - run: python packaging/build_openai_plugin.py
       - run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

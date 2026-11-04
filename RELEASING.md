@@ -18,3 +18,8 @@ After step 3's pull request is merged to `main` (version bumped, CHANGELOG secti
 3. Publish the draft, and approve the `pypi` environment to upload to PyPI (steps 5 and 6 above are unchanged).
 
 Pushing a `v*` tag by hand still works and still refuses a tag with no notes file.
+
+## The OpenAI plugin package
+
+Every release also builds `dist/lattice-scan-openai-plugin-X.Y.Z.zip` (`packaging/build_openai_plugin.py`) and attaches it. Submitting it is a person's step: platform.openai.com/plugins > Upload new or existing plugin,
+as the verified developer identity, then Submit for review (a skills-only plugin needs no MCP review cases or demo video). After approval, choose when to publish. Upload the ZIP from the release, not a local build.

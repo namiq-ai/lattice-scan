@@ -121,6 +121,13 @@ The same tool ships as a plugin whose skill runs it on the machine Claude is run
 
 The skill refuses to scan a hosted sandbox, because it would scan the sandbox and not the machine you mean.
 
+### In OpenAI Codex
+
+Codex reads the same `SKILL.md` format. The repository carries it where Codex looks: clone it and `.agents/skills/lattice-scan` is found when you start Codex in the folder.
+To use it everywhere, copy `skills/lattice-scan` to `~/.agents/skills/lattice-scan`, or ask Codex's skill installer for it from `namiq-ai/lattice-scan`, path `skills/lattice-scan`.
+Each release also attaches `lattice-scan-openai-plugin-<version>.zip`, the package for OpenAI's plugin directory. In ChatGPT the skill stops at its first step, because
+ChatGPT runs it in a hosted sandbox and it checks the machine it runs on; Codex on your own computer is where it does its work.
+
 ## What leaves the machine
 
 CVE ids, and the key if you set one. The inventory (package names and versions) is never sent; matching happens locally.

@@ -1,0 +1,7 @@
+# Optional metadata for OpenAI Codex (the same SKILL.md runs in Claude Code and Codex; this file only adds how Codex shows it).
+interface:
+  display_name: "Lattice Scan"
+  short_description: "Check this machine against CISA-exploited CVEs and read the evidence"
+  default_prompt: "Is this machine affected by any recently exploited CVEs?"
+policy:
+  allow_implicit_invocation: true
