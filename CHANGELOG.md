@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.4 — 2026-11-04
+
 - The OpenAI plugin package now also carries the Codex-format manifest (`.codex-plugin/plugin.json`, with `skills`, `capabilities`, `defaultPrompt` and the listing under `interface`), and the icon paths in both manifests begin with `./`, as OpenAI's plugin-creator spec requires. `packaging/check_openai_plugin.py` checks a package against OpenAI's published rules, and the release workflow runs it. Package only; the command-line tool and the skill are unchanged.
 
 ## 0.3.3 — 2026-11-04
