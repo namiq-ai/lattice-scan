@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.2.2 — 2026-11-04
+
+- The host check prints one RESULT BY CVE table. An open finding recorded by an earlier run now appears in it (result `OPEN`, with the date and reason it was recorded), and the separate "N finding(s) not yet fixed" line is gone.
+- New columns: EXPLOITED (CISA lists it as exploited), CVSS (NVD score), LISTED (date CISA added it), PATCH DUE (CISA's due date and days left or late), RANSOMWARE (`known`, `not recorded` or `-`; CISA's "Unknown" is never shown as "no").
+- Table style follows `docker ps` and `kubectl get`: upper-case header, no rule line, one line per row, cells never wrap. Piped output keeps the whole cell; on a terminal the last column is cut with an ellipsis. A project report with `--width` still holds that width.
+- A saved finding now also stores the ransomware flag and CVSS score; findings recorded by older versions show `-` for those until the CVE is read again.
+
 ## 0.2.1 — 2026-11-03
 
 - Progress: `--progress` prints on stderr which part of the host (packages, snaps, container image names, kernel) or project (each dependency file, with its kind) is being read, and for each CVE which one it is (n of N), what CISA lists and whether anything matched. It is on by default; `--quiet` (`-q`) or `LATTICE_SCAN_PROGRESS=0` turns it off, for a script or CI log that must stay silent. Standard output, exit codes and records are unchanged (OCO-5837).

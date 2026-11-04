@@ -110,20 +110,29 @@ def width_for(requested: int | None) -> int:
     return max(72, min(shutil.get_terminal_size((100, 24)).columns, 110))
 
 
-def table(headers: list[str], rows: list[list[str]], width: int = 100) -> list[str]:
-    """A plain-text table that fits `width`: every column is as wide as its longest cell, and the last column takes what is left and wraps."""
+def table(headers: list[str], rows: list[list[str]], width: int = 100, fit: bool = True) -> list[str]:
+    """A console table in the style of `docker ps` / `kubectl get`: upper-case header, no rule line, columns split by three spaces, one line per row.
+
+    Cells never wrap, so `grep`, `awk` and `cut` see one record per line. With fit=True the last column is cut with an ellipsis to hold `width`;
+    with fit=False it keeps the whole text (the host scan passes fit only on a terminal, so a pipe gets full cells).
+    """
     cols = len(headers)
-    w = [max(len(headers[i]), *(len(str(r[i])) for r in rows)) if rows else len(headers[i]) for i in range(cols)]
+    heads = [h.upper() for h in headers]
+    w = [max(len(heads[i]), *(len(str(r[i])) for r in rows)) if rows else len(heads[i]) for i in range(cols)]
     for i in range(cols - 1):
         w[i] = min(w[i], 24)
-    w[-1] = max(12, min(w[-1], width - sum(w[:-1]) - 2 * (cols - 1)))
-    def fmt(cells: list[str]) -> list[str]:
-        parts = [textwrap.wrap(str(c), w[i], break_long_words=True, break_on_hyphens=False) or [""] for i, c in enumerate(cells)]
-        return ["  ".join(f"{(p[k] if k < len(p) else ''):<{w[i]}}" for i, p in enumerate(parts)).rstrip() for k in range(max(len(p) for p in parts))]
-    out = fmt(headers) + ["  ".join("-" * x for x in w)]
-    for r in rows:
-        out += fmt(r)
-    return out
+    room = max(12, width - sum(w[:-1]) - 3 * (cols - 1))
+    cut = fit
+    def fmt(cells: list[str]) -> str:
+        out = []
+        for i, c in enumerate(cells):
+            c = " ".join(str(c).split())
+            if i == cols - 1:
+                out.append(c if not cut or len(c) <= room else c[:room - 1] + "\u2026")
+            else:
+                out.append((c if len(c) <= w[i] else c[:w[i] - 1] + "\u2026").ljust(w[i]))
+        return "   ".join(out).rstrip()
+    return [fmt(heads)] + [fmt(r) for r in rows]
 
 
 def console(results: list[dict], today: str, tool: str, width: int = 100, color: bool = False, outputs: dict | None = None) -> str:
