@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-## 0.3.5 — 2026-11-04
+## 0.3.5 — not yet released
+
+The version in the source is 0.3.5, but no release carries it: a draft was built and withdrawn, because the OpenAI upload page still refuses uploads (HTTP 404), so a package-only change does not need a release of its own. The next release that changes the tool or the skill ships as 0.3.5 and will carry the entries below.
 
 - The OpenAI plugin package now names Hung Le as its publisher (`developerName` and author), the identity verified on platform.openai.com, instead of NamiQ LLC. Its manifests no longer carry an email address. `packaging/check_openai_plugin.py` rejects a package whose listing publisher differs from its author. Package only; the command-line tool and the skill are unchanged.
 
