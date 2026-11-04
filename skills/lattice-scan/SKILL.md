@@ -59,7 +59,26 @@ Quote the tool's own lines. Do not summarise away the version check.
 - `version check: outside-range` means every readable range excludes the installed version. Never write "safe" or "not affected"; say what the tool said.
 - `undetermined` means the tool could not compare. Say why, using its reason.
 - "not in the graph's CISA list" means Lattice has no CISA-exploited entry for that id in its snapshot. It does not mean nobody exploits it.
-- Give the dates it printed (listed, due, overdue) and CISA's required action as CISA's, not as your advice.
+- Give the dates it printed (listed, due) and CISA's required action as CISA's, not as your advice.
+
+### The result table
+
+The host check and the console project report print one `RESULT BY CVE` table, one line per CVE, and a `DETAILED RESULT FILES` section that says where the full detail is. Show the
+table as printed, then say what it means. Do not rebuild it from memory.
+
+| Column | Read it as |
+|---|---|
+| `EXPLOIT` | `yes`: CISA lists the CVE as exploited in the wild. `no` / result `unlisted`: not in the graph's CISA snapshot. That is not the same as safe. |
+| `CVSS` | NVD's score, `-` when Lattice has none. |
+| `LISTED` | The date CISA added it, which is when it was first known to be exploited. |
+| `PATCH DUE` | CISA's due date, as a date. Say whether it has passed; do not invent a deadline. |
+| `RANSOM` | `known`: CISA records ransomware use. `-`: CISA has not recorded it. Never write "no ransomware" or "not used by ransomware" for `-`. |
+| `RESULT` | `CANDIDATE` (a product match for a person to read), `RECORDED` (matched, already recorded by an earlier run), `unmatch` (nothing installed matches), `unlisted`, `skipped`, or `OPEN` / `VERIFIED` (an earlier finding that is still not fixed, listed here even if this run did not read it). |
+| `MATCHED / COMPARED` | What matched, or what was compared. This is the column to quote. |
+
+- On a narrow terminal the tool hides `LISTED`, `PRODUCT` and `CVSS` (it says so under the table) so the last column keeps room. Output captured by this skill is not a terminal, so you get every column.
+- Progress lines (which part of the host or which file is being read, then `[n/N] CVE-...`) go to stderr and are on by default. Use `--quiet` (`-q`) when only the result is wanted. Standard output, `--format csv|json` and exit codes do not change.
+- A finding from an earlier run that is still open is part of the same table, so there is no separate "not yet fixed" line to look for.
 
 Offer to help the user read the vendor advisory against the installed version. Do not run `resolve`. Closing a finding needs the user's own proof (a changelog
 line, a version, command output), and they decide.

@@ -107,7 +107,7 @@ class Progress(unittest.TestCase):
         rc, out, _ = self.run_cli("--quiet", "--cve", "CVE-2099-0001", "--cve", "CVE-2099-0002", "--cve", "CVE-2099-0003")
         self.assertEqual(rc, 0)
         self.assertIn("RESULT BY CVE", out)
-        for want in ("CVE-2099-0001", "Exampleco Examplelib", "CANDIDATE", "CVE-2099-0002", "no match", "CVE-2099-0003", "not listed"):
+        for want in ("CVE-2099-0001", "Exampleco Examplelib", "CANDIDATE", "CVE-2099-0002", "unmatch", "CVE-2099-0003", "unlisted"):
             self.assertIn(want, out)
         self.assertIn("DETAILED RESULT FILES", out)
         for want in (str(cli.OUT), "findings.jsonl", "scan.log", "inventory.json", "lattice-scan impact CVE-..."):
@@ -122,8 +122,8 @@ class Progress(unittest.TestCase):
         self.assertNotIn("not yet fixed", out)                     # said once, in the table, not again below it
         self.assertIn("CVE-2099-0002", table)                      # this run's result
         self.assertIn("CVE-2099-0001", table)                      # the earlier open finding, same table
-        self.assertIn("OPEN (open)", table)
-        self.assertIn("by an earlier run", table)
+        self.assertRegex(table, r"\bOPEN\b"); self.assertNotIn("(open)", table)
+        self.assertIn("not read in this run", table)
 
     def test_project_result_table_and_detail_files(self):
         root = Path(self.tmp.name) / "p3"
@@ -143,29 +143,37 @@ class Progress(unittest.TestCase):
         Stub.answers["CVE-2099-0002"]["items"][1]["known_ransomware_use"] = "Unknown"
         _, out, _ = self.run_cli("--cve", "CVE-2099-0001", "--cve", "CVE-2099-0002")
         rows = {l.split()[0]: l for l in out.splitlines() if l.startswith("CVE-2099")}
-        self.assertIn("known", rows["CVE-2099-0001"]); self.assertNotIn("not recorded", rows["CVE-2099-0001"])
-        self.assertIn("not recorded", rows["CVE-2099-0002"])
+        self.assertIn("known", rows["CVE-2099-0001"]); self.assertRegex(rows["CVE-2099-0001"], r"\bknown\b")
+        self.assertNotRegex(rows["CVE-2099-0002"], r"\bknown\b")   # CISA's "Unknown" is a '-', never "no ransomware"
         _, out2, _ = self.run_cli("--cve", "CVE-2099-0003")          # an earlier finding keeps its ransomware cell
-        self.assertRegex(out2, r"CVE-2099-0001\s+yes\s+-\s+2026-10-30\s+2026-11-20 \(in 19d\)\s+known\s+-\s+OPEN")
+        self.assertRegex(out2, r"CVE-2099-0001\s+yes\s+-\s+2026-10-30\s+2026-11-20\s+known\s+-\s+OPEN")
 
     def test_table_carries_exploited_cvss_dates_and_patch_due(self):
         Stub.answers["CVE-2099-0001"]["items"][0]["cvss_score"] = 9.8
         _, out, _ = self.run_cli("--cve", "CVE-2099-0001", "--cve", "CVE-2099-0003")
         head = next(l for l in out.splitlines() if l.startswith("CVE "))
-        for col in ("EXPLOITED", "CVSS", "LISTED", "PATCH DUE", "RANSOMWARE", "PRODUCT", "RESULT"):
+        for col in ("EXPLOIT", "CVSS", "LISTED", "PATCH DUE", "RANSOM", "PRODUCT", "RESULT"):
             self.assertIn(col, head)
         rows = {l.split()[0]: l for l in out.splitlines() if l.startswith("CVE-2099")}
-        self.assertRegex(rows["CVE-2099-0001"], r"yes\s+9\.8\s+2026-10-30\s+2026-11-20 \(in 19d\)")
+        self.assertNotIn("(in ", rows["CVE-2099-0001"])             # the date only, no days left or late
+        self.assertRegex(rows["CVE-2099-0001"], r"yes\s+9\.8\s+2026-10-30\s+2026-11-20\b")
         self.assertRegex(rows["CVE-2099-0003"], r"\bno\b")
 
     def test_table_is_one_line_per_row_without_a_rule_line(self):
         from lattice_scan import report
         long = "word " * 40
-        lines = report.table(["CVE", "NOTE"], [["x", long]], 60, fit=False)
+        lines, hid = report.table(["CVE", "NOTE"], [["x", long]], 60, fit=False)
         self.assertEqual(len(lines), 2, lines)                    # header + one row: no wrapping, no dashed rule
         self.assertEqual(lines[0].split(), ["CVE", "NOTE"])
         self.assertTrue(lines[1].endswith(long.strip()))          # piped output keeps the whole cell for grep/awk
-        cut = report.table(["CVE", "NOTE"], [["x", long]], 60)
+        cut, hid = report.table(["CVE", "NOTE"], [["x", long]], 60)
+        self.assertEqual(hid, [])
+        wide = [["x", "2026-10-30", "p" * 20, "a long match note " * 3]]
+        lines2, hid2 = report.table(["CVE", "LISTED", "PRODUCT", "MATCH"], wide, 60, drop=("LISTED", "PRODUCT"), min_last=30)
+        self.assertEqual(hid2, ["LISTED"])                         # hiding one column was enough
+        self.assertNotIn("LISTED", lines2[0]); self.assertLessEqual(max(map(len, lines2)), 60)
+        _, hid3 = report.table(["CVE", "LISTED", "PRODUCT", "MATCH"], wide, 60, fit=False, drop=("LISTED", "PRODUCT"), min_last=30)
+        self.assertEqual(hid3, [])                                 # piped output always keeps every column
         self.assertLessEqual(len(cut[1]), 60)                     # with a width to hold the last column is cut with an ellipsis
         self.assertTrue(cut[1].endswith("\u2026"), cut)
 

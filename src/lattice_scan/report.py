@@ -110,29 +110,42 @@ def width_for(requested: int | None) -> int:
     return max(72, min(shutil.get_terminal_size((100, 24)).columns, 110))
 
 
-def table(headers: list[str], rows: list[list[str]], width: int = 100, fit: bool = True) -> list[str]:
-    """A console table in the style of `docker ps` / `kubectl get`: upper-case header, no rule line, columns split by three spaces, one line per row.
+def table(headers: list[str], rows: list[list[str]], width: int = 100, fit: bool = True, drop: tuple[str, ...] = (), min_last: int = 0) -> tuple[list[str], list[str]]:
+    """A console table in the style of `docker ps` / `kubectl get`: upper-case header, no rule line, columns split by two spaces, one line per row.
 
     Cells never wrap, so `grep`, `awk` and `cut` see one record per line. With fit=True the last column is cut with an ellipsis to hold `width`;
-    with fit=False it keeps the whole text (the host scan passes fit only on a terminal, so a pipe gets full cells).
+    with fit=False it keeps the whole text. With fit=True, when the last column would get less than `min_last` characters, the columns named in
+    `drop` are hidden one by one, in that order, until it fits. Returns (lines, names of the hidden columns).
     """
-    cols = len(headers)
-    heads = [h.upper() for h in headers]
-    w = [max(len(heads[i]), *(len(str(r[i])) for r in rows)) if rows else len(heads[i]) for i in range(cols)]
-    for i in range(cols - 1):
-        w[i] = min(w[i], 24)
-    room = max(12, width - sum(w[:-1]) - 3 * (cols - 1))
-    cut = fit
+    hidden: list[str] = []
+    heads = list(headers)
+    rows = [list(r) for r in rows]
+    def layout() -> tuple[list[int], int]:
+        w = [max(len(h), *(len(str(r[i])) for r in rows)) if rows else len(h) for i, h in enumerate(heads)]
+        for i in range(len(heads) - 1):
+            w[i] = min(w[i], 24)
+        return w, max(12, width - sum(w[:-1]) - 2 * (len(heads) - 1))
+    w, room = layout()
+    for name in drop if fit else ():
+        if room >= min_last or name not in heads:
+            continue
+        i = heads.index(name)
+        del heads[i]
+        for r in rows:
+            del r[i]
+        hidden.append(name)
+        w, room = layout()
+    cols = len(heads)
     def fmt(cells: list[str]) -> str:
         out = []
         for i, c in enumerate(cells):
             c = " ".join(str(c).split())
             if i == cols - 1:
-                out.append(c if not cut or len(c) <= room else c[:room - 1] + "\u2026")
+                out.append(c if not fit or len(c) <= room else c[:room - 1] + "\u2026")
             else:
                 out.append((c if len(c) <= w[i] else c[:w[i] - 1] + "\u2026").ljust(w[i]))
-        return "   ".join(out).rstrip()
-    return [fmt(heads)] + [fmt(r) for r in rows]
+        return "  ".join(out).rstrip()
+    return [fmt([h.upper() for h in heads])] + [fmt(r) for r in rows], hidden
 
 
 def console(results: list[dict], today: str, tool: str, width: int = 100, color: bool = False, outputs: dict | None = None) -> str:
@@ -185,7 +198,7 @@ def console(results: list[dict], today: str, tool: str, width: int = 100, color:
         multi = len(results) > 1
         L += [paint("RESULT BY CVE", "1"), thin]
         L += table((["Project"] if multi else []) + ["CVE", "CISA list", "Product", "Result", "Declared component that matched"],
-                   [([n] if multi else []) + [c["cve"], c["listed"], c["product"] or "-", c["result"], c["matched"] or "-"] for n, c in checked], width)
+                   [([n] if multi else []) + [c["cve"], c["listed"], c["product"] or "-", c["result"], c["matched"] or "-"] for n, c in checked], width)[0]
         L.append("")
     for r in results:
         name = r.get("name") or r["root"].rstrip("/").rsplit("/", 1)[-1]
