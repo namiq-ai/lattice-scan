@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- An agent in its own sandbox can now run the host scan and `recent`. With a read-only or missing home folder the tool used to stop with a Python traceback (exit 1) when it first wrote its records; now it says on one line that the folder cannot be written and keeps that run's records in a temporary folder deleted when the run ends. If `LATTICE_SCAN_DIR` is set and cannot be used, it stops with exit 1 and one line naming it.
+- A host run with no terminal (an agent, a cron job) and no records folder yet no longer leaves the list of installed packages in the home folder: its records go to a temporary folder. `--keep` (or `LATTICE_SCAN_KEEP=1`) keeps them in the default folder. A folder that already exists, and any folder named by `LATTICE_SCAN_DIR`, are used as before. `get-key` never uses a temporary folder, because the key must outlive the run.
+- Every file in the records folder is now created mode 0600 (it was 0664), and existing ones are tightened on the next run.
+- The skill's section 2 tells a sandboxed agent to set `LATTICE_SCAN_DIR` and `LATTICE_API_KEY`.
+
 ## 0.3.5 — 2026-11-04
 
 - The OpenAI plugin package now names Hung Le as its publisher (`developerName` and author), the identity verified on platform.openai.com, instead of NamiQ LLC. Its manifests no longer carry an email address. `packaging/check_openai_plugin.py` rejects a package whose listing publisher differs from its author. Package only; the command-line tool and the skill are unchanged.

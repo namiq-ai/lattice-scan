@@ -28,11 +28,11 @@ package's own changelog names the CVE. --discover (listing what was added in the
 needs a key, because graph_search is not keyless. Get a key: https://namiq.io/lattice/docs#agents. If the server says quota_exceeded the run stops and
 prints its message; a person decides about any link in it, the script never opens one.
 
-Env: LATTICE_URL (default https://lattice.namiq.io/mcp), LATTICE_API_KEY, LATTICE_SCAN_DIR, LATTICE_SCAN_INVENTORY (tests: fixed inventory JSON),
+Env: LATTICE_URL (default https://lattice.namiq.io/mcp), LATTICE_API_KEY, LATTICE_SCAN_DIR (a folder this user can write; set it for an agent in a sandbox), LATTICE_SCAN_KEEP=1, LATTICE_SCAN_INVENTORY (tests: fixed inventory JSON),
 LATTICE_SCAN_TODAY (YYYY-MM-DD), LATTICE_SCAN_WINDOW (days back; default 6 = seven days counting today).
 """
 from __future__ import annotations
-import argparse, datetime as dt, hashlib, json, os, re, shutil, statistics, subprocess, sys, time, urllib.error, urllib.request
+import argparse, atexit, datetime as dt, hashlib, json, os, re, shutil, statistics, subprocess, sys, tempfile, time, urllib.error, urllib.request
 from pathlib import Path
 
 from lattice_scan import __version__
@@ -54,6 +54,8 @@ def records_dir() -> Path:
 URL = os.environ.get("LATTICE_URL", "https://lattice.namiq.io/mcp")
 KEY = os.environ.get("LATTICE_API_KEY", "")
 OUT = records_dir()
+DEFAULT_OUT = OUT   # what records_dir() chose; a test or a fallback that moves OUT elsewhere is no longer 'the default'
+KEEP = False        # --keep / LATTICE_SCAN_KEEP=1: write records to the default folder even for a non-interactive run
 FEED_URL = env("FEED", "https://namiq.io/lattice/recent.json")
 KEY_API = env("KEY_URL", "https://namiq.io/api/v1/lattice/agent-keys")
 TERMS_DOC = env("TERMS_URL", "https://namiq.io/lattice/openapi.json")
@@ -103,7 +105,7 @@ def dbg(msg: str, file_only: bool = False) -> None:
     if not file_only:
         print(line, file=sys.stderr)
     private_dir()
-    with open(OUT / "debug.log", "a") as fh:
+    with open_private(OUT / "debug.log") as fh:
         fh.write(line + "\n")
 
 
@@ -132,10 +134,47 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(_NoRedirect)
 
 
-def private_dir() -> None:
-    """The records directory exists and is 0700, even if an earlier run or the user created it looser: it names this host's software."""
-    OUT.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(OUT, 0o700)
+def open_private(path: Path, mode: str = "a"):
+    """Open a records file created 0600, whatever the umask: the records name this host's software, and the folder's own 0700 is not the only door."""
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if mode == "a" else os.O_TRUNC)
+    return os.fdopen(os.open(path, flags, 0o600), mode)
+
+
+def write_private(path: Path, text: str) -> None:
+    with open_private(path, "w") as fh:
+        fh.write(text)
+
+
+def use_temp_records(note: str) -> None:
+    """Send this run's records to a private temporary folder that is deleted when the run ends. WHY: an agent in its own sandbox has no home it may
+    write to, or should not leave a list of installed packages in one. The findings of such a run are not remembered by the next one: LATTICE_SCAN_DIR or --keep opts in."""
+    global OUT
+    d = Path(tempfile.mkdtemp(prefix="lattice-scan-"))   # mkdtemp is 0700
+    atexit.register(shutil.rmtree, d, True)
+    OUT = d
+    progress(f"[records] {note}: this run's records are kept in a temporary folder and deleted when it ends (LATTICE_SCAN_DIR or --keep keeps them)")
+
+
+def private_dir(keep: bool = False) -> None:
+    """The records directory exists and is 0700, and every file in it 0600, even if an earlier run or the user created it looser: it names this host's software.
+
+    Three cases when it is the default folder (nothing set, no test override): it already exists (use it: the person chose records by having them);
+    it does not exist and the run has no terminal on stdin or stderr, as with an agent or a cron job (use a temporary folder, unless --keep);
+    it cannot be created (say so in one line if LATTICE_SCAN_DIR was named, else use a temporary folder). `keep` is for a key, which must outlive the run."""
+    if not keep and not KEEP and OUT == DEFAULT_OUT and not env("DIR") and not OUT.exists() and not sys.stdin.isatty() and not sys.stderr.isatty():
+        use_temp_records("no records folder yet and no terminal")
+    try:
+        OUT.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(OUT, 0o700)
+        for f in OUT.iterdir():
+            if f.is_file() and f.stat().st_mode & 0o077:
+                os.chmod(f, 0o600)
+    except OSError as err:
+        if keep or env("DIR") or OUT != DEFAULT_OUT:
+            sys.exit(f"lattice-scan: cannot use the records folder {OUT} ({err.strerror or err}). Set LATTICE_SCAN_DIR to a folder this user can write.")
+        print(f"lattice-scan: cannot write {OUT} ({err.strerror or err}); using a temporary folder for this run.", file=sys.stderr)
+        use_temp_records("the records folder is not writable")
+        OUT.mkdir(parents=True, exist_ok=True, mode=0o700)
 
 
 def check_url() -> None:
@@ -629,14 +668,14 @@ def events() -> list[dict]:
 
 def append(path: str, rec: dict) -> None:
     private_dir()
-    with open(OUT / path, "a") as fh:
+    with open_private(OUT / path) as fh:
         fh.write(json.dumps(rec, sort_keys=True) + "\n")
 
 
 def append_found_once(rec: dict) -> bool:
     """Record a new finding unless one for the same id is already there, under a lock, so two runs at the same moment record it once. True when this call wrote it."""
     private_dir()
-    with open(OUT / ".lock", "a") as lock:
+    with open_private(OUT / ".lock") as lock:
         try:
             import fcntl
             fcntl.flock(lock, fcntl.LOCK_EX)
@@ -651,7 +690,7 @@ def append_found_once(rec: dict) -> bool:
 def scanlog(line: str) -> None:
     """One human-readable line per run in scan.log, so 'what did the last scan see, and did it fail' is answerable without parsing the jsonl."""
     private_dir()
-    with open(OUT / "scan.log", "a") as fh:
+    with open_private(OUT / "scan.log") as fh:
         fh.write(f"{dt.datetime.now().isoformat(timespec='seconds')} {line}\n")
 
 
@@ -678,7 +717,7 @@ def inventory_log(inv: dict, prev: dict | None, refresh: bool = False) -> None:
         lines.append(f"{now}   snaps {diff(prev.get('snaps', {}), inv['snaps'])}")
         lines.append(f"{now}   images +{sorted(set(inv['images']) - set(prev.get('images', [])))} -{sorted(set(prev.get('images', [])) - set(inv['images']))}")
     private_dir()
-    with open(OUT / "inventory.log", "a") as fh:
+    with open_private(OUT / "inventory.log") as fh:
         fh.write("\n".join(lines) + "\n")
 
 
@@ -753,7 +792,7 @@ def cmd_run(a) -> int:
         except ValueError:
             prev = None
         inventory_log(inv, prev, refresh=True)
-        inv_f.write_text(json.dumps(inv, indent=1, sort_keys=True))
+        write_private(inv_f, json.dumps(inv, indent=1, sort_keys=True))
         show_inventory(inv)
         scanlog(f"refresh inventory={inv['hash']} packages={len(inv['packages'])} snaps={len(inv['snaps'])} images={len(inv['images'])}")
         return 0
@@ -778,7 +817,7 @@ def cmd_run(a) -> int:
     inventory_log(inv, prev, refresh=a.refresh)
     if a.refresh:
         show_inventory(inv)
-    inv_f.write_text(json.dumps(inv, indent=1, sort_keys=True))
+    write_private(inv_f, json.dumps(inv, indent=1, sort_keys=True))
     dbg(f"run: today={TODAY} window={WINDOW}d floor={floor} url={URL} key={'set' if KEY else 'none'} ids={len(set(ids))} discover={a.discover} again={a.again} records={OUT}")
     lat = Lattice()
     known = {e["ref"] for e in events()}
@@ -835,11 +874,11 @@ def cmd_run(a) -> int:
                     again_hits.append((e, why, imp))
             seen.add(cve)
     except LatticeError as err:
-        seen_f.write_text(json.dumps(sorted(seen)))
+        write_private(seen_f, json.dumps(sorted(seen)))
         scanlog(f"STOPPED after {read} read, {len(hits)} candidates: {err}")
         print(f"stopped: {err}", file=sys.stderr)
         return 1
-    seen_f.write_text(json.dumps(sorted(seen)))
+    write_private(seen_f, json.dumps(sorted(seen)))
     append("runs.jsonl", {"on": TODAY, "read": read, "candidates": len(hits), "inventory": inv["hash"], "restartRequired": inv["restartRequired"]})
     scanlog(f"ok key={'yes' if KEY else 'no'} inventory={inv['hash']} read={read} candidates={len(hits)} already-recorded={len(again_hits)}"
             + "".join(f" [{e['cve']}: {why}]" for e, why, imp in hits) + (f" not-listed={','.join(not_listed)}" if not_listed else "")
@@ -1366,7 +1405,7 @@ def cmd_get_key(a) -> int:
         for i in d.get("issues", [])[:5] if isinstance(d.get("issues"), list) else []:
             print(f"  {clean(str(i.get('path', '')))}: {clean(str(i.get('message', '')))[:150]}", file=sys.stderr)
         return 1
-    private_dir()
+    private_dir(keep=True)
     fd = os.open(OUT / "key", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as fh:
         fh.write(str(d["key"]) + "\n")
@@ -1448,6 +1487,7 @@ def main() -> int:
     p.add_argument("--cve-file", help="file of CVE ids, one per line, # comments allowed")
     p.add_argument("--discover", action="store_true", help="find exploited CVEs added in the window (needs LATTICE_API_KEY)")
     p.add_argument("--debug", action="store_true", help="detailed execution log to stderr and debug.log (also LATTICE_SCAN_DEBUG=1)")
+    p.add_argument("--keep", action="store_true", help="keep this run's records in the default folder even with no terminal (also LATTICE_SCAN_KEEP=1); without it a terminal-less run with no folder yet uses a temporary one")
     p.add_argument("--refresh", action="store_true", help="collect the inventory again now and print all of it; with ids, also re-read them. Alone it makes no Lattice call")
     p.add_argument("--again", action="store_true", help="re-read ids already read before")
     p.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print what is being checked, step by step, on stderr (the default; see --quiet)")
@@ -1497,8 +1537,9 @@ def main() -> int:
     il = sub.add_parser("inventory", help="show inventory.log: counts and changes per run"); il.add_argument("-n", type=int, default=20)
     lg = sub.add_parser("log"); lg.add_argument("-n", type=int, default=20, help="last N lines (default 20)")
     a = p.parse_args()
-    global DEBUG, PROGRESS
+    global DEBUG, PROGRESS, KEEP
     DEBUG = a.debug or env("DEBUG") == "1"
+    KEEP = a.keep or env("KEEP") == "1"
     # OCO-5837: progress goes to stderr and is on by default; --quiet or LATTICE_SCAN_PROGRESS=0 turns it off. stdout is never touched.
     PROGRESS = not getattr(a, "quiet", False) and (getattr(a, "progress", False) or env("PROGRESS") != "0")
     if a.c is None and not (a.cve or a.cve_file or a.discover or a.refresh):
