@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.3.2 — 2026-11-04
+
+- The Claude and Codex skill reads NamiQ's own published notes before any outside site when the user asks what a CVE means, what to do about it or whether a fix exists: the note for the CVE (found through the sitemap), today's watch, the weakness page and the report behind a note. The skill still quotes mitigations and never applies them. Only the skill's text changes; the command-line tool behaves as in 0.3.1.
+
 ## 0.3.1 — 2026-11-04
 
 - Fix: `recent` stopped with "reads lattice-recent/2" when namiq.io's list moved to version 3. It now reads version 2 and every later version that only adds fields, and checks that the period it needs is there instead of matching one version number. Version 1 and a list that is not one are still refused with a request to upgrade.
