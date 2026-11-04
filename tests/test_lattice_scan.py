@@ -3,13 +3,15 @@
 Fixtures use invented products and reserved values: CVE-2099-*, example.invalid. No real host's package list appears here. The server is a local stub
 that speaks the MCP JSON-RPC shapes the tool reads, so no test touches the network or spends anyone's allowance.
 """
-import contextlib, io, json, os, sys, tempfile, threading, unittest
+import contextlib, io, json, os, sys, tempfile, threading, unittest, urllib.error
+from unittest import mock
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from lattice_scan import cli  # noqa: E402
+cli.RETRY_DELAYS = (0.0, 0.0)   # no real waiting between tries in tests
 
 INV = {"kernel": "6.1.0-99-example", "os": "Example OS", "node": "", "restartRequired": False, "hash": "t",
        "packages": {"libexamplelib2": "2.17.1-1", "acl": "2.3"}, "snaps": {}, "images": []}
@@ -226,6 +228,37 @@ class Client(unittest.TestCase):
         Stub.mode = "http500"
         rc, _, err = self.run_cli("--cve", "CVE-2099-0001")
         self.assertEqual(rc, 1); self.assertIn("HTTP 500", err)
+
+    def _flaky(self, fails, exc):
+        """Make the first `fails` network opens raise `exc`, then behave normally."""
+        real, calls = cli._OPENER.open, []
+        def open_(req, timeout=None):
+            calls.append(1)
+            if len(calls) <= fails:
+                raise exc
+            return real(req, timeout=timeout)
+        return mock.patch.object(cli._OPENER, "open", open_), calls
+
+    def test_a_handshake_timeout_is_retried_and_the_run_goes_on(self):
+        patch, calls = self._flaky(2, urllib.error.URLError("_ssl.c:1063: The handshake operation timed out"))
+        with patch:
+            rc, _, err = self.run_cli("--cve", "CVE-2099-0001")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("trying again", err); self.assertGreater(len(calls), 2)
+
+    def test_gives_up_after_three_tries_and_says_so(self):
+        patch, calls = self._flaky(99, urllib.error.URLError("handshake timed out"))
+        with patch:
+            rc, _, err = self.run_cli("--cve", "CVE-2099-0001")
+        self.assertEqual(rc, 1); self.assertEqual(len(calls), 3)
+        self.assertIn("cannot reach Lattice after 3 tries", err)
+
+    def test_a_rate_limit_or_client_error_is_not_retried(self):
+        Stub.mode = "http500"
+        patch, calls = self._flaky(0, None)
+        with patch:
+            rc, _, err = self.run_cli("--cve", "CVE-2099-0001")
+        self.assertEqual(rc, 1); self.assertIn("HTTP 500", err); self.assertEqual(len(calls), 1)
 
     def test_unreachable_server(self):
         cli.URL = "http://127.0.0.1:1/mcp"

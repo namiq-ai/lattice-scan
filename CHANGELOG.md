@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A request to Lattice that fails on the network (for example `The handshake operation timed out`) or with HTTP 502, 503 or 504 is tried up to three times, 2 s and then 6 s apart, and says so on stderr ("Lattice did not answer ...; trying again"). Before, one timeout stopped the whole run. Lookups only read, so asking again is safe. Other HTTP errors, such as a rate limit, are not retried. When all three tries fail the message is `cannot reach Lattice after 3 tries: ...`.
+
 ## 0.2.3 — 2026-11-04
 
 - The Claude skill (`SKILL.md`) now explains the result table, its columns (`EXPLOIT`, `CVSS`, `LISTED`, `PATCH DUE`, `RANSOM`, `RESULT`), the progress lines and `--quiet`, and how to word `RANSOM -` and `unlisted`.
