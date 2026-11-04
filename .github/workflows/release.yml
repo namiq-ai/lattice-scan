@@ -1,19 +1,65 @@
 name: release
+# Two ways in. (1) Actions > release > Run workflow, with a version such as 0.2.2: it checks that main already carries that version, creates the tag
+# v0.2.2 on main's head, writes the release notes (the hand-written release-notes/v0.2.2.md, or if there is none, one made from the CHANGELOG
+# section), and then does everything below. (2) Pushing a tag v* by hand does the same as before and still refuses a tag with no notes file.
 # Runs when a version tag is pushed. It builds, checks the tag against the package version, and makes a DRAFT GitHub release with checksums. A person
 # publishes the draft. The PyPI job below only runs after the "pypi" environment (set up by the owner, with required reviewers) approves it, and it
 # uses trusted publishing: there is no PyPI token anywhere in this repository.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, as in lattice_scan/__init__.py (for example 0.2.2). Must already be merged to main."
+        required: true
+        type: string
 
 permissions:
   contents: read
 
+env:
+  TAG: ${{ inputs.version && format('v{0}', inputs.version) || github.ref_name }}
+
 jobs:
+  tag:
+    # Only for a manual run: check main, create the tag. A tag made with the workflow token does not start a second run; the jobs below carry on in this one.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Run this from main
+        run: test "${GITHUB_REF}" = "refs/heads/main" || { echo "run the workflow on branch main (it is on ${GITHUB_REF})"; exit 1; }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Version, changelog and tag checks
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          case "${VERSION}" in *[!0-9.]*|"") echo "version must look like 0.2.2"; exit 1;; esac
+          v=$(python3 -c "import sys; sys.path.insert(0,'src'); from lattice_scan import __version__ as v; print(v)")
+          test "$v" = "${VERSION}" || { echo "main has version $v, not ${VERSION}: merge the version bump first"; exit 1; }
+          grep -q "^## ${VERSION} " CHANGELOG.md || { echo "CHANGELOG.md has no '## ${VERSION}' section"; exit 1; }
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null; then echo "tag ${TAG} already exists"; exit 1; fi
+      - name: Create the tag on main's head
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "lattice-scan ${VERSION}"
+          git push origin "refs/tags/${TAG}"
+
   build:
+    needs: tag
+    if: ${{ !cancelled() && (needs.tag.result == 'success' || needs.tag.result == 'skipped') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.version && format('refs/tags/v{0}', inputs.version) || github.ref }}
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
@@ -22,10 +68,33 @@ jobs:
       - name: Tag must equal the package version
         run: |
           v=$(python -c "import sys; sys.path.insert(0,'src'); from lattice_scan import __version__ as v; print(v)")
-          test "v$v" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} != package version v$v"; exit 1; }
-      - name: Release notes must exist for this tag
+          test "v$v" = "${TAG}" || { echo "tag ${TAG} != package version v$v"; exit 1; }
+      - name: Release notes (the hand-written file; made from the CHANGELOG only on a manual run)
+        env:
+          EVENT: ${{ github.event_name }}
         run: |
-          test -s "release-notes/${GITHUB_REF_NAME}.md" || { echo "release-notes/${GITHUB_REF_NAME}.md is missing or empty. Write the release notes before tagging (see RELEASING.md)."; exit 1; }
+          mkdir -p notes
+          if [ -s "release-notes/${TAG}.md" ]; then
+            cp "release-notes/${TAG}.md" notes/body.md
+          elif [ "${EVENT}" = "workflow_dispatch" ]; then
+            python3 - <<'PY'
+          import os, re
+          v = os.environ["TAG"][1:]
+          log = open("CHANGELOG.md", encoding="utf-8").read()
+          m = re.search(r"^## " + re.escape(v) + r" .*?\n(.*?)(?=^## |\Z)", log, re.S | re.M)
+          if not m or not m.group(1).strip():
+              raise SystemExit(f"CHANGELOG.md has no entries under {v}")
+          body = f"# lattice-scan {v}\n\n## Changes\n\n{m.group(1).strip()}\n\n## Install and verify\n\n"
+          body += f"- PyPI: `pip install lattice-scan=={v}`, or `uv tool upgrade lattice-scan`\n"
+          body += "- Signed apt repository: <https://namiq.io/apt>\n"
+          body += f"- Assets below: `lattice-scan.pyz`, `lattice-scan_{v}_all.deb`, the wheel and `SHA256SUMS`. Check with `sha256sum -c SHA256SUMS`.\n\n"
+          body += "These notes were made from the CHANGELOG because there is no `release-notes/" + os.environ["TAG"] + ".md`; edit the draft before publishing.\n"
+          open("notes/body.md", "w", encoding="utf-8").write(body)
+          PY
+          else
+            echo "release-notes/${TAG}.md is missing or empty. Write the release notes before tagging (see RELEASING.md)."; exit 1
+          fi
+          cat notes/body.md
       - run: python -W error::ResourceWarning -m unittest discover -s tests
       - run: python packaging/build.py
       - run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
@@ -33,6 +102,10 @@ jobs:
         with:
           name: dist
           path: dist/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: notes
+          path: notes/
 
   draft-release:
     needs: build
@@ -40,16 +113,18 @@ jobs:
     permissions:
       contents: write   # only this job may create the (draft) release
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: dist
           path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: notes
+          path: notes
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --draft --title "${GITHUB_REF_NAME}" \
-            --notes-file "release-notes/${GITHUB_REF_NAME}.md"
+          gh release create "${TAG}" dist/* --repo "${GITHUB_REPOSITORY}" --verify-tag --draft --title "${TAG}" --notes-file notes/body.md
 
   pypi:
     needs: build
