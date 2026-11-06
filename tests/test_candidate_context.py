@@ -110,6 +110,16 @@ class Context(Base):
         rc, out, _ = self.run_cli("--cve", "CVE-2099-0003,CVE-2099-0001")
         self.assertLess(out.index("  CVE-2099-0001  "), out.index("  CVE-2099-0003  "))
 
+    def test_open_finding_from_an_earlier_run_prints_its_saved_detail_with_no_call(self):
+        self.run_cli("--cve", "CVE-2099-0001")                                       # recorded as a finding
+        Stub.seen.clear()
+        rc, out, _ = self.run_cli("--cve", "CVE-2099-9999")                           # a later run that does not name it
+        self.assertEqual(rc, 0)
+        self.assertIn("not read in this run, so this is the detail saved then", out)
+        tail = out[out.index("so this is the detail saved then"):]
+        self.assertIn("EPSS 0.970", tail); self.assertIn("weakness: CWE-502", tail); self.assertIn("ATT&CK: T1190", tail)
+        self.assertEqual(len([1 for m, _, _ in Stub.seen if m == "tools/call"]), 1)   # only the named id; nothing re-read for the finding
+
 
 class Unlisted(Base):
     """A named id that CISA does not list still shows what Lattice holds on it."""
