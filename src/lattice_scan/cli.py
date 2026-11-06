@@ -32,7 +32,7 @@ Env: LATTICE_URL (default https://lattice.namiq.io/mcp), LATTICE_API_KEY, LATTIC
 LATTICE_SCAN_TODAY (YYYY-MM-DD), LATTICE_SCAN_WINDOW (days back; default 6 = seven days counting today).
 """
 from __future__ import annotations
-import argparse, atexit, datetime as dt, hashlib, json, os, re, shutil, statistics, subprocess, sys, tempfile, time, urllib.error, urllib.request
+import argparse, atexit, datetime as dt, hashlib, json, os, re, shutil, signal, statistics, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request
 from pathlib import Path
 
 from lattice_scan import __version__
@@ -367,7 +367,13 @@ PLACEHOLDER = {"", "none", "n/a", "not specified", "not applicable", "default st
 CHASSIS = {1: "other", 2: "unknown", 3: "desktop", 4: "low-profile desktop", 5: "pizza box", 6: "mini tower", 7: "tower", 8: "portable", 9: "laptop",
            10: "notebook", 11: "handheld", 12: "docking station", 13: "all-in-one", 14: "sub-notebook", 17: "server", 23: "rack-mount server",
            24: "blade", 28: "blade enclosure", 30: "tablet", 31: "convertible", 35: "mini PC", 36: "stick PC"}
-IMAGE_FILES = (("os", "etc/os-release"), ("os2", "usr/lib/os-release"), ("apk", "lib/apk/db/installed"), ("dpkg", "var/lib/dpkg/status"))
+IMAGE_FILES = (("os", "etc/os-release"), ("os2", "usr/lib/os-release"), ("apk", "lib/apk/db/installed"), ("dpkg", "var/lib/dpkg/status"),
+               ("dpkgd", "var/lib/dpkg/status.d"), ("rpm", "usr/lib/sysimage/rpm/rpmdb.sqlite"), ("rpm2", "var/lib/rpm/rpmdb.sqlite"))
+LANG_SECONDS = 180
+CONTAINER_LABEL = "io.lattice-scan.run"
+RUN_ID = f"{os.getpid()}-{int(time.time())}"
+STALE_MINUTES = 15  # LATTICE_SCAN_STALE_MINUTES
+
 IMAGE_FILE_LIMIT = 40 * 1024 * 1024
 IMAGE_LIMIT = 60
 
@@ -413,30 +419,148 @@ def hardware() -> dict:
 
 
 def run_bytes(cmd: list[str]) -> bytes:
-    """Like run(), for output that is not text (a tar stream); empty on any failure, and larger than IMAGE_FILE_LIMIT counts as a failure."""
+    """Like run(), for output that is not text (a tar stream). Reads at most IMAGE_FILE_LIMIT bytes into memory, then stops the command: a huge file is a failure,
+    not an out-of-memory. Empty on any failure."""
     try:
-        p = subprocess.run(cmd, capture_output=True, timeout=120)
-    except (OSError, subprocess.TimeoutExpired) as e:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError as e:
         dbg(f"collect: {' '.join(cmd[:3])}: failed {e!r}")
         return b""
-    if p.returncode or len(p.stdout) > IMAGE_FILE_LIMIT:
-        dbg(f"collect: {' '.join(cmd[:3])}: rc={p.returncode} {len(p.stdout)} bytes, skipped")
+    try:
+        timer = threading.Timer(120, proc.kill)
+        timer.start()
+        try:
+            data = proc.stdout.read(IMAGE_FILE_LIMIT + 1)
+        finally:
+            timer.cancel()
+        if len(data) > IMAGE_FILE_LIMIT:
+            proc.kill()
+            dbg(f"collect: {' '.join(cmd[:3])}: more than {IMAGE_FILE_LIMIT} bytes, skipped")
+            return b""
+        proc.wait()
+        if proc.returncode:
+            dbg(f"collect: {' '.join(cmd[:3])}: rc={proc.returncode}, skipped")
+            return b""
+        return data
+    except OSError as e:
+        dbg(f"collect: {' '.join(cmd[:3])}: failed {e!r}")
         return b""
-    return p.stdout
+    finally:
+        proc.kill()
+        proc.wait()
+        proc.stdout.close()
 
 
-def tar_file(blob: bytes) -> str:
-    """The text of the first regular file in a tar stream, or '' (docker cp writes its output as a tar)."""
+def tar_members(blob: bytes) -> dict[str, bytes]:
+    """name -> content of every regular file in a tar stream (docker cp writes a file or a folder as a tar)."""
     import io, tarfile
+    out: dict[str, bytes] = {}
     try:
         with tarfile.open(fileobj=io.BytesIO(blob)) as t:
             for m in t:
                 if m.isfile():
                     f = t.extractfile(m)
-                    return f.read().decode("utf-8", "replace") if f else ""
+                    if f:
+                        out[m.name] = f.read()
     except (tarfile.TarError, OSError, EOFError):
         pass
-    return ""
+    return out
+
+
+def parse_rpm_header(blob: bytes) -> dict[str, str]:
+    """name, version, release, epoch from one RPM header blob (the value stored in rpmdb.sqlite): int32 index count, int32 data size, 16-byte index entries, data."""
+    import struct
+    if len(blob) < 8:
+        return {}
+    il, dl = struct.unpack(">II", blob[:8])
+    if il > 100000 or 8 + il * 16 + dl > len(blob):
+        return {}
+    data = blob[8 + il * 16:8 + il * 16 + dl]
+    out = {}
+    for i in range(il):
+        tag, typ, off, cnt = struct.unpack(">IIII", blob[8 + i * 16:24 + i * 16])
+        if tag in (1000, 1001, 1002) and typ == 6 and off < len(data):
+            end = data.find(b"\0", off)
+            if end < 0:
+                continue
+            out[{1000: "name", 1001: "version", 1002: "release"}[tag]] = data[off:end].decode("utf-8", "replace")
+        elif tag == 1003 and typ == 4 and off + 4 <= len(data):
+            out["epoch"] = str(struct.unpack(">I", data[off:off + 4])[0])
+    return out
+
+
+def parse_rpm_sqlite(db: bytes) -> dict[str, str]:
+    """name -> [epoch:]version-release from an rpmdb.sqlite (Fedora 33+, RHEL 9+, Amazon Linux 2023, SUSE Tumbleweed). Berkeley DB and ndb databases are not read."""
+    import sqlite3
+    out: dict[str, str] = {}
+    if not db.startswith(b"SQLite format 3"):
+        return out
+    try:
+        with tempfile.TemporaryDirectory() as d:  # removed on leaving, also on an error; a full disk makes the write fail and the image is read without packages
+            f = Path(d) / "rpmdb.sqlite"
+            f.write_bytes(db)
+            con = sqlite3.connect(f"file:{f}?mode=ro", uri=True)
+            try:
+                for (blob,) in con.execute("SELECT blob FROM Packages"):
+                    h = parse_rpm_header(bytes(blob))
+                    if h.get("name") and h.get("name") != "gpg-pubkey":
+                        out[h["name"]] = (f"{h['epoch']}:" if h.get("epoch") else "") + f"{h.get('version', '')}-{h.get('release', '')}"
+            finally:
+                con.close()
+    except (OSError, sqlite3.Error, ValueError, TypeError) as e:
+        dbg(f"collect: rpmdb unreadable {e!r}")
+    return out
+
+
+def image_languages(cid: str) -> tuple[dict[str, dict[str, str]], bool]:
+    """Python, Node, Java and Ruby packages inside an image, from names and small manifests found while streaming `docker export` (nothing is extracted to disk).
+    Returns ({ecosystem: {name: 'v1|v2'}}, complete). Stops at LANG_SECONDS and says so."""
+    import tarfile
+    found: dict[str, dict[str, set]] = {"pypi": {}, "npm": {}, "maven": {}, "gem": {}}
+
+    def add(eco: str, name: str, ver: str) -> None:
+        if name and ver and len(found[eco]) < 8000:
+            found[eco].setdefault(name.lower() if eco != "maven" else name, set()).add(ver)
+    t0 = time.time()
+    proc = subprocess.Popen(["docker", "export", cid], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    complete = True
+    try:
+        with tarfile.open(fileobj=proc.stdout, mode="r|") as t:
+            for m in t:
+                if time.time() - t0 > LANG_SECONDS:
+                    complete = False
+                    break
+                n = m.name
+                parts = n.rstrip("/").split("/")
+                last = parts[-1]
+                if m.isdir() and last.endswith((".dist-info", ".egg-info")) and any(x in ("site-packages", "dist-packages") for x in parts[:-1]):
+                    stem = re.sub(r"-py\d[\d.]*$", "", last.rsplit(".", 1)[0])
+                    nm, _, ver = stem.rpartition("-")
+                    if nm and ver[:1].isdigit():
+                        add("pypi", nm.replace("_", "-"), ver)
+                elif m.isfile() and last == "package.json" and len(parts) >= 3 and "node_modules" in parts[:-1] and (
+                        parts[-3] == "node_modules" or (parts[-3].startswith("@") and parts[-4:-3] == ["node_modules"])) and m.size < 262144:
+                    try:
+                        j = json.loads(t.extractfile(m).read())
+                        add("npm", str(j.get("name", "")), str(j.get("version", "")))
+                    except (ValueError, AttributeError, OSError):
+                        pass
+                elif m.isfile() and last.endswith(".jar"):
+                    jm = re.match(r"^(.+?)-(\d[\w.\-]*)\.jar$", last)
+                    if jm:
+                        add("maven", jm.group(1), jm.group(2))
+                elif m.isdir() and len(parts) >= 2 and parts[-2] == "gems":
+                    gm = re.match(r"^(.+)-(\d[\w.]*?)(?:-[a-z0-9_]+)?$", last)
+                    if gm:
+                        add("gem", gm.group(1), gm.group(2))
+    except Exception as e:  # noqa: BLE001 - a damaged tar or an odd member must cost this image its language list, not the scan
+        dbg(f"collect: export of {cid[:12]}: {e!r}")
+        complete = False
+    finally:
+        proc.kill()
+        proc.wait()
+        proc.stdout.close()
+    return {k: {n: "|".join(sorted(v)) for n, v in d.items()} for k, d in found.items() if d}, complete
 
 
 def parse_os_release(text: str) -> dict:
@@ -478,7 +602,7 @@ def image_ref_parts(ref: str) -> tuple[str, str]:
     return name.rsplit("/", 1)[-1], tag
 
 
-def image_detail(ref: str, running: bool) -> dict | None:
+def image_detail(ref: str, running: bool, lang: bool = False) -> dict | None:
     """What is inside one local image, without starting it: docker image inspect for its metadata, then docker create + docker cp for the OS release file
     and the package database (apk or dpkg), then docker rm. Environment values are never kept except keys ending _VERSION, because images carry secrets there."""
     raw = run(["docker", "image", "inspect", ref])
@@ -491,7 +615,7 @@ def image_detail(ref: str, running: bool) -> dict | None:
     labels = cfg.get("Labels") or {}
     name, tag = image_ref_parts(ref)
     d: dict = {"name": name, "tag": tag, "running": running, "arch": meta.get("Architecture", ""), "platform": meta.get("Os", ""),
-               "id": (meta.get("Id") or "").replace("sha256:", "")[:12]}
+               "id": (meta.get("Id") or "").replace("sha256:", "")[:12], "layers": (meta.get("RootFS") or {}).get("Layers") or []}
     for k, lk in (("title", "org.opencontainers.image.title"), ("version", "org.opencontainers.image.version"), ("vendor", "org.opencontainers.image.vendor"),
                   ("baseName", "org.opencontainers.image.base.name"), ("source", "org.opencontainers.image.source")):
         if labels.get(lk):
@@ -503,51 +627,185 @@ def image_detail(ref: str, running: bool) -> dict | None:
             versions[k] = v
     if versions:
         d["versions"] = versions
-    cid = run(["docker", "create", "--pull", "never", "--network", "none", ref]).strip().splitlines()
+    cid = run(["docker", "create", "--pull", "never", "--network", "none", "--label", f"{CONTAINER_LABEL}={RUN_ID}", ref]).strip().splitlines()
     cid = cid[-1] if cid else ""
     if not cid:
         d["note"] = "metadata only: no container could be created to read files"
         return d
+    langs: dict = {}
     try:
-        got = {}
-        for key, path in IMAGE_FILES:
-            blob = run_bytes(["docker", "cp", f"{cid}:/{path}", "-"])
+        got: dict = {}
+        paths = dict(IMAGE_FILES)
+
+        def fetch(key: str) -> bool:
+            blob = run_bytes(["docker", "cp", f"{cid}:/{paths[key]}", "-"])
             if blob:
-                got[key] = tar_file(blob)
+                got[key] = tar_members(blob)
+            return bool(got.get(key))
+        # one copy per file that can exist: the OS file first, then the package database that OS family uses, and the other databases only if that found nothing
+        _ = fetch("os") or fetch("os2")
+        fam = parse_os_release(next(iter((got.get("os") or got.get("os2") or {}).values()), b"").decode("utf-8", "replace"))
+        ids = f"{fam.get('ID', '')} {fam.get('ID_LIKE', '')}".lower().split()
+        order = [k for k in ("apk", "dpkg", "dpkgd", "rpm", "rpm2")]
+        if "alpine" in ids:
+            order = ["apk"] + [k for k in order if k != "apk"]
+        elif {"debian", "ubuntu"} & set(ids):
+            order = ["dpkg", "dpkgd"] + [k for k in order if k not in ("dpkg", "dpkgd")]
+        elif {"fedora", "rhel", "centos", "amzn", "suse", "sles", "opensuse", "ol", "rocky", "almalinux"} & set(ids):
+            order = ["rpm", "rpm2"] + [k for k in order if k not in ("rpm", "rpm2")]
+        for k in order:
+            if fetch(k):
+                break
+        if lang:
+            langs, complete = image_languages(cid)
+            if not complete:
+                d["languagesPartial"] = True
     finally:
         run(["docker", "rm", "-f", cid])
-    osr = parse_os_release(got.get("os") or got.get("os2") or "")
+    first = lambda k: next(iter((got.get(k) or {}).values()), b"").decode("utf-8", "replace")  # noqa: E731
+    got_text = {k: first(k) for k in ("os", "os2", "apk", "dpkg")}
+    osr = parse_os_release(got_text["os"] or got_text["os2"])
     if osr:
         d["os"] = osr.get("ID", "")
         d["osVersion"] = osr.get("VERSION_ID", "")
         d["osName"] = osr.get("PRETTY_NAME") or osr.get("NAME", "")
         if osr.get("ID_LIKE"):
             d["osLike"] = osr["ID_LIKE"]
-    if got.get("apk"):
-        d["packages"], d["packageManager"] = parse_apk_db(got["apk"]), "apk"
-    elif got.get("dpkg"):
-        d["packages"], d["packageManager"] = parse_dpkg_status(got["dpkg"]), "dpkg"
-    if not osr and "packages" not in d:
+    rpm = next((v for k in ("rpm", "rpm2") for v in (got.get(k) or {}).values()), b"")
+    if got_text["apk"]:
+        d["packages"], d["packageManager"] = parse_apk_db(got_text["apk"]), "apk"
+    elif got_text["dpkg"]:
+        d["packages"], d["packageManager"] = parse_dpkg_status(got_text["dpkg"]), "dpkg"
+    elif got.get("dpkgd"):  # distroless: one control file per package
+        pk: dict[str, str] = {}
+        for name, raw in got["dpkgd"].items():
+            if not name.endswith((".md5sums", ".list")):
+                pk.update(parse_dpkg_status(raw.decode("utf-8", "replace")))
+        if pk:
+            d["packages"], d["packageManager"] = pk, "dpkg"
+    elif rpm:
+        pk = parse_rpm_sqlite(rpm)
+        if pk:
+            d["packages"], d["packageManager"] = pk, "rpm"
+    if langs:
+        d["languages"] = langs
+    if not osr and "packages" not in d and not langs:
         d["note"] = "no OS release file or package database found (a minimal or distroless image)"
     return d
 
 
+def sweep_containers(stale_only: bool) -> int:
+    """Remove the never-started containers this tool made: every one of this run (at the end and on exit), or, at the start, those of an earlier run that
+    was killed before it could clean up (older than STALE_MINUTES, so a scan running at the same time is not disturbed). Only containers carrying this
+    tool's label are touched."""
+    removed = 0
+    for line in run(["docker", "container", "ls", "-a", "--no-trunc", "--filter", f"label={CONTAINER_LABEL}", "--filter", "status=created",
+                     "--format", "{{.ID}}\t{{.Label \"" + CONTAINER_LABEL + "\"}}\t{{.CreatedAt}}"]).splitlines():
+        cid, _, rest = line.partition("\t")
+        run_id, _, created = rest.partition("\t")
+        if not cid:
+            continue
+        if stale_only:
+            if run_id == RUN_ID:
+                continue
+            try:
+                age = time.time() - dt.datetime.strptime(created[:19], "%Y-%m-%d %H:%M:%S").timestamp()
+            except ValueError:
+                continue
+            if age < int(env("STALE_MINUTES", str(STALE_MINUTES))) * 60:
+                continue
+        elif run_id != RUN_ID:
+            continue
+        run(["docker", "rm", "-f", cid])
+        removed += 1
+    if removed:
+        progress(f"[host] removed {removed} leftover scan container{'s' if removed > 1 else ''}" + (" from an earlier run that was stopped" if stale_only else ""))
+    return removed
+
+
+def docker_free_mb() -> int | None:
+    root = run(["docker", "info", "--format", "{{.DockerRootDir}}"]).strip()
+    try:
+        return shutil.disk_usage(root).free // 1048576 if root else None
+    except OSError:
+        return None
+
+
+def scan_level() -> str:
+    """quick (default) or deep. Deep opens every local image and the language packages inside; see --deep."""
+    return "deep" if env("LEVEL", "quick").lower() == "deep" else "quick"
+
+
+def lineage(details: dict[str, dict], others: dict[str, list] | None = None) -> None:
+    """Which local image each image was built on: another local image whose layers are exactly the first layers of this one (the longest wins; an image
+    with the same layers is a tag of the same image, not a base). Layer lists are dropped afterwards, keeping the count."""
+    for ref, d in details.items():
+        mine = d.get("layers") or []
+        best = ""
+        bestn = 0
+        for other, ol in [(k, v.get("layers") or []) for k, v in details.items()] + list((others or {}).items()):
+            if other != ref and 0 < len(ol) < len(mine) and mine[:len(ol)] == ol and len(ol) > bestn:
+                best, bestn = other, len(ol)
+        if best:
+            d["builtOn"] = best
+            d["sharedLayers"] = bestn
+    for d in details.values():
+        d["layerCount"] = len(d.pop("layers", []) or [])
+
+
 def image_details(running: list[str]) -> dict[str, dict]:
-    """Detail for every image on this machine, keyed by its reference. LATTICE_SCAN_IMAGES: all (default), running, or off."""
-    mode = env("IMAGES", "all").lower()
+    """Detail for every image on this machine, keyed by its reference. LATTICE_SCAN_LEVEL / --deep sets the defaults (quick: running images, no language scan; deep: all images and the language scan);
+    LATTICE_SCAN_IMAGES (all, running, off) and LATTICE_SCAN_IMAGES_LANG (all, running, off) override them."""
+    deep = scan_level() == "deep"
+    mode = env("IMAGES", "all" if deep else "running").lower()
     if mode == "off" or not shutil.which("docker"):
         return {}
+    free, need = docker_free_mb(), int(env("MIN_FREE_MB", "1024") or 1024)
+    if free is not None and free < need:
+        progress(f"[host] images not opened: only {free} MB free where Docker keeps its data (needs {need}; LATTICE_SCAN_MIN_FREE_MB); the image names are still listed")
+        return {}
+    sweep_containers(stale_only=True)
+    atexit.register(sweep_containers, False)
     refs = {r: True for r in running}
     if mode != "running":
         for l in run(["docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}"]).splitlines():
             if l and "<none>" not in l:
                 refs.setdefault(l, False)
     out = {}
-    for ref in sorted(refs)[:IMAGE_LIMIT]:
-        progress(f"[host] looking inside image {ref} ...")
-        d = image_detail(ref, refs[ref])
-        if d:
-            out[ref] = d
+    lang_mode = env("IMAGES_LANG", "all" if deep else "off").lower()
+    todo = sorted(refs)[:IMAGE_LIMIT]
+
+    deadline = time.time() + int(env("DEEP_SECONDS", "1800") or 1800)
+    skipped: list[str] = []
+
+    def one(ref: str) -> dict | None:
+        if time.time() > deadline:
+            skipped.append(ref)
+            return None
+        with_lang = lang_mode == "all" or (lang_mode == "running" and refs[ref])
+        progress(f"[host] looking inside image {ref}" + (" (also Python/Node/Java/Ruby packages; can take minutes)" if with_lang else "") + " ...")
+        try:
+            return image_detail(ref, refs[ref], with_lang)
+        except Exception as e:  # noqa: BLE001 - one unreadable image must not stop the scan
+            progress(f"[host] image {ref}: skipped, {type(e).__name__}: {str(e)[:100]}")
+            return None
+    from concurrent.futures import ThreadPoolExecutor
+    workers = 2 if lang_mode in ("all", "running") else 4  # the docker daemon does the work; the export stream is disk-heavy, so fewer at once
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for ref, d in zip(todo, ex.map(one, todo)):
+            if d:
+                out[ref] = d
+    sweep_containers(stale_only=False)
+    if skipped:
+        progress(f"[host] {len(skipped)} image(s) not opened, the time limit of {env('DEEP_SECONDS', '1800')} s (LATTICE_SCAN_DEEP_SECONDS) was reached: " + ", ".join(sorted(skipped)[:5]))
+    others = {}  # images that were not opened still show their layers, which is all lineage needs and costs one inspect
+    for l in run(["docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}"]).splitlines() if mode == "running" else []:
+        if l and "<none>" not in l and l not in out and l not in refs:
+            try:
+                others[l] = (json.loads(run(["docker", "image", "inspect", l]))[0].get("RootFS") or {}).get("Layers") or []
+            except (ValueError, IndexError, TypeError):
+                pass
+    lineage(out, others)
     if len(refs) > IMAGE_LIMIT:
         progress(f"[host] {len(refs) - IMAGE_LIMIT} more images not opened (limit {IMAGE_LIMIT}); set LATTICE_SCAN_IMAGES=running to open only running ones")
     return out
@@ -690,6 +948,10 @@ def image_words(ref: str, d: dict) -> dict[str, tuple[str, str]]:
             continue
         for w in stems(n):
             out.setdefault(w, (f"{n} {v}".strip(), v))
+    for eco, pk in (d.get("languages") or {}).items():
+        for n, v in pk.items():
+            for w in stems(n.rsplit("/", 1)[-1].lstrip("@")):
+                out.setdefault(w, (f"{eco} {n} {v.replace('|', ', ')}", v))
     if d.get("os"):
         out.setdefault(d["os"], (f"{d.get('osName') or d['os']}", d.get("osVersion", "")))
     return out
@@ -705,8 +967,7 @@ def in_images(want: set[str], basis: str, inv: dict) -> tuple[str, list[str], li
             for w in sorted(want):
                 label, v = have[w]
                 installed.append(f"{label} (image {ref})")
-                if v:
-                    vers.append(v)
+                vers += [x for x in v.split("|") if x]
     if not refs:
         return None
     return f"{basis} " + " ".join(sorted(want)) + " matches inside container image" + ("s " if len(refs) > 1 else " ") + ", ".join(refs), sorted(set(installed)), sorted(set(vers))
@@ -1118,7 +1379,9 @@ def show_inventory(inv: dict) -> None:
     for ref, d in sorted((inv.get("imageDetails") or {}).items()):
         print(f"  {ref}{'' if d.get('running') else ' (not running)'}: " + (d.get("osName") or d.get("note") or "OS unknown")
               + (f", {len(d['packages'])} {d['packageManager']} packages" if d.get("packages") else "")
-              + (f", product version {product_version(d)}" if product_version(d) else "") + (f", {d['arch']}" if d.get("arch") else ""))
+              + (f", product version {product_version(d)}" if product_version(d) else "") + (f", {d['arch']}" if d.get("arch") else "")
+              + (f", built on {d['builtOn']} ({d['sharedLayers']} of {d['layerCount']} layers shared)" if d.get("builtOn") else "")
+              + "".join(f", {len(v)} {e}" for e, v in sorted((d.get("languages") or {}).items())) + (" (language scan stopped at its time limit)" if d.get("languagesPartial") else ""))
     print(f"\nsnaps ({len(inv['snaps'])}):" + "".join(f"\n  {n:<32} {v}" for n, v in sorted(inv["snaps"].items())))
     print(f"\npackages ({len(inv['packages'])}):" + "".join(f"\n  {n:<44} {v}" for n, v in sorted(inv["packages"].items())))
 
@@ -1916,6 +2179,7 @@ def main() -> int:
     p.add_argument("--discover", action="store_true", help="find exploited CVEs added in the window (needs LATTICE_API_KEY)")
     p.add_argument("--debug", action="store_true", help="detailed execution log to stderr and debug.log (also LATTICE_SCAN_DEBUG=1)")
     p.add_argument("--keep", action="store_true", help="keep this run's records in the default folder even with no terminal (also LATTICE_SCAN_KEEP=1); without it a terminal-less run with no folder yet uses a temporary one")
+    p.add_argument("--deep", action="store_true", help="deep inventory: open every local image, not only running ones, and list the Python/Node/Java/Ruby packages inside them (minutes). Default is quick")
     p.add_argument("--refresh", action="store_true", help="collect the inventory again now and print all of it; with ids, also re-read them. Alone it makes no Lattice call")
     p.add_argument("--again", action="store_true", help="re-read ids already read before")
     p.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print what is being checked, step by step, on stderr (the default; see --quiet)")
@@ -1965,6 +2229,9 @@ def main() -> int:
     il = sub.add_parser("inventory", help="show inventory.log: counts and changes per run"); il.add_argument("-n", type=int, default=20)
     lg = sub.add_parser("log"); lg.add_argument("-n", type=int, default=20, help="last N lines (default 20)")
     a = p.parse_args()
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # a stopped run still cleans up (atexit); only SIGKILL cannot, and the next run sweeps what it left
+    if getattr(a, "deep", False):
+        os.environ["LATTICE_SCAN_LEVEL"] = "deep"
     global DEBUG, PROGRESS, KEEP
     DEBUG = a.debug or env("DEBUG") == "1"
     KEEP = a.keep or env("KEEP") == "1"

@@ -51,7 +51,7 @@ A match is a
 not a finding about the host: the report shows the installed version against NVD's ranges and whether the installed package's own Debian changelog names the CVE.
 For each candidate the tool also reads one more node from Lattice (no key needed) and prints a priority (fix first, fix soon or read, with its reasons), the EPSS score, CISA's SSVC assessment, the weakness, the start of NVD's description, the ATT&CK techniques the graph links to the CVE (marked likely when inferred), the first unaffected upstream version NVD lists and up to three references. Candidates are printed highest priority first. The priority is the tool's reading of CISA and FIRST fields, not a risk score or a verdict. If Lattice does not give the detail, the candidate is printed without it. A CVE named with \\fB\\-\\-cve\\fR that CISA does not list gets the same block without a priority (NVD's record status, EPSS and SSVC when present, weakness, description, techniques, references), at the cost of one more call.
 .PP
-The inventory also records the machine itself (manufacturer, product model and version, board, firmware version and date, architecture, CPU, memory and whether it is virtual; serial numbers and UUIDs are never read) and looks inside each local Docker image, so that an Alpine or Debian base image is known by its operating system release and its apk or dpkg package list, and a flaw in musl, busybox or openssl inside an image can become a candidate that names the image. Nothing is started: for each image the tool runs docker image inspect, then docker create with --pull never and --network none, copies only the OS release file and the package database out with docker cp, and removes the container. Environment variables of an image are not kept except those ending in _VERSION. Images with no OS release file or package database (distroless, scratch) are listed with a note. RPM databases are not read. Set LATTICE_SCAN_IMAGES to limit this.
+The inventory also records the machine itself (manufacturer, product model and version, board, firmware version and date, architecture, CPU, memory and whether it is virtual; serial numbers and UUIDs are never read) and looks inside each local Docker image, so that an Alpine or Debian base image is known by its operating system release and its apk or dpkg package list, and a flaw in musl, busybox or openssl inside an image can become a candidate that names the image. Nothing is started: for each image the tool runs docker image inspect, then docker create with --pull never, --network none and --label io.lattice-scan.run, copies only the OS release file and the package database out with docker cp, and removes the container. Environment variables of an image are not kept except those ending in _VERSION. Images with no OS release file or package database (distroless, scratch) are listed with a note. RPM databases in the sqlite format (Fedora, RHEL 9 and later, Amazon Linux 2023) are read; Berkeley DB and ndb databases are not. A distroless image is read from /var/lib/dpkg/status.d. In a deep inventory the tool also streams docker export once for each image and records the names and versions of Python (dist-info), Node (node_modules package.json), Java (jar file names) and Ruby (gems) packages inside, with a time limit of 180 seconds per image after which the result is marked partial. Each image also shows the other local image it was built on, when that image's layers are the first layers of this one. No registry is contacted. LATTICE_SCAN_IMAGES and LATTICE_SCAN_IMAGES_LANG override the level. Cleanup: the container is removed after each image, also on an error; at the end of the run and when the run is stopped (Ctrl-C or SIGTERM) every container it made is removed; a run killed with SIGKILL leaves at most one never-started container per image being read, which the next run removes if it is older than 15 minutes. Only containers with that label are touched (found with docker container ls --filter label=io.lattice-scan.run --no-trunc). Nothing is written to disk by docker cp or docker export (they are read from a pipe, with 40 MB at most in memory); an rpm database is written to a temporary folder that is removed at once. An image that fails is skipped and named; the others are kept. Images are not opened when less than 1024 MB is free where Docker keeps its data, and a run stops opening images after 30 minutes.
 .TP
 .BI \-\-cve " ID"
 A CVE id to check. Repeatable.
@@ -320,7 +320,22 @@ Set to 1 for \fB\-\-keep\fR.
 Days that \fB\-\-discover\fR looks back (default 6).
 .TP
 .B LATTICE_SCAN_IMAGES
-How far host mode looks into Docker images: all (default: every local image), running (only images a container is using) or off (names of running images only).
+Which images are opened, overriding the level: all, running (images a container is using; the quick default) or off (names of running images only).
+.TP
+.B LATTICE_SCAN_LEVEL
+quick (default) or deep, the same as --deep.
+.TP
+.B LATTICE_SCAN_MIN_FREE_MB
+Free space needed where Docker keeps its data before images are opened (default 1024). Below it the image names are listed and none is opened.
+.TP
+.B LATTICE_SCAN_DEEP_SECONDS
+Seconds after which no further image is opened (default 1800). Images not opened are named.
+.TP
+.B LATTICE_SCAN_STALE_MINUTES
+Age after which a leftover scan container from an earlier, killed run is removed (default 15).
+.TP
+.B LATTICE_SCAN_IMAGES_LANG
+Which images get the Python, Node, Java and Ruby package scan, overriding the level: all (the deep default), running or off (the quick default).
 .TP
 .B LATTICE_SCAN_INVENTORY
 A JSON inventory to use instead of collecting one (tests, other tools).
