@@ -51,6 +51,17 @@ python3 scripts/lattice-scan.pyz impact CVE-2026-1234               # the eviden
 Use only CVE ids the user gave you, that appear in the task or the text they pasted, or that `recent` listed. Do not invent ids. `--discover` (list what CISA added this week, read from
 Lattice itself) needs a Lattice key; `recent` does not.
 
+### Quick and deep: which to run, and how to keep the person informed
+
+A host scan has two levels. **Quick** (the default) reads the hardware, the installed packages and snaps, and the images that containers are running (their OS and package list); it takes seconds. **Deep** (`--deep`) also opens every other local image and lists the Python, Node, Java and Ruby packages inside every image; it takes minutes (about 6 for 24 images) and reads a lot of disk.
+
+1. **Run quick first, always.** Never start `--deep` on your own initiative.
+2. **Say what quick did not cover.** In your report write one line such as "Quick scan: running images only; stopped images and the packages inside images were not checked." A clean quick result is never "all clear".
+3. **Offer deep only when** the tool printed its `Quick scan: opened N of M local images ... lattice-scan --deep` line on stderr, or the user asked for a thorough, full or audit scan. Offer it in one sentence with the tool's own time estimate ("about 5 min"), and ask. Run it only on a yes. If the line also says the last deep scan was 30 or more days ago, say so.
+4. **Run deep in the background** and tell the person it started. Check its stderr about every minute or two and give one line each time, from the tool's own `[n/N %]` lines, for example "deep scan: 9 of 24 images, 2 min in". Say if one image is taking long (the largest ones take over a minute). Do not stay silent for the whole run and do not repeat every line.
+5. **If the person wants to stop, stop it** (Ctrl-C or SIGTERM). The tool removes the containers it made, and what was read so far is kept; say the result is partial. If the tool reports images "not opened" (time limit, low disk, an error), list them; do not call the scan complete.
+6. A deep result is more evidence, not a verdict. Candidates from inside an image name the image (`... (image redis:alpine)`): report that name, and remember an image version is not the host's package.
+
 ### A project instead of the host
 
 When the user names a project folder, check what it declares rather than what is installed. It reads requirements and pyproject, package.json and its lockfile, Maven, Gradle,
@@ -126,7 +137,7 @@ table as printed, then say what it means. Do not rebuild it from memory.
 | `MATCHED / COMPARED` | What matched, or what was compared. This is the column to quote. |
 
 - On a narrow terminal the tool hides `LISTED`, `PRODUCT` and `CVSS` (it says so under the table) so the last column keeps room. Output captured by this skill is not a terminal, so you get every column.
-- Progress lines (which part of the host or which file is being read, then `[n/N] CVE-...`) go to stderr and are on by default. Use `--quiet` (`-q`) when only the result is wanted. Standard output, `--format csv|json` and exit codes do not change.
+- Progress lines (which part of the host or which file is being read, `[n/N %] image ...` while images are opened, then `[n/N] CVE-...`) go to stderr and are on by default. Use `--quiet` (`-q`) when only the result is wanted. Standard output, `--format csv|json` and exit codes do not change.
 - A finding from an earlier run that is still open is part of the same table, so there is no separate "not yet fixed" line to look for.
 
 Offer to help the user read the vendor advisory against the installed version. Do not run `resolve`. Closing a finding needs the user's own proof (a changelog
