@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.4 — 2026-11-06
 
 - The package page on PyPI (the README) now has an overview table of what each command reads and what leaves the machine, and its Use section is grouped by purpose and lists `--deep`, `--refresh --inventory`, `--list` and `posture`. PyPI shows it from the next release.
 - A CVE you name that the graph holds only as a bare node now says so. A new CVE can be in Lattice as a stub with no NVD record, so `lattice-scan --cve ID` printed only "not in the graph's CISA list" and nothing else, and it looked as if the scan had failed. It now explains that the graph has no NVD record, description, EPSS, SSVC, weakness, ATT&CK link or reference for the id yet, that a bare node says nothing about risk, and what to do. When namiq.io's list of recent CVEs has the id (that request carries no id), it adds the product, CVSS and publication date from that list and whether something installed may match the product.
