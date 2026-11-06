@@ -85,6 +85,12 @@ logging variable initialization return value enterprise community edition projec
 connect secure firewall manager console platform service services application web client network cloud management product products
 online windows microsoft google apple oracle cisco adobe""".split())
 
+# Ordinary words that are also product names ("Docs", "Support", "Media Server"). A product made only of these says nothing about the installed item that happens
+# to contain the same word (gnome-user-docs, media-player-info), so it matches only when the vendor also appears among the installed names.
+WEAK = set("""admin agent base center common content core desktop docs document documents driver editor engine extension files form forms framework gateway guide help host
+image info install kit libre manager media member mobile module monitor multiple office panel player plugin portal print reader report search setup shell studio support suite
+tool tools unknown update user viewer wiki window windows work""".split())
+
 
 DEBUG = False
 PROGRESS = False
@@ -972,17 +978,32 @@ def candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str]] | None
         dbg(f"   match {entry['cve']} basis={basis}: no distinctive words in {product!r}, cannot match")
         return None
     have: dict[str, str] = {}
+    items: list[tuple[str, set[str]]] = []   # each installed name with its words, to ask whether a product's words sit together in one of them
     for n in inv["packages"]:
         for w in stems(n):
             have.setdefault(w, n)
+        items.append((n, stems(n)))
     for n in inv["snaps"]:
         have.setdefault(n.lower(), f"snap {n}")
+        items.append((f"snap {n}", {n.lower()} | stems(n)))
     for im in inv["images"]:
         for w in stems(im):
             have.setdefault(w, f"container image {im.split('@')[0]}")
+        items.append((f"container image {im.split('@')[0]}", stems(im)))
+    # The vendor is evidence only when it is a distinctive word and something with that word is installed (a package, a snap, an image, or inside an image).
+    vendor_words = {w for w in words(vendor) if w != "unknown"}
+    seen_words = set(have)
+    for ref, d in (inv.get("imageDetails") or {}).items():
+        seen_words |= set(image_words(ref, d))
+    vendor_ok = bool(vendor_words & seen_words)
+    if want <= WEAK and not vendor_ok:
+        dbg(f"   match {entry['cve']}: {sorted(want)} are ordinary words and vendor {vendor!r} is not installed, no match")
+        return None
+    whole = sorted(lab for lab, st in items if want <= st)   # installed names that hold every word of the product
+    together = len(want) < 2 or bool(whole) or vendor_ok
     dbg(f"   match {entry['cve']} basis={basis} wanted={sorted(want)} found={sorted(w for w in want if w in have)} missing={sorted(w for w in want if w not in have)}")
-    if all(w in have for w in want):
-        names = sorted({have[w] for w in want})
+    if all(w in have for w in want) and together:
+        names = whole if len(want) > 1 and whole else sorted({have[w] for w in want})
         if all(n.startswith("container image ") for n in names):  # a bare image name says little; the opened image gives its versions
             opened = in_images(want, basis, inv)
             if opened:
@@ -2437,7 +2458,7 @@ def main() -> int:
     pj.add_argument("--json", help="also write the full result as JSON to this file")
     pj.add_argument("--name", action="append", help="a label for each folder, in order (default: the folder name)")
     pj.add_argument("--color", choices=["auto", "always", "never"], default="auto", help="colour the console report (auto: only on a terminal, never with NO_COLOR)")
-    pj.add_argument("--width", type=int, help="console report width in columns (default: the terminal's, between 72 and 110)")
+    pj.add_argument("--width", type=int, help="console report width in columns (default: the terminal's, between 72 and 160)")
     pj.add_argument("--fail-on", choices=["never", "in-range", "candidate"], default="never", help="exit 1 when a candidate (or an in-range one) is found; default never: a person reads it")
     po = sub.add_parser("posture", help="what this host exposes and runs: listening ports, firewall, SSH settings, services; --deep also processes that no package owns. Read only, nothing is sent")
     po.add_argument("--deep", dest="posture_deep", action="store_true", help="also check every readable process (where its executable is, whether a package owns it, outbound connections of those that none does) and persistence points; about a minute")

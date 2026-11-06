@@ -107,7 +107,7 @@ def use_color(mode: str, stream) -> bool:
 def width_for(requested: int | None) -> int:
     if requested:
         return max(60, requested)
-    return max(72, min(shutil.get_terminal_size((100, 24)).columns, 110))
+    return max(72, min(shutil.get_terminal_size((100, 24)).columns, 160))
 
 
 def table(headers: list[str], rows: list[list[str]], width: int = 100, fit: bool = True, drop: tuple[str, ...] = (), min_last: int = 0) -> tuple[list[str], list[str]]:
