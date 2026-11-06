@@ -33,6 +33,7 @@ class Stub(BaseHTTPRequestHandler):
     seen: list = []
     other_port = 0
     tier = "keyless"
+    nodes: dict = {}         # graph_node answers by uid; an uid not here gets the refusal a server without keyless graph_node gives
 
     def log_message(self, *a):
         pass
@@ -52,6 +53,8 @@ class Stub(BaseHTTPRequestHandler):
             a = body["params"]["arguments"]
             if body["params"].get("name") == "graph_meta":
                 data = {"snapshot": "s1", "access": {"tier": Stub.tier}}
+            elif body["params"].get("name") == "graph_node":
+                data = Stub.nodes.get(a.get("uid"), {"error": "keyless_tool_not_allowed", "message": "graph_node needs a key"})
             else:
                 data = {"error": "quota_exceeded", "message": "daily limit reached"} if Stub.mode == "quota" else Stub.answers.get(a.get("id"), {"items": []})
             res = {"content": [{"type": "text", "text": json.dumps(data)}], "isError": False}

@@ -131,7 +131,7 @@ class AgentEntry(EntryBase):
                            {"id": "CVE-2099-0004", "vendor": "Zzzco", "product": "Zzzthing", "cvss": 9.9, "published": "2026-11-04"}])
         rc, out, err = self.run_cli("recent")
         self.assertEqual(rc, 0, err)
-        self.assertEqual(self.lattice_reads(), 1)                       # only the id that may match was sent to Lattice
+        self.assertEqual(self.lattice_reads(), 2)   # only the id that may match was sent to Lattice: its lookup and, for the candidate, one detail read
         row = {l.split()[0]: l for l in out.splitlines() if l.startswith("CVE-2099")}
         self.assertIn("CANDIDATE", row["CVE-2099-0001"])
         self.assertIn("unmatch", row["CVE-2099-0005"]); self.assertIn("not sent to Lattice", row["CVE-2099-0005"])
@@ -154,7 +154,7 @@ class AgentEntry(EntryBase):
         self.assertEqual(self.lattice_reads(), 0)                       # the id that matches this host is only in the weekly list
         self.assertIn("(daily, 2026-11-03 to 2026-11-04)", out); self.assertNotIn("CVE-2099-0001", out)
         rc, out, _ = self.run_cli("recent", "--period", "weekly")
-        self.assertIn("CANDIDATE", out); self.assertEqual(self.lattice_reads(), 1)
+        self.assertIn("CANDIDATE", out); self.assertEqual(self.lattice_reads(), 2)   # lookup + one detail read for the candidate
 
     def test_recent_defaults_to_the_weekly_list(self):
         Entry.feed = feed([exp("CVE-2099-0001")])
@@ -191,7 +191,7 @@ class AgentEntry(EntryBase):
         row = {l.split()[0]: l for l in out.splitlines() if l.startswith("CVE-2099")}
         self.assertIn("CANDIDATE", row["CVE-2099-0001"])
         self.assertNotIn("CVE-2099-0005", out)                          # the weekly list is not mixed in
-        self.assertEqual(self.lattice_reads(), 1)
+        self.assertEqual(self.lattice_reads(), 2)   # lookup + one detail read for the candidate
         rc, _, _ = self.run_cli("recent", "--period", "open")
         self.assertEqual(rc, 0)
 

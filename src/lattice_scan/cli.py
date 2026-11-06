@@ -623,6 +623,95 @@ def cells(e: dict | None) -> list[str]:
             f"{e['vendor'] or '-'} {e['product'] or '-'}".strip()]
 
 
+CONTEXT_DESC = 300
+
+
+def fixed_in(entry: dict) -> dict[str, list[str]]:
+    """The versions NVD says are the first unaffected, per product, from the ranges Lattice returned. Upstream numbers: a distro can fix under the same number."""
+    out: dict[str, list[str]] = {}
+    for r in entry.get("ranges", []):
+        if r.get("end_excluding") and r.get("product"):
+            out.setdefault(r["product"], [])
+            if r["end_excluding"] not in out[r["product"]]:
+                out[r["product"]].append(r["end_excluding"])
+    return dict(list(out.items())[:3])
+
+
+def context(lat: "Lattice", e: dict) -> dict:
+    """What a person needs to judge how urgent a candidate is and what it is (Lattice serves graph_node and links without a key).
+
+    One graph_node read of the NVD node (EPSS, CISA's SSVC, CWE, description, references) plus the links the lookup already carried (the ATT&CK
+    techniques and weaknesses it connects to). All of it is text from a server: cleaned, and shown as data. If the server refuses the read or has no
+    links the candidate is left as it was and the reason is one line on stderr. Returns {} when there is nothing.
+    """
+    props: dict = {}
+    if e.get("nvdUid"):
+        try:
+            props = lat.call("graph_node", uid=e["nvdUid"]).get("properties") or {}
+        except LatticeError as err:
+            progress(f"{e['cve']}: no detail from Lattice ({clean(str(err))[:120]}); showing the candidate without it")
+    md = props.get("metadata") or {}
+    ctx: dict = {}
+    epss = md.get("epss") or {}
+    if epss.get("score") is not None:
+        ctx["epss"] = {"score": epss.get("score"), "percentile": epss.get("percentile"), "date": clean(str(epss.get("date", "")))}
+    ssvc = md.get("ssvc") or {}
+    if ssvc:
+        ctx["ssvc"] = {k: clean(str(ssvc[k])) for k in ("exploitation", "automatable", "technical_impact") if ssvc.get(k)}
+    if props.get("cwe_refs"):
+        ctx["cwe"] = [clean(str(c)) for c in props["cwe_refs"]][:5]
+    if props.get("description"):
+        ctx["description"] = clean(str(props["description"]))[:CONTEXT_DESC]
+    refs = [clean(str(r)) for r in props.get("references") or [] if str(r).startswith(("http://", "https://"))][:3]
+    if refs:
+        ctx["references"] = refs
+    tech = []
+    for ln in e.get("links") or []:
+        if not isinstance(ln, dict) or "ATTACK" not in (ln.get("labels") or []):
+            continue
+        tech.append({"id": clean(str(ln.get("id", ""))), "title": clean(str(ln.get("title", ""))), "likely": ln.get("evidence_class") == "inferred"})
+    if tech:
+        ctx["techniques"] = tech
+    fx = fixed_in(e)
+    if fx and ctx:
+        ctx["fixedIn"] = fx
+    return ctx
+
+
+def priority(e: dict, imp: dict, ctx: dict) -> dict:
+    """The tool's reading of CISA and FIRST fields, in three words and the reasons it rests on. Not a risk score and not a verdict."""
+    fire, soon = [], []
+    if (e.get("ransomware") or "").strip().lower() == "known":
+        fire.append("CISA records ransomware use")
+    ssvc = ctx.get("ssvc") or {}
+    if ssvc.get("exploitation") == "active" and ssvc.get("automatable") == "yes":
+        fire.append("CISA SSVC: exploitation active and automatable")
+    if str(imp.get("dueStatus", "")).startswith("overdue"):
+        fire.append(f"CISA patch-due date passed ({imp['dueStatus']})")
+    score = (ctx.get("epss") or {}).get("score")
+    try:
+        if score is not None and float(score) >= 0.5:
+            soon.append(f"EPSS {float(score):.2f}")
+    except (TypeError, ValueError):
+        pass
+    if fire:
+        return {"level": "fix first", "reasons": fire + soon}
+    return {"level": "fix soon", "reasons": soon} if soon else {"level": "read", "reasons": []}
+
+
+PRIORITY_RANK = {"fix first": 0, "fix soon": 1, "read": 2}
+
+
+def add_context(lat: "Lattice", e: dict, imp: dict, reuse: dict | None = None) -> None:
+    """Put the context and priority into an impact record. `reuse` is a record saved earlier: its context is kept so a repeat run makes no extra call."""
+    ctx = (reuse or {}).get("context") if reuse else None
+    if not ctx:
+        ctx = context(lat, e)
+    if ctx:
+        imp["context"] = ctx
+        imp["priority"] = priority(e, imp, ctx)
+
+
 def kev_entry(lat: Lattice, cve: str) -> dict | None:
     """The CISA exploited entry for one CVE, or None when the graph has no kev node (which is not 'safe', only 'not listed in this snapshot').
 
@@ -635,7 +724,9 @@ def kev_entry(lat: Lattice, cve: str) -> dict | None:
     if not kev:
         return None
     nvd = next((i for i in items if i.get("source") == "nvd"), {})
-    e = {"cve": cve, "title": clean(kev.get("title", "")), "added": clean(str(kev.get("date_added", ""))), "due": clean(str(kev.get("due_date", ""))),
+    primary = next((i for i in items if i.get("primary")), nvd)
+    e = {"nvdUid": nvd.get("uid") or "", "links": primary.get("links") if isinstance(primary.get("links"), list) else [],
+         "cve": cve, "title": clean(kev.get("title", "")), "added": clean(str(kev.get("date_added", ""))), "due": clean(str(kev.get("due_date", ""))),
          "vendor": clean(kev.get("vendor_project", "")), "product": clean(kev.get("product", "")), "ransomware": clean(str(kev.get("known_ransomware_use", ""))), "cvss": nvd.get("cvss_score"), "action": clean(kev.get("required_action", "")),
          "affected": [clean(x.strip()) for x in str(nvd.get("affected_products", "")).split(";") if x.strip()],
          "ranges": [{k: clean(v) for k, v in r.items()} for r in (nvd.get("affected_ranges") or []) if isinstance(r, dict)]}
@@ -861,12 +952,14 @@ def cmd_run(a) -> int:
                          m[0] if m else "no package, snap, image or kernel matches"])
             if m and cve in known:
                 imp = impact(e, inv, m[1], m[2])
+                add_context(lat, e, imp, None if a.refresh else state()[cve].get("impact"))
                 if a.refresh or not state()[cve].get("impact"):
                     append("findings.jsonl", {"event": "impact", "ref": cve, "on": TODAY, "impact": imp})
                 again_hits.append((e, m[0], imp))
             if m and cve not in known:
                 why, installed, vers = m
                 imp = impact(e, inv, installed, vers)
+                add_context(lat, e, imp)
                 dbg(f"{cve}: IMPACT {json.dumps(imp)}")
                 if append_found_once({"event": "found", "ref": cve, "on": TODAY, "listed": e["added"], "due": e["due"], "title": e["title"], "why": why, "kind": "kev", "ransomware": e["ransomware"], "cvss": e["cvss"], "impact": imp}):
                     hits.append((e, why, imp))
@@ -893,6 +986,7 @@ def cmd_run(a) -> int:
                          f"{f.get('why', '')} (recorded {f.get('found', '?')}, not read in this run)"[:240]])
     rows += getattr(a, "extra_rows", [])   # `recent`: the feed's ids that were ruled out on this host and never sent to Lattice
     print_table(rows)
+    hits.sort(key=lambda h: PRIORITY_RANK.get((h[2].get("priority") or {}).get("level", "read"), 2))   # fix first, then fix soon, then read; ties keep the id order
     for e, why, imp in hits:
         print(f"  {e['cve']}  {e['title'][:70]}\n      because: {why}")
         print_impact(imp)
@@ -1432,6 +1526,32 @@ def print_impact(imp: dict) -> None:
             print("      (upstream numbers only: a distro can fix this under the same number, see the changelog line)")
     cl = imp.get("changelogNamesCve")
     print("      changelog names this CVE: " + (", ".join(cl) if cl else "no installed package's changelog does (or none is readable here)"))
+    print_context(imp)
+
+
+def print_context(imp: dict) -> None:
+    """The 'why it matters' lines. Server text, shown as data; priority is the tool's reading, not a verdict."""
+    ctx, pr = imp.get("context"), imp.get("priority")
+    if not ctx:
+        return
+    if pr:
+        print(f"      priority: {pr['level']}" + (f" ({'; '.join(pr['reasons'])})" if pr["reasons"] else "") + " [the tool's reading of CISA and FIRST fields, not a verdict]")
+    if ctx.get("epss"):
+        e = ctx["epss"]
+        pct = f", percentile {float(e['percentile']):.3f}" if e.get("percentile") is not None else ""
+        print(f"      EPSS {float(e['score']):.3f}{pct} (FIRST, {e.get('date') or 'date not given'}): the estimated chance of exploitation in the next 30 days")
+    if ctx.get("ssvc"):
+        print("      CISA SSVC: " + ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in ctx["ssvc"].items()))
+    if ctx.get("cwe"):
+        print(f"      weakness: {', '.join(ctx['cwe'])}")
+    if ctx.get("description"):
+        print(f"      what it is (NVD): {ctx['description']}")
+    for t in ctx.get("techniques", []):
+        print(f"      ATT&CK: {t['id']} {t['title']}" + (" (likely: the graph inferred this link)" if t["likely"] else ""))
+    for prod, vers in (ctx.get("fixedIn") or {}).items():
+        print(f"      first unaffected upstream version (NVD): {prod} {', '.join(vers)} (a distro can fix under the same number)")
+    for r in ctx.get("references", []):
+        print(f"      reference: {r}")
 
 
 def cmd_impact(a) -> int:

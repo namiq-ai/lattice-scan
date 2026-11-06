@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A candidate now says how urgent it is and what it is. For each candidate the tool reads one more node from Lattice, which needs no key since Lattice began serving it keyless, and prints a priority (`fix first`, `fix soon` or `read`, with the reasons), the EPSS score and percentile, CISA's SSVC assessment, the weakness (CWE), the start of NVD's description, the linked ATT&CK techniques (marked "likely" when the graph inferred the link), the first unaffected upstream version NVD lists, and up to three references. Candidates are listed highest priority first, and `lattice-scan impact CVE-...` shows the saved context. The priority is the tool's reading of CISA and FIRST fields, not a risk score or a verdict. A server that refuses the read or sends no links leaves the candidate exactly as before, with one line on stderr. A candidate costs one more call, which counts against the keyless limit. Only CVE ids and node ids Lattice returned leave the machine.
+
 ## 0.3.6 — 2026-11-04
 
 - An agent in its own sandbox can now run the host scan and `recent`. With a read-only or missing home folder the tool used to stop with a Python traceback (exit 1) when it first wrote its records; now it says on one line that the folder cannot be written and keeps that run's records in a temporary folder deleted when the run ends. If `LATTICE_SCAN_DIR` is set and cannot be used, it stops with exit 1 and one line naming it.
