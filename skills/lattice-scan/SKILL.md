@@ -7,7 +7,7 @@ license: Apache-2.0
 # lattice-scan: check this machine against exploited CVEs
 
 `lattice-scan` looks up CVE ids through the Lattice MCP server and compares each with what is installed on the machine it runs on: packages, snaps,
-running container images, the kernel. It prints evidence. A person reads it and decides. This skill makes Claude run it and report it faithfully.
+the hardware (maker, model, firmware), the contents of local container images (their base OS such as Alpine and their packages), the kernel. It prints evidence. A person reads it and decides. This skill makes Claude run it and report it faithfully.
 
 ## 0. Which command?
 

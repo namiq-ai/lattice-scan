@@ -362,11 +362,204 @@ def run(cmd: list[str]) -> str:
     return p.stdout
 
 
+PLACEHOLDER = {"", "none", "n/a", "not specified", "not applicable", "default string", "to be filled by o.e.m.", "system product name", "system version",
+               "system manufacturer", "default", "unknown", "o.e.m.", "type1productconfigid"}
+CHASSIS = {1: "other", 2: "unknown", 3: "desktop", 4: "low-profile desktop", 5: "pizza box", 6: "mini tower", 7: "tower", 8: "portable", 9: "laptop",
+           10: "notebook", 11: "handheld", 12: "docking station", 13: "all-in-one", 14: "sub-notebook", 17: "server", 23: "rack-mount server",
+           24: "blade", 28: "blade enclosure", 30: "tablet", 31: "convertible", 35: "mini PC", 36: "stick PC"}
+IMAGE_FILES = (("os", "etc/os-release"), ("os2", "usr/lib/os-release"), ("apk", "lib/apk/db/installed"), ("dpkg", "var/lib/dpkg/status"))
+IMAGE_FILE_LIMIT = 40 * 1024 * 1024
+IMAGE_LIMIT = 60
+
+
+def hardware() -> dict:
+    """What this machine is: manufacturer, model, version, board, firmware. Read from the kernel's own files; serial numbers and UUIDs are left out on purpose."""
+    def rd(p: str) -> str:
+        try:
+            v = Path(p).read_text(errors="replace").replace("\0", "").strip()
+        except OSError:
+            return ""
+        return "" if v.lower() in PLACEHOLDER else v
+    d = "/sys/class/dmi/id/"
+    h = {"manufacturer": rd(d + "sys_vendor"), "model": rd(d + "product_name"), "version": rd(d + "product_version"), "family": rd(d + "product_family"),
+         "boardVendor": rd(d + "board_vendor"), "board": rd(d + "board_name"), "boardVersion": rd(d + "board_version"),
+         "biosVendor": rd(d + "bios_vendor"), "biosVersion": rd(d + "bios_version"), "biosDate": rd(d + "bios_date")}
+    ct = rd(d + "chassis_type")
+    if ct.isdigit():
+        h["chassis"] = CHASSIS.get(int(ct), f"type {ct}")
+    if not h["model"]:  # ARM boards and many single-board computers carry no DMI table; the device tree names the board
+        dtm = rd("/proc/device-tree/model") or rd("/sys/firmware/devicetree/base/model")
+        if dtm:
+            h["model"], h["source"] = dtm, "device-tree"
+    h["arch"] = run(["uname", "-m"]).strip()
+    cpu = ""
+    try:
+        for l in Path("/proc/cpuinfo").read_text(errors="replace").splitlines():
+            if l.lower().startswith(("model name", "hardware", "cpu model")) and ":" in l:
+                cpu = l.split(":", 1)[1].strip()
+                break
+    except OSError:
+        pass
+    if not cpu:
+        cpu = next((l.split(":", 1)[1].strip() for l in run(["lscpu"]).splitlines() if l.lower().startswith("model name") and ":" in l), "")
+    h["cpu"] = cpu
+    try:
+        kb = next(int(l.split()[1]) for l in Path("/proc/meminfo").read_text().splitlines() if l.startswith("MemTotal:"))
+        h["memoryGiB"] = round(kb / 1048576, 1)
+    except (OSError, StopIteration, ValueError, IndexError):
+        pass
+    h["virtualisation"] = run(["systemd-detect-virt"]).strip() or ""
+    return {k: v for k, v in h.items() if v not in ("", None)}
+
+
+def run_bytes(cmd: list[str]) -> bytes:
+    """Like run(), for output that is not text (a tar stream); empty on any failure, and larger than IMAGE_FILE_LIMIT counts as a failure."""
+    try:
+        p = subprocess.run(cmd, capture_output=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        dbg(f"collect: {' '.join(cmd[:3])}: failed {e!r}")
+        return b""
+    if p.returncode or len(p.stdout) > IMAGE_FILE_LIMIT:
+        dbg(f"collect: {' '.join(cmd[:3])}: rc={p.returncode} {len(p.stdout)} bytes, skipped")
+        return b""
+    return p.stdout
+
+
+def tar_file(blob: bytes) -> str:
+    """The text of the first regular file in a tar stream, or '' (docker cp writes its output as a tar)."""
+    import io, tarfile
+    try:
+        with tarfile.open(fileobj=io.BytesIO(blob)) as t:
+            for m in t:
+                if m.isfile():
+                    f = t.extractfile(m)
+                    return f.read().decode("utf-8", "replace") if f else ""
+    except (tarfile.TarError, OSError, EOFError):
+        pass
+    return ""
+
+
+def parse_os_release(text: str) -> dict:
+    kv = {}
+    for l in text.splitlines():
+        k, eq, v = l.partition("=")
+        if eq and k in ("ID", "ID_LIKE", "VERSION_ID", "VERSION_CODENAME", "PRETTY_NAME", "NAME"):
+            kv[k] = v.strip().strip('"')
+    return kv
+
+
+def parse_apk_db(text: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for block in text.split("\n\n"):
+        n = v = ""
+        for l in block.splitlines():
+            if l.startswith("P:"):
+                n = l[2:].strip()
+            elif l.startswith("V:"):
+                v = l[2:].strip()
+        if n:
+            out[n] = v
+    return out
+
+
+def parse_dpkg_status(text: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for block in text.split("\n\n"):
+        f = dict(l.split(": ", 1) for l in block.splitlines() if ": " in l and not l.startswith(" "))
+        if f.get("Package") and "installed" in f.get("Status", "installed").split() and "not-installed" not in f.get("Status", ""):
+            out[f["Package"]] = f.get("Version", "")
+    return out
+
+
+def image_ref_parts(ref: str) -> tuple[str, str]:
+    """('postgres', '16-alpine') from 'docker.io/library/postgres:16-alpine'; the tag is '' for an id or a digest."""
+    base = ref.split("@")[0]
+    name, _, tag = base.rpartition(":") if ":" in base.rsplit("/", 1)[-1] else (base, "", "")
+    return name.rsplit("/", 1)[-1], tag
+
+
+def image_detail(ref: str, running: bool) -> dict | None:
+    """What is inside one local image, without starting it: docker image inspect for its metadata, then docker create + docker cp for the OS release file
+    and the package database (apk or dpkg), then docker rm. Environment values are never kept except keys ending _VERSION, because images carry secrets there."""
+    raw = run(["docker", "image", "inspect", ref])
+    try:
+        meta = json.loads(raw)[0]
+    except (ValueError, IndexError, TypeError):
+        progress(f"[host] image {ref}: not readable, left as a name only")
+        return None
+    cfg = meta.get("Config") or {}
+    labels = cfg.get("Labels") or {}
+    name, tag = image_ref_parts(ref)
+    d: dict = {"name": name, "tag": tag, "running": running, "arch": meta.get("Architecture", ""), "platform": meta.get("Os", ""),
+               "id": (meta.get("Id") or "").replace("sha256:", "")[:12]}
+    for k, lk in (("title", "org.opencontainers.image.title"), ("version", "org.opencontainers.image.version"), ("vendor", "org.opencontainers.image.vendor"),
+                  ("baseName", "org.opencontainers.image.base.name"), ("source", "org.opencontainers.image.source")):
+        if labels.get(lk):
+            d[k] = str(labels[lk])[:200]
+    versions = {}
+    for e in cfg.get("Env") or []:
+        k, _, v = e.partition("=")
+        if k.endswith("_VERSION") and v and len(v) < 40:
+            versions[k] = v
+    if versions:
+        d["versions"] = versions
+    cid = run(["docker", "create", "--pull", "never", "--network", "none", ref]).strip().splitlines()
+    cid = cid[-1] if cid else ""
+    if not cid:
+        d["note"] = "metadata only: no container could be created to read files"
+        return d
+    try:
+        got = {}
+        for key, path in IMAGE_FILES:
+            blob = run_bytes(["docker", "cp", f"{cid}:/{path}", "-"])
+            if blob:
+                got[key] = tar_file(blob)
+    finally:
+        run(["docker", "rm", "-f", cid])
+    osr = parse_os_release(got.get("os") or got.get("os2") or "")
+    if osr:
+        d["os"] = osr.get("ID", "")
+        d["osVersion"] = osr.get("VERSION_ID", "")
+        d["osName"] = osr.get("PRETTY_NAME") or osr.get("NAME", "")
+        if osr.get("ID_LIKE"):
+            d["osLike"] = osr["ID_LIKE"]
+    if got.get("apk"):
+        d["packages"], d["packageManager"] = parse_apk_db(got["apk"]), "apk"
+    elif got.get("dpkg"):
+        d["packages"], d["packageManager"] = parse_dpkg_status(got["dpkg"]), "dpkg"
+    if not osr and "packages" not in d:
+        d["note"] = "no OS release file or package database found (a minimal or distroless image)"
+    return d
+
+
+def image_details(running: list[str]) -> dict[str, dict]:
+    """Detail for every image on this machine, keyed by its reference. LATTICE_SCAN_IMAGES: all (default), running, or off."""
+    mode = env("IMAGES", "all").lower()
+    if mode == "off" or not shutil.which("docker"):
+        return {}
+    refs = {r: True for r in running}
+    if mode != "running":
+        for l in run(["docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}"]).splitlines():
+            if l and "<none>" not in l:
+                refs.setdefault(l, False)
+    out = {}
+    for ref in sorted(refs)[:IMAGE_LIMIT]:
+        progress(f"[host] looking inside image {ref} ...")
+        d = image_detail(ref, refs[ref])
+        if d:
+            out[ref] = d
+    if len(refs) > IMAGE_LIMIT:
+        progress(f"[host] {len(refs) - IMAGE_LIMIT} more images not opened (limit {IMAGE_LIMIT}); set LATTICE_SCAN_IMAGES=running to open only running ones")
+    return out
+
+
 def inventory() -> dict:
     fixed = env("INVENTORY")
     if fixed:
         inv = json.loads(Path(fixed).read_text())
         inv.setdefault("hash", "fixed")
+        inv.setdefault("host", {})
+        inv.setdefault("imageDetails", {})
         progress("[host] inventory read from a fixed file (LATTICE_SCAN_INVENTORY), nothing collected from this machine")
         return inv
     pk: dict[str, str] = {}
@@ -400,9 +593,16 @@ def inventory() -> dict:
         pass
     kernel = run(["uname", "-r"]).strip()
     progress(f"[host] kernel: {kernel or 'unknown'}" + (f", os: {osr}" if osr else ""))
-    inv = {"kernel": kernel, "os": osr, "packages": pk, "snaps": snaps, "images": images, "node": run(["node", "-v"]).strip(),
+    host = hardware()
+    progress("[host] hardware: " + (" ".join(x for x in (host.get("manufacturer"), host.get("model"), host.get("version")) if x) or "not reported by this machine"))
+    details = image_details(images)
+    progress(f"[host] images opened: {len(details)}" + (f" ({sum(1 for d in details.values() if d.get('packages'))} with a package list)" if details else ""))
+    inv = {"kernel": kernel, "os": osr, "host": host, "packages": pk, "snaps": snaps, "images": images, "imageDetails": details, "node": run(["node", "-v"]).strip(),
            "restartRequired": Path("/var/run/reboot-required").exists()}
-    inv["hash"] = hashlib.sha256(json.dumps({k: inv[k] for k in ("kernel", "packages", "snaps", "images", "node")}, sort_keys=True).encode()).hexdigest()[:12]
+    inv["hash"] = hashlib.sha256(json.dumps({k: inv[k] for k in ("kernel", "packages", "snaps", "images", "node")}
+                                            | {"host": {k: host.get(k) for k in ("manufacturer", "model", "version", "biosVersion")},
+                                               "imageDetails": {r: [d.get("id"), d.get("os"), d.get("osVersion"), len(d.get("packages") or {})] for r, d in details.items()}},
+                                            sort_keys=True).encode()).hexdigest()[:12]
     return inv
 
 
@@ -455,9 +655,71 @@ def candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str]] | None
     dbg(f"   match {entry['cve']} basis={basis} wanted={sorted(want)} found={sorted(w for w in want if w in have)} missing={sorted(w for w in want if w not in have)}")
     if all(w in have for w in want):
         names = sorted({have[w] for w in want})
+        if all(n.startswith("container image ") for n in names):  # a bare image name says little; the opened image gives its versions
+            opened = in_images(want, basis, inv)
+            if opened:
+                return opened
         installed = [f"{n} {inv['packages'][n]}" if n in inv["packages"] else n for n in names]
         vers = [inv["packages"][n] for n in names if n in inv["packages"]] + [inv["snaps"][n[5:]] for n in names if n.startswith("snap ") and n[5:] in inv["snaps"]]
         return f"{basis} " + " ".join(sorted(want)) + " matches " + ", ".join(names), installed, vers
+    return in_images(want, basis, inv) or in_hardware(want, inv)
+
+
+def product_version(d: dict) -> str:
+    """The version of what the image is FOR: the *_VERSION variable named like the image (REDIS_VERSION in redis, PG_VERSION in postgres), else the version label,
+    else a number leading the tag. Helper variables such as GOSU_VERSION are never taken for it."""
+    ns = stems(d.get("name", ""))
+    for k, v in (d.get("versions") or {}).items():
+        base = k.removesuffix("_VERSION").lower()
+        if stems(base) & ns or (base.startswith("pg") and "postgres" in ns) or (base.startswith("pg") and "pgvector" in ns):
+            return v
+    return d.get("version", "") or re.sub(r"[^0-9.].*$", "", d.get("tag", ""))
+
+
+def image_words(ref: str, d: dict) -> dict[str, tuple[str, str]]:
+    """word -> (what it names, its version) for one image: its package names, its product (name, labels, *_VERSION variables) and its base OS."""
+    out: dict[str, tuple[str, str]] = {}
+    prod_ver = product_version(d)
+    for w in stems(d.get("name", "")) | stems(d.get("title", "")):
+        out.setdefault(w, (f"{d.get('name') or w} {prod_ver}".strip(), prod_ver))
+    for k, v in (d.get("versions") or {}).items():
+        for w in stems(k.removesuffix("_VERSION")):
+            out.setdefault(w, (f"{k.removesuffix('_VERSION').lower()} {v}", v))
+    for n, v in (d.get("packages") or {}).items():
+        if n.startswith("."):  # apk virtual packages (.redis-rundeps) are build bookkeeping, not software
+            continue
+        for w in stems(n):
+            out.setdefault(w, (f"{n} {v}".strip(), v))
+    if d.get("os"):
+        out.setdefault(d["os"], (f"{d.get('osName') or d['os']}", d.get("osVersion", "")))
+    return out
+
+
+def in_images(want: set[str], basis: str, inv: dict) -> tuple[str, list[str], list[str]] | None:
+    """A candidate from inside container images: every wanted word is found within ONE image, so an Alpine musl flaw names the Alpine images carrying musl."""
+    installed, vers, refs = [], [], []
+    for ref, d in sorted((inv.get("imageDetails") or {}).items()):
+        have = image_words(ref, d)
+        if want and all(w in have for w in want):
+            refs.append(ref)
+            for w in sorted(want):
+                label, v = have[w]
+                installed.append(f"{label} (image {ref})")
+                if v:
+                    vers.append(v)
+    if not refs:
+        return None
+    return f"{basis} " + " ".join(sorted(want)) + " matches inside container image" + ("s " if len(refs) > 1 else " ") + ", ".join(refs), sorted(set(installed)), sorted(set(vers))
+
+
+def in_hardware(want: set[str], inv: dict) -> tuple[str, list[str], list[str]] | None:
+    """A candidate from the machine itself: firmware or board advisories name a maker and a model."""
+    h = inv.get("host") or {}
+    parts = {k: h[k] for k in ("manufacturer", "model", "board", "boardVendor", "biosVendor") if h.get(k)}
+    have = {w for v in parts.values() for w in stems(v)}
+    if want and all(w in have for w in want):
+        return ("product " + " ".join(sorted(want)) + " matches this machine's hardware", [f"hardware {' '.join(parts.values())}"],
+                [h["biosVersion"]] if h.get("biosVersion") else [])
     return None
 
 
@@ -552,7 +814,7 @@ def version_check(entry: dict, vers: list[str]) -> dict:
 def changelog_mentions(cve: str, installed: list[str], inv: dict) -> list[str]:
     """Installed Debian packages whose own changelog names this CVE: the local evidence that a distro backported the fix under an unchanged upstream number."""
     import gzip
-    names = [i.split(" ")[0] for i in installed if i.split(" ")[0] in inv["packages"]]
+    names = [i.split(" ")[0] for i in installed if "(image " not in i and i.split(" ")[0] in inv["packages"]]
     if any(i.startswith("kernel ") for i in installed):
         k = inv["kernel"]
         names += [n for n in (f"linux-image-{k}", f"linux-image-unsigned-{k}", f"linux-modules-{k}", f"linux-headers-{k}") if n in inv["packages"]]
@@ -579,6 +841,8 @@ def impact(entry: dict, inv: dict, installed: list[str], vers: list[str]) -> dic
     have = set()
     for n in list(inv["packages"]) + list(inv["snaps"]) + list(inv["images"]):
         have |= stems(n)
+    for ref, d in (inv.get("imageDetails") or {}).items():
+        have |= set(image_words(ref, d))
     nvd = []
     for slug in entry.get("affected", []):
         prod = slug.partition("/")[2].replace("_", " ")
@@ -806,7 +1070,10 @@ def inventory_log(inv: dict, prev: dict | None, refresh: bool = False) -> None:
         return f"+{len(add)} -{len(rem)} ~{len(chg)}" + "".join([f" +{n} {new[n]}" for n in add[:30]] + [f" -{n} {old[n]}" for n in rem[:30]] + [f" ~{n} {old[n]}->{new[n]}" for n in chg[:30]])
     now = dt.datetime.now().isoformat(timespec="seconds")
     lines = [f"{now} {'REFRESH ' if refresh else ''}inventory {inv['hash']} os={inv['os']!r} kernel={inv['kernel']} node={inv.get('node') or '-'} "
-             f"packages={len(inv['packages'])} snaps={len(inv['snaps'])} images={len(inv['images'])} restartRequired={inv['restartRequired']}"]
+             f"packages={len(inv['packages'])} snaps={len(inv['snaps'])} images={len(inv['images'])} restartRequired={inv['restartRequired']}",
+             f"{now}   hardware {' '.join(x for x in ((inv.get('host') or {}).get(k) for k in ('manufacturer', 'model', 'version')) if x) or '-'}"
+             f" firmware={(inv.get('host') or {}).get('biosVersion') or '-'}; images opened={len(inv.get('imageDetails') or {})}: "
+             + ", ".join(f"{r}={d.get('os') or '?'}{d.get('osVersion') or ''}/{len(d.get('packages') or {})}pkg" for r, d in sorted((inv.get('imageDetails') or {}).items()))]
     if prev is None:
         lines.append(f"{now}   first inventory on record, nothing to compare")
     elif prev.get("hash") == inv["hash"]:
@@ -839,7 +1106,19 @@ def state() -> dict[str, dict]:
 
 def show_inventory(inv: dict) -> None:
     print(f"inventory {inv['hash']}: {inv['os']}, kernel {inv['kernel']}, node {inv.get('node') or '-'}, restartRequired={inv['restartRequired']}")
-    print(f"\nimages ({len(inv['images'])}):" + "".join(f"\n  {i}" for i in inv["images"]))
+    h = inv.get("host") or {}
+    if h:
+        print("\nhardware:")
+        for k, label in (("manufacturer", "manufacturer"), ("model", "model"), ("version", "version"), ("family", "family"), ("chassis", "chassis"), ("boardVendor", "board maker"),
+                         ("board", "board"), ("boardVersion", "board version"), ("biosVendor", "firmware maker"), ("biosVersion", "firmware version"), ("biosDate", "firmware date"),
+                         ("arch", "architecture"), ("cpu", "cpu"), ("memoryGiB", "memory GiB"), ("virtualisation", "virtualisation")):
+            if h.get(k):
+                print(f"  {label:<17} {h[k]}")
+    print(f"\nimages ({len(inv['images'])} running, {len(inv.get('imageDetails') or {})} opened):" + "".join(f"\n  {i}" for i in inv["images"]))
+    for ref, d in sorted((inv.get("imageDetails") or {}).items()):
+        print(f"  {ref}{'' if d.get('running') else ' (not running)'}: " + (d.get("osName") or d.get("note") or "OS unknown")
+              + (f", {len(d['packages'])} {d['packageManager']} packages" if d.get("packages") else "")
+              + (f", product version {product_version(d)}" if product_version(d) else "") + (f", {d['arch']}" if d.get("arch") else ""))
     print(f"\nsnaps ({len(inv['snaps'])}):" + "".join(f"\n  {n:<32} {v}" for n, v in sorted(inv["snaps"].items())))
     print(f"\npackages ({len(inv['packages'])}):" + "".join(f"\n  {n:<44} {v}" for n, v in sorted(inv["packages"].items())))
 
