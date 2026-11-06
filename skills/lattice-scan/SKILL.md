@@ -20,6 +20,7 @@ Start here. You do not need a CVE id in hand.
 | Ids inside text: `npm audit`, `pip-audit`, `trivy`, an advisory, a ticket | `enrich` (pipe the text in, or `--file FILE`) | For each id: exploited by CISA's list? since when? patch due? ransomware? It does not look at this host |
 | A project folder | `project FOLDER --cve ...` | Reads what the folder declares (section 2) |
 | A host question and a CVE you can name from the task | `--cve` | Never invent an id |
+| "Is this server exposed?", "what ports are open?", "is SSH locked down?", "is anything strange running?" | `posture` (then `posture --deep` if the person agrees) | Listening ports, firewall, SSH settings, services; deep adds processes no package owns. Read only, nothing is sent (section 2b) |
 
 `recent` is the right first move for a general question. Running the tool with no arguments at all does `recent --daily`. Say that its answer covers what was recently added, and that an empty result is not "safe".
 
@@ -63,6 +64,19 @@ A host scan has two levels. **Quick** (the default) reads the hardware, the inst
 4. **Run deep in the background** and tell the person it started. Check its stderr about every minute or two and give one line each time, from the tool's own `[n/N %]` lines, for example "deep scan: 9 of 24 images, 2 min in". Say if one image is taking long (the largest ones take over a minute). Do not stay silent for the whole run and do not repeat every line.
 5. **If the person wants to stop, stop it** (Ctrl-C or SIGTERM). The tool removes the containers it made, and what was read so far is kept; say the result is partial. If the tool reports images "not opened" (time limit, low disk, an error), list them; do not call the scan complete.
 6. A deep result is more evidence, not a verdict. Candidates from inside an image name the image (`... (image redis:alpine)`): report that name, and remember an image version is not the host's package.
+
+### Exposure and running processes: `posture`
+
+```bash
+python3 scripts/lattice-scan.pyz posture                 # quick: ports, firewall, ssh, services (seconds)
+python3 scripts/lattice-scan.pyz posture --deep          # also processes and persistence points (about a minute)
+```
+
+1. **Quick first; offer deep.** Deep reads every process; run it when the person asks "is anything strange running?" or agrees to your offer.
+2. **Say the scope.** The report's first line says whether it ran as root or as a normal user. Tell the person. As a normal user the firewall rules, the effective SSH settings and other users' processes are *not read*; say that, quote the NOT READ line, and do not call the host "clean". **Never run `sudo` yourself** and never ask for a password; if root would help, tell the person what to run (`sudo lattice-scan posture --deep`) and let them decide.
+3. **Signals, not verdicts.** Report the lines under FOR A PERSON TO READ as the tool printed them. Say "no package owns this program", "runs from /tmp", "SSH accepts passwords", not "malware", "compromised", "hacked" or "secure". Every signal can be harmless (software the person installed themselves, a tool under their home folder); say so, and ask whether they recognise it. A program "replaced by a package update" is a restart note, not a suspicion.
+4. **Nothing to do with a CVE id.** `posture` does not look up CVEs and sends nothing. If a listening package matters for a CVE you are reading, say that the port is open on all interfaces, but do not call the CVE exploitable here.
+5. Do not paste the full process list into a reply; summarise the attention lines and offer the rest. The JSON (`--json FILE`) names this host's processes: do not share it.
 
 ### A project instead of the host
 

@@ -163,9 +163,34 @@ After a quick scan the tool prints one line on stderr saying how many local imag
 
 **The inventory file.** `inventory.json` (and the file named by `LATTICE_SCAN_INVENTORY`, which replaces the collection for tests and other tools) is a JSON object with `kernel`, `os`, `node`, `restartRequired`, `packages` (name to version), `snaps` (name to version) and `images` (running image names). The new, optional keys are `host` (the hardware: `manufacturer`, `model`, `version`, `board`, `biosVersion`, ...), `imageDetails` (image reference to `{os, osVersion, osName, packageManager, packages, versions, languages, builtOn, running, ...}`) and `imageScan` (`level`, `local`, `opened`, `skipped`, `deepSeconds`). An inventory without them still works.
 
+## What this host exposes and runs: `posture`
+
+`lattice-scan posture` looks at the machine itself, beyond what is installed. It only reads, changes and installs nothing, and sends nothing anywhere. It reports **signals for a person to read, not verdicts**: each says why it can be harmless, and the tool still does not detect incidents or decide that a host is compromised.
+
+```bash
+lattice-scan posture                    # quick: listening ports, firewall, SSH settings, services
+lattice-scan posture --deep             # also every readable process and persistence points (about a minute)
+sudo lattice-scan posture --deep        # as root: firewall rules, effective SSH settings, every process
+lattice-scan posture --format json      # or --json FILE (mode 0600): the full result
+```
+
+**It follows the user who runs it and says which.** As root it reads the firewall rules, `sshd -T` and every process; as anyone else it reads what that user may and lists under *NOT READ* what it could not, so a missing answer is never mistaken for a clean one. It never asks for root and never runs `sudo`.
+
+| | Quick | Deep |
+|---|---|---|
+| Listening TCP/UDP sockets: all interfaces, loopback only or one address; the owning process, its package or container image | yes | yes |
+| Host firewall: ufw, firewalld, nftables, iptables (rules need root) | yes | yes |
+| SSH server settings from `sshd_config` and `sshd_config.d` (first value wins, `Include` followed, OpenSSH defaults) | yes | yes |
+| Running services and whether a package owns each program | yes | yes |
+| Every readable process: program in a temporary folder, deleted while running, memory only, or owned by no package; outbound connections of those | no | yes |
+| Programs replaced by a package update after they started (they still run the old version) | no | yes |
+| `ld.so.preload`, accounts other than root with user id 0, cron and setuid files no package owns | no | yes |
+
+Command line arguments are never recorded (they carry passwords). Programs in containers, snaps and flatpaks are attributed to those. Package ownership is read for dpkg, apk and rpm. Windows and macOS are not covered. A process that hides from the user it runs as is out of reach of any tool that runs as that user: this is a first look, not monitoring.
+
 ## What leaves the machine
 
-CVE ids, and the key if you set one. The inventory (hardware, package names and versions, and what is inside images) is never sent; matching happens locally.
+CVE ids, and the key if you set one. `posture` sends nothing at all. The inventory (hardware, package names and versions, and what is inside images) is never sent; matching happens locally.
 `recent` also downloads namiq.io's public list of recent CVE ids; that request carries no id and nothing about the host. `get-key` sends the name, position, company, email and purpose you give it, only after `--accept-terms`.
 
 ## What it writes

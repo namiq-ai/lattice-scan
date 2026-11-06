@@ -18,6 +18,9 @@ lattice-scan \- check this host, or a project's declared dependencies, against t
 .B lattice-scan enrich
 [\fB\-\-cve\fR \fITEXT\fR]... [\fB\-\-file\fR \fIFILE\fR]... [\fB\-\-max\-read\fR \fIN\fR] [\fB\-\-fail\-on\fR \fBnever\fR|\fBexploited\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
 .br
+.B lattice-scan posture
+[\fB\-\-deep\fR] [\fB\-\-format\fR console|json] [\fB\-\-json\fR \fIFILE\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
+.br
 .B lattice-scan get\-key
 \fB\-\-name\fR \fINAME\fR \fB\-\-position\fR \fITEXT\fR \fB\-\-company\fR \fITEXT\fR \fB\-\-email\fR \fIADDRESS\fR \fB\-\-purpose\fR \fITEXT\fR [\fB\-\-accept\-terms\fR] [\fB\-\-force\fR]
 .br
@@ -284,6 +287,30 @@ Every pinned version declared lies outside every usable range. This does not clo
 .TP
 .B not\-read
 An id that matches a dependency by name was not read from Lattice (the read limit, or a stop). It is neither safe nor affected.
+.SH POSTURE
+.B lattice\-scan posture
+shows what this host exposes and runs, beyond what is installed. It only reads; it changes, kills and installs nothing, and nothing it finds is sent anywhere. It reports signals for a person to read. A signal is not a verdict, and each one says why it can be harmless; the tool does not detect incidents or decide that a host is compromised.
+.PP
+The scope follows the user who runs it, and the report says which. As root it reads the firewall rules (ufw status, nft list ruleset, iptables \-S), the effective SSH settings (sshd \-T) and every process. As anyone else it reads what that user may, and lists under NOT READ what it could not, so that a missing answer is never taken for a clean one. It never asks for root and never runs sudo; the person decides.
+.PP
+Quick (default) reads: the listening TCP and UDP sockets from /proc/net with their bind (all interfaces, loopback only, one address), the process that owns each and the package that owns that program, or the container image; the host firewall (ufw, firewalld, nftables, iptables); the SSH server settings from sshd_config and sshd_config.d (the first value of a keyword wins, Include is followed, a Match block is not applied, an unset keyword takes OpenSSH's default); and the running systemd services with the program each runs and whether a package owns it.
+.PP
+.B \-\-deep
+also reads every process it may: where its program lives, whether a package owns it (dpkg file lists, an apk database or rpm \-qf), whether the program was deleted while it runs, runs from memory (memfd) or from a temporary folder, and, for those no package owns, its outbound connections. A program replaced by a package update after the process started is reported as a restart note, not as suspicious. It also reads persistence points: /etc/ld.so.preload, accounts other than root with user id 0, cron files and setuid files that no package owns, and the number of systemd timers. Command line arguments are never recorded, because they carry passwords. Programs in containers, snaps and flatpaks are attributed to those, not flagged. Deep takes about a minute.
+.TP
+.B \-\-deep
+Also processes and persistence points (see above).
+.TP
+.BI \-\-format " console" | json
+What to print. The default is a report for a person.
+.TP
+.BI \-\-json " FILE"
+Also write the full result to FILE, mode 0600. It names this host's processes: do not share it.
+.TP
+.B \-\-quiet
+Print no progress.
+.PP
+Windows and macOS are not covered. A hostile process can hide from any tool that runs as the same user it runs as; this is a first look, not a replacement for monitoring.
 .SH STARTING WITHOUT A CVE ID
 .SS recent
 Reads two lists published at namiq.io, one of CVEs CISA lists as exploited and one of CVEs scored critical and not known to be exploited, for a period: \fBdaily\fR (added or published in the last day or two), \fBweekly\fR (the last seven days, which includes daily; the default) or \fBopen\fR (exploited entries CISA added before the weekly window but within the last 30 days, overdue first, where overdue means that CISA's due date has passed and says nothing about any machine; it has no critical part).
