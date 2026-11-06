@@ -78,6 +78,8 @@ python3 scripts/lattice-scan.pyz posture --deep          # also processes and pe
 4. **Nothing to do with a CVE id.** `posture` does not look up CVEs and sends nothing. If a listening package matters for a CVE you are reading, say that the port is open on all interfaces, but do not call the CVE exploitable here.
 5. Do not paste the full process list into a reply; summarise the attention lines and offer the rest. The JSON (`--json FILE`) names this host's processes: do not share it.
 
+A named CVE can come back as a **bare node** ("Lattice holds only a bare node for it"): the graph has no NVD record for a new CVE yet. Say exactly that: there is no description, score or link to report, and it does not mean the CVE is harmless. Report what namiq.io's list adds (product, CVSS, date) as that list's data, point the person to the NVD record and the vendor advisory, and offer to run the scan again after the next graph update.
+
 ### A project instead of the host
 
 When the user names a project folder, check what it declares rather than what is installed. It reads requirements and pyproject, package.json and its lockfile, Maven, Gradle,

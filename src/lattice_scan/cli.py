@@ -1589,6 +1589,7 @@ def cmd_run(a) -> int:
     lat = Lattice()
     known = {e["ref"] for e in events()}
     hits, again_hits, read, not_listed = [], [], 0, []
+    bare: list[str] = []   # named ids for which the graph has only a stub node (no NVD record, no description, EPSS, SSVC, weakness or links)
     unlisted_ctx: list[tuple[str, dict]] = []   # named ids CISA does not list, with what Lattice holds on them
     rows: list[list[str]] = []   # the result table, one row per CVE (columns in the report.table call below)
     try:
@@ -1618,6 +1619,8 @@ def cmd_run(a) -> int:
                     ctx = context(lat, lat.last_unlisted)
                     if ctx:
                         unlisted_ctx.append((cve, ctx))
+                elif cve in named:
+                    bare.append(cve)   # Lattice holds no NVD record for it: say that, and fall back on namiq.io's list
                 continue
             if e["added"] and not (floor <= e["added"] <= TODAY) and not a.cve and not a.cve_file:
                 dbg(f"{cve}: outside window {floor}..{TODAY} (added {e['added']}), skipped")
@@ -1673,6 +1676,8 @@ def cmd_run(a) -> int:
         print(block)
     if not_listed:
         print(f"not in the graph's CISA list (not 'safe', only 'not listed in this snapshot'): {', '.join(not_listed)}")
+    if bare:
+        print_bare(bare, inv)
     for cve, ctx in unlisted_ctx:
         print(f"  {cve}  not CISA-listed (that is not the same as safe or unexploited); what Lattice holds on it:")
         print_context({"context": ctx})
@@ -2076,6 +2081,34 @@ def print_earlier(earlier: list[dict]) -> None:
             print_impact(f["impact"])
         else:
             print("      no impact record (found before the impact check existed, or added by hand)")
+
+
+def print_bare(ids: list[str], inv: dict) -> None:
+    """For a named CVE that the graph holds only as a bare node: say so plainly, then use namiq.io's list of recent CVEs if it has the id (that request carries no id)."""
+    rows: dict[str, tuple[str, dict]] = {}
+    try:
+        for period in ("weekly", "open"):
+            f = read_feed(period)
+            for kind in ("exploited", "critical"):
+                for r in f.get(kind, []):
+                    rows.setdefault(r["id"], (kind, r))
+    except LatticeError as err:
+        dbg(f"bare node: namiq.io list not read: {err}")
+    for cve in ids:
+        print(f"  {cve}  not CISA-listed (that is not the same as safe or unexploited); Lattice holds only a bare node for it:")
+        print("      no NVD record, description, EPSS, CISA SSVC, weakness, ATT&CK link or reference is in the graph for this id yet. The graph snapshot is older than the CVE, or the CVE")
+        print("      is not ingested. A bare node says nothing about risk. Ask again after the next graph update.")
+        if cve in rows:
+            kind, r = rows[cve]
+            m = candidate({"cve": cve, "vendor": r.get("vendor", ""), "product": r.get("product", "")}, inv)
+            what = f"{r.get('product') or '?'} (vendor {r.get('vendor') or '?'}), " + ("CISA-listed exploited" if kind == "exploited" else "critical, not known to be exploited")
+            dates = "; ".join(x for x in (f"listed {r['added']}" if r.get("added") else "", f"published {r['published']}" if r.get("published") else "",
+                                          f"CVSS {r['cvss']}" + (f" ({r['cvssSource']})" if r.get("cvssSource") else "") if r.get("cvss") is not None else "") if x)
+            print(f"      namiq.io's list of recent CVEs has it: {what}; {dates}.")
+            print("      " + (f"something installed may match this product ({m[0]}): read the vendor advisory against the installed version." if m
+                              else "nothing installed matches this product by name; read the vendor advisory to be sure."))
+        else:
+            print("      namiq.io's list of recent CVEs does not have it either. Read the record at https://nvd.nist.gov/vuln/detail/" + cve + " and the vendor advisory.")
 
 
 def why_not(entry: dict, inv: dict) -> str:
