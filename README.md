@@ -1,7 +1,7 @@
 # lattice-scan
 
 Looks up CVEs that CISA lists as exploited, through the Lattice MCP server, and compares each with what is installed on **this** machine: packages,
-snaps, running container images, the kernel. It prints the evidence, including installed version, CISA's dates and required action, and NVD's affected
+snaps, the hardware, the running container images and what is inside them, the kernel. It prints the evidence, including installed version, CISA's dates and required action, and NVD's affected
 version ranges. A person reads it and decides. It does not detect incidents or decide whether the host is affected, and it never closes a finding by itself.
 
 Standard library only. Python 3.9 or newer.
@@ -129,9 +129,42 @@ To use it everywhere, copy `skills/lattice-scan` to `~/.agents/skills/lattice-sc
 Each release also attaches `lattice-scan-openai-plugin-<version>.zip`, the package for OpenAI's plugin directory. In ChatGPT the skill stops at its first step, because
 ChatGPT runs it in a hosted sandbox and it checks the machine it runs on; Codex on your own computer is where it does its work.
 
+## What the host inventory collects: quick and deep
+
+Every host scan starts by taking an inventory of the machine. It has two levels, because reading inside container images is slow.
+
+| | **Quick** (default) | **Deep** (`--deep`, or `LATTICE_SCAN_LEVEL=deep`) |
+|---|---|---|
+| Hardware (maker, model, version, board, firmware version and date, architecture, CPU, memory, virtualisation) | yes | yes |
+| Host packages (dpkg, rpm, apk), snaps, kernel, Node.js | yes | yes |
+| Images that containers are running: base OS and release, package list, version label, `*_VERSION` variables | yes | yes |
+| Every other local image (stopped, unused) | no | yes |
+| Python, Node, Java and Ruby packages inside images | no | yes (every image) |
+| Which local image each image was built on | yes | yes |
+| Time (test host: 24 images, 31 GB, 7 running) | about 12 seconds | about 6 minutes |
+
+After a quick scan the tool prints one line on stderr saying how many local images were opened, how long `--deep` would take and when a deep scan was last done (it suggests repeating one after 30 days). A deep scan prints a rough estimate first, then `[n/N %]` with elapsed time for each image and a summary. `-q` silences all of it. **A quick result is not "all clear":** stopped images and the packages inside images were not read.
+
+`lattice-scan --refresh` prints the totals and a short summary of the images (by base OS, packages inside them); the full lists are in `inventory.json` in the records folder, and `--refresh --list` prints them.
+
+**How images are read.** Nothing is started or pulled. For each image the tool runs `docker image inspect`, then `docker create` (with `--pull never`, `--network none` and the label `io.lattice-scan.run`), copies out only the OS release file and the package database with `docker cp`, and removes the container. The package database is chosen by the OS family: apk (Alpine), dpkg (Debian, Ubuntu, and distroless images through `status.d`) and rpm (sqlite databases: Fedora, RHEL 9 and later, Amazon Linux 2023; Berkeley DB and ndb databases are not read). In a deep scan it also streams `docker export` once per image and records the names and versions of Python (`dist-info`), Node (`package.json`), Java (jar file names) and Ruby (gems) packages, with a limit of 180 seconds per image after which that image is marked partial. Go and Rust binaries, Composer and NuGet are not read. The tool compares the image's own package versions, not the host's. A candidate found inside an image names the image (`musl 1.2.5-r8 (image redis:7-alpine)`). Environment variables of an image are never kept, except those ending in `_VERSION`. Serial numbers and UUIDs of the machine are never read. No registry is contacted.
+
+**Safe to stop, safe to fail.** The container is removed after each image, also on an error. When the run ends or is stopped (Ctrl-C, SIGTERM) every container it made is removed. A run killed outright (SIGKILL) can leave a never-started container; the next run removes labelled containers older than 15 minutes. Only containers with that label are touched. `docker cp` and `docker export` write nothing to disk (at most 40 MB of one file is held in memory); an rpm database is written to a temporary folder that is removed at once. An image that fails is skipped and named, and the others are kept. Images are not opened when less than 1 GB is free where Docker keeps its data, and no new image is started after 30 minutes.
+
+| Environment variable | Meaning |
+|---|---|
+| `LATTICE_SCAN_LEVEL` | `quick` (default) or `deep`, the same as `--deep` |
+| `LATTICE_SCAN_IMAGES` | which images are opened, overriding the level: `all`, `running` or `off` |
+| `LATTICE_SCAN_IMAGES_LANG` | which images get the Python/Node/Java/Ruby scan, overriding the level: `all`, `running` or `off` |
+| `LATTICE_SCAN_MIN_FREE_MB` | free space needed where Docker keeps its data (default 1024) |
+| `LATTICE_SCAN_DEEP_SECONDS` | no further image is started after this many seconds (default 1800) |
+| `LATTICE_SCAN_STALE_MINUTES` | age after which a leftover container of a killed run is removed (default 15) |
+
+**The inventory file.** `inventory.json` (and the file named by `LATTICE_SCAN_INVENTORY`, which replaces the collection for tests and other tools) is a JSON object with `kernel`, `os`, `node`, `restartRequired`, `packages` (name to version), `snaps` (name to version) and `images` (running image names). The new, optional keys are `host` (the hardware: `manufacturer`, `model`, `version`, `board`, `biosVersion`, ...), `imageDetails` (image reference to `{os, osVersion, osName, packageManager, packages, versions, languages, builtOn, running, ...}`) and `imageScan` (`level`, `local`, `opened`, `skipped`, `deepSeconds`). An inventory without them still works.
+
 ## What leaves the machine
 
-CVE ids, and the key if you set one. The inventory (package names and versions) is never sent; matching happens locally.
+CVE ids, and the key if you set one. The inventory (hardware, package names and versions, and what is inside images) is never sent; matching happens locally.
 `recent` also downloads namiq.io's public list of recent CVE ids; that request carries no id and nothing about the host. `get-key` sends the name, position, company, email and purpose you give it, only after `--accept-terms`.
 
 ## What it writes
@@ -147,7 +180,7 @@ publish or share them. `lattice-scan get-key` also stores a key there as the fil
   the report also shows whether an installed package's own changelog names the CVE (Debian-family hosts only).
 - Without a key, only `graph_lookup` is available and the daily allowance is small. The script waits between calls to stay under it. Getting a key is
   described at https://namiq.io/lattice/docs#agents; a person does that, and the tool never requests one.
-- Host inventory: besides packages and snaps it records the machine (manufacturer, model, version, board, firmware; no serial numbers) and opens the Docker images your containers are running without starting them (`--deep` opens every local image) (`docker create --network none`, `docker cp` of the OS release file and the apk/dpkg package list), so `postgres:16-alpine` is known as Alpine Linux with its own packages and a flaw in its musl or busybox can be a candidate. `LATTICE_SCAN_IMAGES=all|running|off` and `LATTICE_SCAN_IMAGES_LANG=all|running|off` override the level. Image environment values are never kept except `*_VERSION`. RPM images (sqlite databases) and distroless images are read too; with `--deep` the Python, Node, Java and Ruby packages inside every image are found by streaming `docker export` (minutes; the quick default takes about 12 seconds on a host with 7 running images), and each image shows the local image it was built on. Nothing is sent: the inventory stays on the machine.
+- Host inventory: see "What the host inventory collects" above for what quick and deep read and do not read inside container images.
 - Tested on Debian-family hosts. On rpm and apk hosts the inventory is collected (checked on Fedora and Alpine) but matching and the changelog check are not tested there; the changelog check is Debian-only.
 
 ## Reporting a problem

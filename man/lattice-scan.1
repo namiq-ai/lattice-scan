@@ -45,7 +45,7 @@ it depends on, and needs no installation on the machine it runs from.
 .SH HOST MODE
 With one or more
 .B \-\-cve
-the host's inventory is collected (dpkg, rpm or apk packages, snaps, running Docker images, kernel, Node.js) and each id is read from Lattice and matched by product name.
+the host's inventory is collected (the hardware, dpkg, rpm or apk packages, snaps, running Docker images and what is inside them, kernel, Node.js) and each id is read from Lattice and matched by product name.
 A match is a
 .IR candidate ,
 not a finding about the host: the report shows the installed version against NVD's ranges and whether the installed package's own Debian changelog names the CVE.
