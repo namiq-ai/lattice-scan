@@ -55,7 +55,7 @@ def manifest() -> dict:
                 "shortDescription": "Check hosts for exploited CVEs",
                 "longDescription": (
                     "Lattice Scan looks up CVE ids on the Lattice server and compares each with the software installed on the machine your agent runs on: packages, snaps, "
-                    "running container image names and the kernel. It can also read the dependencies a project folder declares. With no CVE id to start from, it reads a daily "
+                    "the hardware, running container images and what is inside them, and the kernel. It can also read the dependencies a project folder declares. With no CVE id to start from, it reads a daily "
                     "or weekly list of recently exploited and critical CVEs and checks only the ones that could apply. It prints evidence for a person to read: each match is a "
                     "candidate to check, not a finding that anything is vulnerable. Only CVE ids leave the machine. The inventory is never sent. It does not install, change or "
                     "remove anything. It needs Python 3.9 or newer and runs on your own computer, not in a hosted sandbox. The tool is open source under the Apache-2.0 licence; the Lattice "
