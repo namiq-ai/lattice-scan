@@ -731,6 +731,45 @@ def docker_free_mb() -> int | None:
         return None
 
 
+def parse_size_mb(text: str) -> float:
+    """'1.2GB' / '455MB' / '12.3kB' (docker's own size text) as megabytes; 0 when it cannot be read."""
+    m = re.match(r"^\s*([\d.]+)\s*([kKMGT]?)B\s*$", text)
+    if not m:
+        return 0.0
+    return float(m.group(1)) * {"": 1 / 1048576, "k": 1 / 1024, "K": 1 / 1024, "M": 1, "G": 1024, "T": 1048576}[m.group(2)]
+
+
+def deep_estimate(n_images: int, size_mb: float) -> int:
+    """Rough seconds for a deep inventory: about 2 s of docker calls per image (two images at a time) plus the filesystem stream of each image. Calibrated
+    on one 24-image, 31 GB host (about 6 minutes); other disks differ, so it is always shown as 'about'."""
+    return int(n_images * 1.0 + size_mb / 1024 * 9)
+
+
+def fmt_secs(sec: float) -> str:
+    sec = int(sec)
+    return f"{sec} s" if sec < 90 else f"{sec // 60} min" if sec < 3600 else f"{sec // 3600} h {sec % 3600 // 60} min"
+
+
+DEEP_STAMP = "deep.json"
+IMAGE_SCAN: dict = {}
+
+
+def deep_hint(inv: dict) -> None:
+    """After a quick inventory, one line on stderr (never stdout) saying what was not read, how long a deep one takes and when one was last done."""
+    s = inv.get("imageScan") or {}
+    if s.get("level") != "quick" or not s.get("local"):
+        return
+    last = ""
+    try:
+        d = json.loads((OUT / DEEP_STAMP).read_text())
+        age = (dt.date.fromisoformat(TODAY) - dt.date.fromisoformat(d["on"])).days
+        last = f" Last deep scan: {d['on']} ({age} days ago" + ("; worth repeating)." if age >= 30 else ").")
+    except (OSError, ValueError, KeyError):
+        last = " A deep scan has not been done on this machine."
+    progress(f"[host] Quick scan: opened {s['opened']} of {s['local']} local images (the ones containers run) and not the packages inside them (Python, Node, Java, Ruby). "
+             f"A deep scan reads all of it in about {fmt_secs(s.get('deepSeconds', 0))}: lattice-scan --deep.{last}")
+
+
 def scan_level() -> str:
     """quick (default) or deep. Deep opens every local image and the language packages inside; see --deep."""
     return "deep" if env("LEVEL", "quick").lower() == "deep" else "quick"
@@ -767,10 +806,16 @@ def image_details(running: list[str]) -> dict[str, dict]:
     sweep_containers(stale_only=True)
     atexit.register(sweep_containers, False)
     refs = {r: True for r in running}
-    if mode != "running":
-        for l in run(["docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}"]).splitlines():
-            if l and "<none>" not in l:
-                refs.setdefault(l, False)
+    local, size_mb, sizes = set(running), 0.0, {}
+    for l in run(["docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}\t{{.Size}}"]).splitlines():
+        ref, _, size = l.partition("\t")
+        if ref and "<none>" not in ref:
+            local.add(ref)
+            sizes[ref] = parse_size_mb(size)
+            size_mb += sizes[ref]
+            if mode != "running":
+                refs.setdefault(ref, False)
+    IMAGE_SCAN.update({"level": "deep" if deep else "quick", "local": len(local), "opened": 0, "skipped": 0, "deepSeconds": deep_estimate(len(local), size_mb)})
     out = {}
     lang_mode = env("IMAGES_LANG", "all" if deep else "off").lower()
     todo = sorted(refs)[:IMAGE_LIMIT]
@@ -778,17 +823,32 @@ def image_details(running: list[str]) -> dict[str, dict]:
     deadline = time.time() + int(env("DEEP_SECONDS", "1800") or 1800)
     skipped: list[str] = []
 
+    t_start, done, lock = time.time(), [0], threading.Lock()
+    if lang_mode in ("all", "running") and deep:
+        progress(f"[host] deep scan: {len(todo)} images, about {fmt_secs(IMAGE_SCAN['deepSeconds'])} (a rough estimate; Ctrl-C stops it and cleans up)")
+
+    def tick(ref: str, what: str, t0: float) -> None:
+        with lock:
+            done[0] += 1
+            progress(f"[host] [{done[0]}/{len(todo)} {done[0] * 100 // max(len(todo), 1)}%] {ref}: {what} ({time.time() - t0:.0f} s; {fmt_secs(time.time() - t_start)} elapsed)")
+
     def one(ref: str) -> dict | None:
+        t0 = time.time()
         if time.time() > deadline:
             skipped.append(ref)
+            tick(ref, "skipped, time limit", t0)
             return None
         with_lang = lang_mode == "all" or (lang_mode == "running" and refs[ref])
-        progress(f"[host] looking inside image {ref}" + (" (also Python/Node/Java/Ruby packages; can take minutes)" if with_lang else "") + " ...")
+        if with_lang and sizes.get(ref, 0) >= 1000:  # only the ones that take a while, so the person knows what the quiet minutes are
+            progress(f"[host] reading {ref} ({sizes[ref] / 1024:.1f} GB; the Python/Node/Java/Ruby scan of a large image takes minutes) ...")
         try:
-            return image_detail(ref, refs[ref], with_lang)
+            d = image_detail(ref, refs[ref], with_lang)
         except Exception as e:  # noqa: BLE001 - one unreadable image must not stop the scan
-            progress(f"[host] image {ref}: skipped, {type(e).__name__}: {str(e)[:100]}")
+            tick(ref, f"skipped, {type(e).__name__}: {str(e)[:80]}", t0)
             return None
+        tick(ref, ("not readable" if not d else (d.get("osName") or d.get("note") or "done")
+                   + (f", {len(d['packages'])} packages" if d and d.get("packages") else "") + (", language scan stopped at its limit" if d and d.get("languagesPartial") else "")), t0)
+        return d
     from concurrent.futures import ThreadPoolExecutor
     workers = 2 if lang_mode in ("all", "running") else 4  # the docker daemon does the work; the export stream is disk-heavy, so fewer at once
     with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -796,6 +856,13 @@ def image_details(running: list[str]) -> dict[str, dict]:
             if d:
                 out[ref] = d
     sweep_containers(stale_only=False)
+    IMAGE_SCAN.update({"opened": len(out), "skipped": len(skipped), "seconds": int(time.time() - t_start)})
+    progress(f"[host] images: {len(out)} opened, {len(todo) - len(out)} not opened, {fmt_secs(time.time() - t_start)} in all")
+    if deep and not skipped and out:
+        try:
+            write_private(OUT / DEEP_STAMP, json.dumps({"on": TODAY, "images": len(out), "seconds": IMAGE_SCAN["seconds"]}))
+        except OSError:
+            pass
     if skipped:
         progress(f"[host] {len(skipped)} image(s) not opened, the time limit of {env('DEEP_SECONDS', '1800')} s (LATTICE_SCAN_DEEP_SECONDS) was reached: " + ", ".join(sorted(skipped)[:5]))
     others = {}  # images that were not opened still show their layers, which is all lineage needs and costs one inspect
@@ -853,10 +920,13 @@ def inventory() -> dict:
     progress(f"[host] kernel: {kernel or 'unknown'}" + (f", os: {osr}" if osr else ""))
     host = hardware()
     progress("[host] hardware: " + (" ".join(x for x in (host.get("manufacturer"), host.get("model"), host.get("version")) if x) or "not reported by this machine"))
+    IMAGE_SCAN.clear()
     details = image_details(images)
-    progress(f"[host] images opened: {len(details)}" + (f" ({sum(1 for d in details.values() if d.get('packages'))} with a package list)" if details else ""))
     inv = {"kernel": kernel, "os": osr, "host": host, "packages": pk, "snaps": snaps, "images": images, "imageDetails": details, "node": run(["node", "-v"]).strip(),
            "restartRequired": Path("/var/run/reboot-required").exists()}
+    if IMAGE_SCAN:
+        inv["imageScan"] = dict(IMAGE_SCAN)
+        atexit.register(deep_hint, inv)  # printed last, after the scan's own output
     inv["hash"] = hashlib.sha256(json.dumps({k: inv[k] for k in ("kernel", "packages", "snaps", "images", "node")}
                                             | {"host": {k: host.get(k) for k in ("manufacturer", "model", "version", "biosVersion")},
                                                "imageDetails": {r: [d.get("id"), d.get("os"), d.get("osVersion"), len(d.get("packages") or {})] for r, d in details.items()}},

@@ -402,6 +402,82 @@ class Faults(unittest.TestCase):
             self.assertEqual(removed, ["mine"])
 
 
+class Progress(unittest.TestCase):
+    def collect_err(self, level, lang):
+        import contextlib
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), mock.patch.object(cli, "PROGRESS", True):
+            _, fd = collect(lang=lang, level=level)
+        return err.getvalue()
+
+    def test_deep_scan_prints_count_percentage_elapsed_and_summary(self):
+        with mock.patch.object(cli, "image_languages", lambda cid: ({}, True)):
+            out = self.collect_err("deep", "all")
+        lines = [l for l in out.splitlines() if "%]" in l]
+        self.assertEqual(len(lines), 3)
+        self.assertTrue(any("[3/3 100%]" in l for l in lines))
+        self.assertTrue(all("elapsed" in l for l in lines))
+        self.assertIn("deep scan: 3 images, about", out)
+        self.assertRegex(out, r"images: \d opened, \d not opened, .* in all")
+
+    def test_nothing_is_printed_when_progress_is_off(self):
+        import contextlib
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), mock.patch.object(cli, "PROGRESS", False):
+            collect()
+        self.assertEqual(err.getvalue(), "")
+
+    def test_quick_hint_names_the_gap_the_time_and_the_command(self):
+        import contextlib
+        inv = {"imageScan": {"level": "quick", "local": 24, "opened": 7, "deepSeconds": 330}}
+        d = Path(tempfile.mkdtemp())
+        err = io.StringIO()
+        with mock.patch.object(cli, "OUT", d), mock.patch.object(cli, "PROGRESS", True), contextlib.redirect_stderr(err):
+            cli.deep_hint(inv)
+            self.assertIn("opened 7 of 24 local images", err.getvalue())
+            self.assertIn("about 5 min", err.getvalue())
+            self.assertIn("lattice-scan --deep", err.getvalue())
+            self.assertIn("has not been done", err.getvalue())
+            (d / "deep.json").write_text(json.dumps({"on": "2020-01-01"}))
+            err.truncate(0); err.seek(0)
+            cli.deep_hint(inv)
+            self.assertIn("worth repeating", err.getvalue())
+            (d / "deep.json").write_text(json.dumps({"on": cli.TODAY}))
+            err.truncate(0); err.seek(0)
+            cli.deep_hint(inv)
+            self.assertIn("0 days ago", err.getvalue())
+            self.assertNotIn("worth repeating", err.getvalue())
+        shutil.rmtree(d)
+
+    def test_no_hint_after_deep_or_without_images(self):
+        import contextlib
+        err = io.StringIO()
+        with mock.patch.object(cli, "PROGRESS", True), contextlib.redirect_stderr(err):
+            cli.deep_hint({"imageScan": {"level": "deep", "local": 5, "opened": 5}})
+            cli.deep_hint({"imageScan": {"level": "quick", "local": 0, "opened": 0}})
+            cli.deep_hint({})
+        self.assertEqual(err.getvalue(), "")
+
+    def test_a_complete_deep_scan_is_recorded_and_an_incomplete_one_is_not(self):
+        d = Path(tempfile.mkdtemp())
+        with mock.patch.object(cli, "OUT", d), mock.patch.object(cli, "image_languages", lambda cid: ({}, True)):
+            collect(lang="all", level="deep")
+            self.assertEqual(json.loads((d / "deep.json").read_text())["images"], 3)
+            (d / "deep.json").unlink()
+            with mock.patch.dict("os.environ", {"LATTICE_SCAN_DEEP_SECONDS": "-1"}):
+                collect(lang="all", level="deep")
+            self.assertFalse((d / "deep.json").exists())
+        shutil.rmtree(d)
+
+    def test_sizes_and_estimate(self):
+        self.assertEqual(cli.parse_size_mb("1.5GB"), 1536)
+        self.assertEqual(cli.parse_size_mb("455MB"), 455)
+        self.assertEqual(cli.parse_size_mb("junk"), 0)
+        self.assertEqual(cli.fmt_secs(45), "45 s")
+        self.assertEqual(cli.fmt_secs(330), "5 min")
+        self.assertGreater(cli.deep_estimate(24, 31 * 1024), 250)
+
+
 class Levels(unittest.TestCase):
     def test_quick_is_the_default_and_opens_only_running_images_without_language_scan(self):
         with mock.patch.dict("os.environ", {}, clear=False):
