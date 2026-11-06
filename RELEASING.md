@@ -19,6 +19,12 @@ After step 3's pull request is merged to `main` (version bumped, CHANGELOG secti
 
 Pushing a `v*` tag by hand still works and still refuses a tag with no notes file.
 
+## The Claude Code plugin
+
+The skill is released with the tool. Bump `.claude-plugin/plugin.json` together with `__version__` (step 1) and rebuild the bundled script; the release refuses a tag where they differ, or where a module in
+`skills/lattice-scan/scripts/lattice-scan.pyz` is stale. Every release attaches `dist/lattice-scan-claude-plugin-X.Y.Z.zip` (`packaging/build_claude_plugin.py`, hash in `SHA256SUMS`). People install through the marketplace
+in this repository (`source: "./"`), which reads the tagged files, so nothing else publishes it. After publishing the release, move the pin in `namiq-web/.claude-plugin/marketplace.json` to the release commit (a pull request there).
+
 ## The OpenAI plugin package
 
 Every release also builds `dist/lattice-scan-openai-plugin-X.Y.Z.zip` (`packaging/build_openai_plugin.py`) and attaches it. The workflow then runs `packaging/check_openai_plugin.py` on it and fails the release on an ERROR. That check is written from OpenAI's published rules (submission guide, plugin guidelines, the plugin-creator spec and the portable schema); it is not OpenAI's own validator, which runs only inside their portal and Codex tooling. A WARN for the bundled `.pyz` is expected: OpenAI's rules do not say whether bundled scripts are allowed. Submitting it is a person's step: platform.openai.com/plugins > Upload new or existing plugin,
