@@ -55,10 +55,11 @@ class FakeDocker:
         return tar_of(txt) if txt else b""
 
 
-def collect(running=("redis:7-alpine",)):
+def collect(running=("redis:7-alpine",), lang="off"):
     fd = FakeDocker()
     with mock.patch.object(cli, "run", fd.run), mock.patch.object(cli, "run_bytes", fd.run_bytes), mock.patch.object(cli.shutil, "which", lambda c: "/x/docker"):
-        return cli.image_details(list(running)), fd
+        with mock.patch.dict("os.environ", {"LATTICE_SCAN_IMAGES_LANG": lang}):
+            return cli.image_details(list(running)), fd
 
 
 class Images(unittest.TestCase):
@@ -163,6 +164,144 @@ class Hardware(unittest.TestCase):
         self.assertEqual((h["manufacturer"], h["version"], h["chassis"]), ("Examplecorp", "1.0", "mini PC"))
         self.assertEqual(h["model"], "Example Board 2")
         self.assertNotIn("SN123", json.dumps(h))
+
+
+def rpm_header(name, version, release, epoch=None):
+    import struct
+    data, idx = b"", []
+    for tag, val in ((1000, name), (1001, version), (1002, release)):
+        idx.append((tag, 6, len(data), 1))
+        data += val.encode() + b"\0"
+    if epoch is not None:
+        data += b"\0" * (-len(data) % 4)
+        idx.append((1003, 4, len(data), 1))
+        data += struct.pack(">I", epoch)
+    return struct.pack(">II", len(idx), len(data)) + b"".join(struct.pack(">IIII", *i) for i in idx) + data
+
+
+def rpm_sqlite(rows):
+    import sqlite3, os
+    f = tempfile.mktemp(suffix=".sqlite")
+    con = sqlite3.connect(f)
+    con.execute("CREATE TABLE Packages (hnum INTEGER PRIMARY KEY, blob BLOB)")
+    for r in rows:
+        con.execute("INSERT INTO Packages (blob) VALUES (?)", (rpm_header(*r),))
+    con.commit()
+    con.close()
+    data = Path(f).read_bytes()
+    os.unlink(f)
+    return data
+
+
+def tree_tar(files, dirs=()):
+    b = io.BytesIO()
+    with tarfile.open(fileobj=b, mode="w") as t:
+        for d in dirs:
+            i = tarfile.TarInfo(d)
+            i.type = tarfile.DIRTYPE
+            t.addfile(i)
+        for n, txt in files.items():
+            i = tarfile.TarInfo(n)
+            i.size = len(txt.encode())
+            t.addfile(i, io.BytesIO(txt.encode()))
+    return b.getvalue()
+
+
+class Formats(unittest.TestCase):
+    def test_rpm_sqlite_gives_names_and_versions(self):
+        pk = cli.parse_rpm_sqlite(rpm_sqlite([("bash", "5.2.1", "3.fc40"), ("openssl-libs", "3.2.1", "2.fc40", 1), ("gpg-pubkey", "1", "1")]))
+        self.assertEqual(pk, {"bash": "5.2.1-3.fc40", "openssl-libs": "1:3.2.1-2.fc40"})
+
+    def test_bdb_or_garbage_rpm_database_gives_nothing(self):
+        self.assertEqual(cli.parse_rpm_sqlite(b"\x00\x06\x15\x61 not sqlite"), {})
+
+    def test_rpm_image_end_to_end(self):
+        db = rpm_sqlite([("bash", "5.2.1", "3.fc40")])
+        fd = FakeDocker()
+        fd.run = lambda c: json.dumps([{"Id": "sha256:dd", "Os": "linux", "Architecture": "arm64", "Config": {}}]) if c[:3] == ["docker", "image", "inspect"] else ("cid\n" if c[:2] == ["docker", "create"] else "")
+
+        def rb(c):
+            p = c[2].split(":/", 1)[1]
+            if p == "etc/os-release":
+                return tar_of('ID=fedora\nVERSION_ID=40\nPRETTY_NAME="Fedora Linux 40"\n')
+            if p == "usr/lib/sysimage/rpm/rpmdb.sqlite":
+                b = io.BytesIO()
+                with tarfile.open(fileobj=b, mode="w") as t:
+                    i = tarfile.TarInfo("rpmdb.sqlite")
+                    i.size = len(db)
+                    t.addfile(i, io.BytesIO(db))
+                return b.getvalue()
+            return b""
+        with mock.patch.object(cli, "run", fd.run), mock.patch.object(cli, "run_bytes", rb):
+            d = cli.image_detail("fedora:40", False)
+        self.assertEqual((d["packageManager"], d["packages"]), ("rpm", {"bash": "5.2.1-3.fc40"}))
+
+    def test_distroless_status_d(self):
+        fd = FakeDocker()
+        fd.run = lambda c: json.dumps([{"Id": "sha256:ee", "Config": {}}]) if c[:3] == ["docker", "image", "inspect"] else ("cid\n" if c[:2] == ["docker", "create"] else "")
+        files = {"status.d/base-files": "Package: base-files\nStatus: install ok installed\nVersion: 13\n", "status.d/base-files.md5sums": "abc  x\n",
+                 "status.d/libc6": "Package: libc6\nStatus: install ok installed\nVersion: 2.36-9\n"}
+        rb = lambda c: tree_tar(files) if c[2].endswith("var/lib/dpkg/status.d") else b""  # noqa: E731
+        with mock.patch.object(cli, "run", fd.run), mock.patch.object(cli, "run_bytes", rb):
+            d = cli.image_detail("distroless:1", False)
+        self.assertEqual(d["packages"], {"base-files": "13", "libc6": "2.36-9"})
+
+
+class Languages(unittest.TestCase):
+    def stream(self, tar_bytes):
+        class P:
+            stdout = io.BytesIO(tar_bytes)
+            def kill(self): pass
+            def wait(self): pass
+        return mock.patch.object(cli.subprocess, "Popen", lambda *a, **k: P())
+
+    def test_python_node_java_ruby_names_are_found_in_the_stream(self):
+        t = tree_tar({"app/node_modules/leftpadq/package.json": json.dumps({"name": "leftpadq", "version": "1.2.3"}),
+                      "app/node_modules/@sc/tool/package.json": json.dumps({"name": "@sc/tool", "version": "4.0.0"}),
+                      "app/node_modules/leftpadq/node_modules/inner/package.json": json.dumps({"name": "inner", "version": "0.1.0"}),
+                      "opt/lib/widgetq-2.0.1.jar": "x"},
+                     dirs=("usr/lib/python3.12/site-packages/Examplepkg-9.9.dist-info", "usr/lib/python3.12/site-packages/my_pkg-1.0-py3.12.egg-info",
+                           "var/lib/gems/3.2.0/gems/rackq-3.0.8"))
+        with self.stream(t):
+            langs, complete = cli.image_languages("cid")
+        self.assertTrue(complete)
+        self.assertEqual(langs["pypi"], {"examplepkg": "9.9", "my-pkg": "1.0"})
+        self.assertEqual(langs["npm"], {"leftpadq": "1.2.3", "@sc/tool": "4.0.0", "inner": "0.1.0"})
+        self.assertEqual(langs["maven"], {"widgetq": "2.0.1"})
+        self.assertEqual(langs["gem"], {"rackq": "3.0.8"})
+
+    def test_time_limit_marks_the_result_partial(self):
+        with self.stream(tree_tar({"a": "b"})), mock.patch.object(cli, "LANG_SECONDS", -1):
+            self.assertFalse(cli.image_languages("cid")[1])
+
+    def test_language_package_inside_an_image_is_a_candidate_that_names_the_image(self):
+        d, _ = collect()
+        d["redis:7-alpine"]["languages"] = {"pypi": {"examplepkg": "9.9|9.8"}}
+        inv = {"kernel": "7", "os": "x", "packages": {}, "snaps": {}, "images": [], "node": "", "imageDetails": d, "host": {}}
+        why, installed, vers = cli.candidate({"cve": "CVE-2099-9", "vendor": "x", "product": "examplepkg", "title": "t"}, inv)
+        self.assertIn("redis:7-alpine", why)
+        self.assertEqual(vers, ["9.8", "9.9"])
+
+    def test_default_scans_languages_only_for_running_images(self):
+        seen = []
+        with mock.patch.object(cli, "image_languages", lambda cid: (seen.append(cid) or ({"pypi": {"zz": "1"}}, True))):
+            d, _ = collect(lang="running")
+        self.assertEqual(seen, ["cid-redis:7-alpine"])
+        self.assertEqual(d["redis:7-alpine"]["languages"], {"pypi": {"zz": "1"}})
+        self.assertNotIn("languages", d["app:1"])
+
+
+class Lineage(unittest.TestCase):
+    def test_longest_layer_prefix_is_the_base_and_equal_layers_are_not(self):
+        det = {"base:1": {"layers": ["a", "b"]}, "mid:1": {"layers": ["a", "b", "c"]}, "app:1": {"layers": ["a", "b", "c", "d"]},
+               "app:copy": {"layers": ["a", "b", "c", "d"]}, "other:1": {"layers": ["z"]}}
+        cli.lineage(det)
+        self.assertEqual(det["app:1"]["builtOn"], "mid:1")
+        self.assertEqual(det["mid:1"]["builtOn"], "base:1")
+        self.assertNotIn("builtOn", det["other:1"])
+        self.assertNotIn("builtOn", det["base:1"])
+        self.assertEqual(det["app:1"]["layerCount"], 4)
+        self.assertNotIn("layers", det["app:1"])
 
 
 if __name__ == "__main__":

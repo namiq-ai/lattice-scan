@@ -367,7 +367,9 @@ PLACEHOLDER = {"", "none", "n/a", "not specified", "not applicable", "default st
 CHASSIS = {1: "other", 2: "unknown", 3: "desktop", 4: "low-profile desktop", 5: "pizza box", 6: "mini tower", 7: "tower", 8: "portable", 9: "laptop",
            10: "notebook", 11: "handheld", 12: "docking station", 13: "all-in-one", 14: "sub-notebook", 17: "server", 23: "rack-mount server",
            24: "blade", 28: "blade enclosure", 30: "tablet", 31: "convertible", 35: "mini PC", 36: "stick PC"}
-IMAGE_FILES = (("os", "etc/os-release"), ("os2", "usr/lib/os-release"), ("apk", "lib/apk/db/installed"), ("dpkg", "var/lib/dpkg/status"))
+IMAGE_FILES = (("os", "etc/os-release"), ("os2", "usr/lib/os-release"), ("apk", "lib/apk/db/installed"), ("dpkg", "var/lib/dpkg/status"),
+               ("dpkgd", "var/lib/dpkg/status.d"), ("rpm", "usr/lib/sysimage/rpm/rpmdb.sqlite"), ("rpm2", "var/lib/rpm/rpmdb.sqlite"))
+LANG_SECONDS = 180
 IMAGE_FILE_LIMIT = 40 * 1024 * 1024
 IMAGE_LIMIT = 60
 
@@ -425,18 +427,109 @@ def run_bytes(cmd: list[str]) -> bytes:
     return p.stdout
 
 
-def tar_file(blob: bytes) -> str:
-    """The text of the first regular file in a tar stream, or '' (docker cp writes its output as a tar)."""
+def tar_members(blob: bytes) -> dict[str, bytes]:
+    """name -> content of every regular file in a tar stream (docker cp writes a file or a folder as a tar)."""
     import io, tarfile
+    out: dict[str, bytes] = {}
     try:
         with tarfile.open(fileobj=io.BytesIO(blob)) as t:
             for m in t:
                 if m.isfile():
                     f = t.extractfile(m)
-                    return f.read().decode("utf-8", "replace") if f else ""
+                    if f:
+                        out[m.name] = f.read()
     except (tarfile.TarError, OSError, EOFError):
         pass
-    return ""
+    return out
+
+
+def parse_rpm_header(blob: bytes) -> dict[str, str]:
+    """name, version, release, epoch from one RPM header blob (the value stored in rpmdb.sqlite): int32 index count, int32 data size, 16-byte index entries, data."""
+    import struct
+    il, dl = struct.unpack(">II", blob[:8])
+    if il > 100000 or 8 + il * 16 + dl > len(blob):
+        return {}
+    data = blob[8 + il * 16:8 + il * 16 + dl]
+    out = {}
+    for i in range(il):
+        tag, typ, off, cnt = struct.unpack(">IIII", blob[8 + i * 16:24 + i * 16])
+        if tag in (1000, 1001, 1002) and typ == 6 and off < len(data):
+            out[{1000: "name", 1001: "version", 1002: "release"}[tag]] = data[off:data.index(b"\0", off)].decode("utf-8", "replace")
+        elif tag == 1003 and typ == 4 and off + 4 <= len(data):
+            out["epoch"] = str(struct.unpack(">I", data[off:off + 4])[0])
+    return out
+
+
+def parse_rpm_sqlite(db: bytes) -> dict[str, str]:
+    """name -> [epoch:]version-release from an rpmdb.sqlite (Fedora 33+, RHEL 9+, Amazon Linux 2023, SUSE Tumbleweed). Berkeley DB and ndb databases are not read."""
+    import sqlite3
+    out: dict[str, str] = {}
+    if not db.startswith(b"SQLite format 3"):
+        return out
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "rpmdb.sqlite"
+        f.write_bytes(db)
+        con = sqlite3.connect(f"file:{f}?mode=ro", uri=True)
+        try:
+            for (blob,) in con.execute("SELECT blob FROM Packages"):
+                h = parse_rpm_header(bytes(blob))
+                if h.get("name") and h.get("name") != "gpg-pubkey":
+                    out[h["name"]] = (f"{h['epoch']}:" if h.get("epoch") else "") + f"{h.get('version', '')}-{h.get('release', '')}"
+        except sqlite3.Error as e:
+            dbg(f"collect: rpmdb unreadable {e!r}")
+        finally:
+            con.close()
+    return out
+
+
+def image_languages(cid: str) -> tuple[dict[str, dict[str, str]], bool]:
+    """Python, Node, Java and Ruby packages inside an image, from names and small manifests found while streaming `docker export` (nothing is extracted to disk).
+    Returns ({ecosystem: {name: 'v1|v2'}}, complete). Stops at LANG_SECONDS and says so."""
+    import tarfile
+    found: dict[str, dict[str, set]] = {"pypi": {}, "npm": {}, "maven": {}, "gem": {}}
+
+    def add(eco: str, name: str, ver: str) -> None:
+        if name and ver and len(found[eco]) < 8000:
+            found[eco].setdefault(name.lower() if eco != "maven" else name, set()).add(ver)
+    t0 = time.time()
+    proc = subprocess.Popen(["docker", "export", cid], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    complete = True
+    try:
+        with tarfile.open(fileobj=proc.stdout, mode="r|") as t:
+            for m in t:
+                if time.time() - t0 > LANG_SECONDS:
+                    complete = False
+                    break
+                n = m.name
+                parts = n.rstrip("/").split("/")
+                last = parts[-1]
+                if m.isdir() and last.endswith((".dist-info", ".egg-info")) and any(x in ("site-packages", "dist-packages") for x in parts[:-1]):
+                    stem = re.sub(r"-py\d[\d.]*$", "", last.rsplit(".", 1)[0])
+                    nm, _, ver = stem.rpartition("-")
+                    if nm and ver[:1].isdigit():
+                        add("pypi", nm.replace("_", "-"), ver)
+                elif m.isfile() and last == "package.json" and len(parts) >= 3 and "node_modules" in parts[:-1] and (
+                        parts[-3] == "node_modules" or (parts[-3].startswith("@") and parts[-4:-3] == ["node_modules"])) and m.size < 262144:
+                    try:
+                        j = json.loads(t.extractfile(m).read())
+                        add("npm", str(j.get("name", "")), str(j.get("version", "")))
+                    except (ValueError, AttributeError, OSError):
+                        pass
+                elif m.isfile() and last.endswith(".jar"):
+                    jm = re.match(r"^(.+?)-(\d[\w.\-]*)\.jar$", last)
+                    if jm:
+                        add("maven", jm.group(1), jm.group(2))
+                elif m.isdir() and len(parts) >= 2 and parts[-2] == "gems":
+                    gm = re.match(r"^(.+)-(\d[\w.]*?)(?:-[a-z0-9_]+)?$", last)
+                    if gm:
+                        add("gem", gm.group(1), gm.group(2))
+    except (tarfile.TarError, OSError, EOFError) as e:
+        dbg(f"collect: export of {cid[:12]}: {e!r}")
+        complete = False
+    finally:
+        proc.kill()
+        proc.wait()
+    return {k: {n: "|".join(sorted(v)) for n, v in d.items()} for k, d in found.items() if d}, complete
 
 
 def parse_os_release(text: str) -> dict:
@@ -478,7 +571,7 @@ def image_ref_parts(ref: str) -> tuple[str, str]:
     return name.rsplit("/", 1)[-1], tag
 
 
-def image_detail(ref: str, running: bool) -> dict | None:
+def image_detail(ref: str, running: bool, lang: bool = False) -> dict | None:
     """What is inside one local image, without starting it: docker image inspect for its metadata, then docker create + docker cp for the OS release file
     and the package database (apk or dpkg), then docker rm. Environment values are never kept except keys ending _VERSION, because images carry secrets there."""
     raw = run(["docker", "image", "inspect", ref])
@@ -491,7 +584,7 @@ def image_detail(ref: str, running: bool) -> dict | None:
     labels = cfg.get("Labels") or {}
     name, tag = image_ref_parts(ref)
     d: dict = {"name": name, "tag": tag, "running": running, "arch": meta.get("Architecture", ""), "platform": meta.get("Os", ""),
-               "id": (meta.get("Id") or "").replace("sha256:", "")[:12]}
+               "id": (meta.get("Id") or "").replace("sha256:", "")[:12], "layers": (meta.get("RootFS") or {}).get("Layers") or []}
     for k, lk in (("title", "org.opencontainers.image.title"), ("version", "org.opencontainers.image.version"), ("vendor", "org.opencontainers.image.vendor"),
                   ("baseName", "org.opencontainers.image.base.name"), ("source", "org.opencontainers.image.source")):
         if labels.get(lk):
@@ -508,28 +601,67 @@ def image_detail(ref: str, running: bool) -> dict | None:
     if not cid:
         d["note"] = "metadata only: no container could be created to read files"
         return d
+    langs: dict = {}
     try:
-        got = {}
+        got: dict = {}
         for key, path in IMAGE_FILES:
             blob = run_bytes(["docker", "cp", f"{cid}:/{path}", "-"])
             if blob:
-                got[key] = tar_file(blob)
+                got[key] = tar_members(blob)
+        if lang:
+            langs, complete = image_languages(cid)
+            if not complete:
+                d["languagesPartial"] = True
     finally:
         run(["docker", "rm", "-f", cid])
-    osr = parse_os_release(got.get("os") or got.get("os2") or "")
+    first = lambda k: next(iter((got.get(k) or {}).values()), b"").decode("utf-8", "replace")  # noqa: E731
+    got_text = {k: first(k) for k in ("os", "os2", "apk", "dpkg")}
+    osr = parse_os_release(got_text["os"] or got_text["os2"])
     if osr:
         d["os"] = osr.get("ID", "")
         d["osVersion"] = osr.get("VERSION_ID", "")
         d["osName"] = osr.get("PRETTY_NAME") or osr.get("NAME", "")
         if osr.get("ID_LIKE"):
             d["osLike"] = osr["ID_LIKE"]
-    if got.get("apk"):
-        d["packages"], d["packageManager"] = parse_apk_db(got["apk"]), "apk"
-    elif got.get("dpkg"):
-        d["packages"], d["packageManager"] = parse_dpkg_status(got["dpkg"]), "dpkg"
-    if not osr and "packages" not in d:
+    rpm = next((v for k in ("rpm", "rpm2") for v in (got.get(k) or {}).values()), b"")
+    if got_text["apk"]:
+        d["packages"], d["packageManager"] = parse_apk_db(got_text["apk"]), "apk"
+    elif got_text["dpkg"]:
+        d["packages"], d["packageManager"] = parse_dpkg_status(got_text["dpkg"]), "dpkg"
+    elif got.get("dpkgd"):  # distroless: one control file per package
+        pk: dict[str, str] = {}
+        for name, raw in got["dpkgd"].items():
+            if not name.endswith((".md5sums", ".list")):
+                pk.update(parse_dpkg_status(raw.decode("utf-8", "replace")))
+        if pk:
+            d["packages"], d["packageManager"] = pk, "dpkg"
+    elif rpm:
+        pk = parse_rpm_sqlite(rpm)
+        if pk:
+            d["packages"], d["packageManager"] = pk, "rpm"
+    if langs:
+        d["languages"] = langs
+    if not osr and "packages" not in d and not langs:
         d["note"] = "no OS release file or package database found (a minimal or distroless image)"
     return d
+
+
+def lineage(details: dict[str, dict]) -> None:
+    """Which local image each image was built on: another local image whose layers are exactly the first layers of this one (the longest wins; an image
+    with the same layers is a tag of the same image, not a base). Layer lists are dropped afterwards, keeping the count."""
+    for ref, d in details.items():
+        mine = d.get("layers") or []
+        best = ""
+        bestn = 0
+        for other, o in details.items():
+            ol = o.get("layers") or []
+            if other != ref and 0 < len(ol) < len(mine) and mine[:len(ol)] == ol and len(ol) > bestn:
+                best, bestn = other, len(ol)
+        if best:
+            d["builtOn"] = best
+            d["sharedLayers"] = bestn
+    for d in details.values():
+        d["layerCount"] = len(d.pop("layers", []) or [])
 
 
 def image_details(running: list[str]) -> dict[str, dict]:
@@ -543,11 +675,14 @@ def image_details(running: list[str]) -> dict[str, dict]:
             if l and "<none>" not in l:
                 refs.setdefault(l, False)
     out = {}
+    lang_mode = env("IMAGES_LANG", "running").lower()
     for ref in sorted(refs)[:IMAGE_LIMIT]:
-        progress(f"[host] looking inside image {ref} ...")
-        d = image_detail(ref, refs[ref])
+        deep = lang_mode == "all" or (lang_mode == "running" and refs[ref])
+        progress(f"[host] looking inside image {ref}" + (" (including Python/Node/Java/Ruby packages; can take minutes)" if deep else "") + " ...")
+        d = image_detail(ref, refs[ref], deep)
         if d:
             out[ref] = d
+    lineage(out)
     if len(refs) > IMAGE_LIMIT:
         progress(f"[host] {len(refs) - IMAGE_LIMIT} more images not opened (limit {IMAGE_LIMIT}); set LATTICE_SCAN_IMAGES=running to open only running ones")
     return out
@@ -690,6 +825,10 @@ def image_words(ref: str, d: dict) -> dict[str, tuple[str, str]]:
             continue
         for w in stems(n):
             out.setdefault(w, (f"{n} {v}".strip(), v))
+    for eco, pk in (d.get("languages") or {}).items():
+        for n, v in pk.items():
+            for w in stems(n.rsplit("/", 1)[-1].lstrip("@")):
+                out.setdefault(w, (f"{eco} {n} {v.replace('|', ', ')}", v))
     if d.get("os"):
         out.setdefault(d["os"], (f"{d.get('osName') or d['os']}", d.get("osVersion", "")))
     return out
@@ -705,8 +844,7 @@ def in_images(want: set[str], basis: str, inv: dict) -> tuple[str, list[str], li
             for w in sorted(want):
                 label, v = have[w]
                 installed.append(f"{label} (image {ref})")
-                if v:
-                    vers.append(v)
+                vers += [x for x in v.split("|") if x]
     if not refs:
         return None
     return f"{basis} " + " ".join(sorted(want)) + " matches inside container image" + ("s " if len(refs) > 1 else " ") + ", ".join(refs), sorted(set(installed)), sorted(set(vers))
@@ -1118,7 +1256,9 @@ def show_inventory(inv: dict) -> None:
     for ref, d in sorted((inv.get("imageDetails") or {}).items()):
         print(f"  {ref}{'' if d.get('running') else ' (not running)'}: " + (d.get("osName") or d.get("note") or "OS unknown")
               + (f", {len(d['packages'])} {d['packageManager']} packages" if d.get("packages") else "")
-              + (f", product version {product_version(d)}" if product_version(d) else "") + (f", {d['arch']}" if d.get("arch") else ""))
+              + (f", product version {product_version(d)}" if product_version(d) else "") + (f", {d['arch']}" if d.get("arch") else "")
+              + (f", built on {d['builtOn']} ({d['sharedLayers']} of {d['layerCount']} layers shared)" if d.get("builtOn") else "")
+              + "".join(f", {len(v)} {e}" for e, v in sorted((d.get("languages") or {}).items())) + (" (language scan stopped at its time limit)" if d.get("languagesPartial") else ""))
     print(f"\nsnaps ({len(inv['snaps'])}):" + "".join(f"\n  {n:<32} {v}" for n, v in sorted(inv["snaps"].items())))
     print(f"\npackages ({len(inv['packages'])}):" + "".join(f"\n  {n:<44} {v}" for n, v in sorted(inv["packages"].items())))
 
