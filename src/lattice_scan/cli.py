@@ -2158,6 +2158,26 @@ def cmd_recent(a) -> int:
     return 0
 
 
+def cmd_posture(a) -> int:
+    """What this host exposes and runs: listening ports, firewall, SSH settings, services and (--deep) processes no package owns. Read only; nothing is sent anywhere."""
+    from lattice_scan import posture
+    deep = getattr(a, "posture_deep", False) or getattr(a, "deep", False)
+    who = "root" if os.geteuid() == 0 else f"a normal user (uid {os.geteuid()})"
+    progress(f"[posture] {'deep' if deep else 'quick'} scan as {who}: ports, firewall, ssh, services" + (", processes, persistence points" if deep else "")
+             + ("" if os.geteuid() == 0 else "; what needs root will be listed, not guessed"))
+    d = posture.collect(deep=deep)
+    progress(f"[posture] done: {len(d['ports'])} listening ports, {len(d['observations'])} signals for a person to read")
+    text = posture.dump(d)
+    if a.json:
+        try:
+            write_private(Path(a.json), text)
+        except OSError as err:
+            print(f"cannot write {a.json}: {err}", file=sys.stderr)
+            return 2
+    print(text if a.format == "json" else posture.render(d))
+    return 0
+
+
 def cmd_enrich(a) -> int:
     """Look up CVE ids that already exist somewhere (an audit, an advisory, a ticket): is each one exploited, listed when, due when, ransomware. By exact id,
     no comparison with this host, nothing written to the records."""
@@ -2440,6 +2460,12 @@ def main() -> int:
     pj.add_argument("--color", choices=["auto", "always", "never"], default="auto", help="colour the console report (auto: only on a terminal, never with NO_COLOR)")
     pj.add_argument("--width", type=int, help="console report width in columns (default: the terminal's, between 72 and 160)")
     pj.add_argument("--fail-on", choices=["never", "in-range", "candidate"], default="never", help="exit 1 when a candidate (or an in-range one) is found; default never: a person reads it")
+    po = sub.add_parser("posture", help="what this host exposes and runs: listening ports, firewall, SSH settings, services; --deep also processes that no package owns. Read only, nothing is sent")
+    po.add_argument("--deep", dest="posture_deep", action="store_true", help="also check every readable process (where its executable is, whether a package owns it, outbound connections of those that none does) and persistence points; about a minute")
+    po.add_argument("--format", choices=["console", "json"], default="console", help="what to print (default console)")
+    po.add_argument("--json", metavar="FILE", help="also write the full result as JSON to FILE (mode 0600; it names this host's processes: do not share it)")
+    po.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each step on stderr (the default)")
+    po.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
     rc = sub.add_parser("recent", help="start here with no CVE id: read namiq.io's recent exploited and critical CVEs, check what this host could have, read only those from Lattice")
     rc.add_argument("--period", choices=["daily", "weekly", "open"], default="weekly", help="daily: added or published in the last day or two; weekly: the last seven days, which includes daily (default); open: exploited CVEs added before the weekly window but within 30 days, overdue first (overdue means CISA's due date has passed; it says nothing about any machine)")
     rc.add_argument("--open", dest="period", action="store_const", const="open", help="same as --period open")
@@ -2481,6 +2507,7 @@ def main() -> int:
         return cmd_recent(a)
     if a.c == "project": return cmd_project(a)
     if a.c == "recent": return cmd_recent(a)
+    if a.c == "posture": return cmd_posture(a)
     if a.c == "enrich": return cmd_enrich(a)
     if a.c == "get-key": return cmd_get_key(a)
     if a.c == "impact": return cmd_impact(a)

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- New command `lattice-scan posture`: what this host exposes and runs, beyond what is installed. Quick: the listening TCP and UDP sockets (all interfaces, loopback only or one address) with the owning process, package or container image; the host firewall (ufw, firewalld, nftables, iptables); the SSH server settings (first value wins, `Include` followed, OpenSSH defaults for unset keywords); the running services and whether a package owns each program. `--deep` also reads every process it may (program in a temporary folder, deleted while running, memory only, owned by no package, and outbound connections of those) and persistence points (`ld.so.preload`, extra uid 0 accounts, cron and setuid files no package owns). The scope follows the user: as root it reads firewall rules, `sshd -T` and every process; otherwise it lists what it could not read and never runs `sudo`. It reports signals for a person to read, each saying why it can be harmless; it is not an incident detector. Read only, nothing is sent, command line arguments are never recorded. Programs replaced by a package update after they started are one restart note, not a suspicion.
+
+## Unreleased
+
 - `--refresh` now runs the scan. It collects the inventory again, shows its totals, then does what the same command would do without `--refresh` (the daily list when no id is given). Before, it stopped after the inventory. `--refresh --inventory` keeps the old behaviour: inventory only, no network call.
 - The default scan no longer drops the findings still open from earlier runs. When nothing on the day's list matched, it printed only the list's rows; now it also lists every open finding with its saved detail, as a scan of named ids already did.
 - Every row of the default scan's table now has a detail block: for a CISA-listed CVE that matched nothing, the dates, CVSS, EPSS and ransomware flag from namiq.io's list and why it did not match (the words it needs and which this machine has); for a watched critical CVE, why it is watched. Each says how to read the full detail from Lattice (`lattice-scan --cve ID`). No extra call is made.
