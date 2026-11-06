@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 NamiQ LLC
 """posture on a fake /proc and /etc tree: ports, firewall, ssh, services, processes no package owns, scope. Invented names and RFC 5737 addresses only."""
-import json, os, sys, tempfile, unittest
+import json, os, shutil, sys, tempfile, unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from lattice_scan import posture  # noqa: E402
 
+ROOTS = []   # the temporary trees of this module; removed once, at the end (an implicit clean-up of a TemporaryDirectory is a ResourceWarning)
 HEAD = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
 
 
@@ -18,8 +19,8 @@ class Fake:
     """A tree under a temporary folder that posture reads as if it were /."""
 
     def __init__(self):
-        self.d = tempfile.TemporaryDirectory()
-        self.root = Path(self.d.name)
+        self.root = Path(tempfile.mkdtemp())
+        ROOTS.append(self.root)
         self.calls = []
 
     def file(self, path, text=""):
@@ -227,6 +228,11 @@ class Persistence(unittest.TestCase):
         self.assertEqual((p["ldPreload"], p["extraUid0Users"], p["cronFilesNoPackage"]), (["/usr/lib/libhide.so"], ["toor"], ["/etc/cron.d/local"]))
         topics = [o["topic"] for o in d["observations"]]
         self.assertEqual(topics.count("persistence"), 3)
+
+
+def tearDownModule():
+    for r in ROOTS:
+        shutil.rmtree(r, ignore_errors=True)
 
 
 if __name__ == "__main__":
