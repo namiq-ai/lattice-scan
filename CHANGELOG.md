@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- A CVE you name that the graph holds only as a bare node now says so. A new CVE can be in Lattice as a stub with no NVD record, so `lattice-scan --cve ID` printed only "not in the graph's CISA list" and nothing else, and it looked as if the scan had failed. It now explains that the graph has no NVD record, description, EPSS, SSVC, weakness, ATT&CK link or reference for the id yet, that a bare node says nothing about risk, and what to do. When namiq.io's list of recent CVEs has the id (that request carries no id), it adds the product, CVSS and publication date from that list and whether something installed may match the product.
+
 ## 0.4.3 — 2026-11-06
 
 - Self-audit (docs/SELF-AUDIT.md): the tool has no runtime dependency, and the `.deb` has no maintainer scripts. The audit found and fixed: a `pom.xml` that declares entities or a DOCTYPE is skipped (it could exhaust memory); a manifest over 5 MB is skipped and named; text taken from an image or from firmware has control characters replaced before it is printed; an RPM database from an image is opened query-only with `trusted_schema` off and at most 50,000 rows; an image reference starting with a dash is not passed to docker; the build tools are required as setuptools 84.1.0 or later in CI and release (older versions have known advisories that affect building, not running).
