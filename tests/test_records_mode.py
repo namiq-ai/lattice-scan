@@ -25,7 +25,7 @@ class RecordsMode(unittest.TestCase):
     def test_records_mode_unwritable_home_does_not_crash(self):
         home = tempfile.mkdtemp(); os.chmod(home, 0o555)
         try:
-            p = run(home, "--refresh", "-q")
+            p = run(home, "--refresh", "--inventory", "-q")
             self.assertNotIn("Traceback", p.stderr)
             self.assertEqual(p.returncode, 0, p.stderr)
             self.assertEqual(os.listdir(home), [])
@@ -33,14 +33,14 @@ class RecordsMode(unittest.TestCase):
             os.chmod(home, 0o755)
 
     def test_records_mode_missing_home_does_not_crash(self):
-        p = run("/nonexistent-home-for-test", "--refresh", "-q")
+        p = run("/nonexistent-home-for-test", "--refresh", "--inventory", "-q")
         self.assertNotIn("Traceback", p.stderr)
         self.assertEqual(p.returncode, 0, p.stderr)
 
     def test_records_mode_named_dir_that_cannot_be_used_is_one_line(self):
         home = tempfile.mkdtemp(); os.chmod(home, 0o555)
         try:
-            p = run(home, "--refresh", "-q", extra={"LATTICE_SCAN_DIR": f"{home}/records"})
+            p = run(home, "--refresh", "--inventory", "-q", extra={"LATTICE_SCAN_DIR": f"{home}/records"})
             self.assertEqual(p.returncode, 1)
             self.assertNotIn("Traceback", p.stderr)
             self.assertEqual(len(p.stderr.strip().splitlines()), 1, p.stderr)
@@ -50,13 +50,13 @@ class RecordsMode(unittest.TestCase):
 
     def test_records_mode_no_terminal_and_no_folder_leaves_nothing_under_home(self):
         home = tempfile.mkdtemp()
-        p = run(home, "--refresh", "-q")
+        p = run(home, "--refresh", "--inventory", "-q")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(os.listdir(home), [])
 
     def test_records_mode_keep_writes_the_default_folder_with_private_files(self):
         home = tempfile.mkdtemp()
-        p = run(home, "--refresh", "-q", "--keep")
+        p = run(home, "--refresh", "--inventory", "-q", "--keep")
         self.assertEqual(p.returncode, 0, p.stderr)
         d = Path(home) / ".lattice-scan"
         files = [f for f in d.iterdir() if f.is_file()]
@@ -68,13 +68,13 @@ class RecordsMode(unittest.TestCase):
     def test_records_mode_an_existing_folder_is_still_used(self):
         home = tempfile.mkdtemp()
         (Path(home) / ".lattice-scan").mkdir(mode=0o700)
-        p = run(home, "--refresh", "-q")
+        p = run(home, "--refresh", "--inventory", "-q")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue((Path(home) / ".lattice-scan" / "inventory.json").exists())
 
     def test_records_mode_named_dir_is_used_and_private(self):
         home, d = tempfile.mkdtemp(), Path(tempfile.mkdtemp()) / "mine"
-        p = run(home, "--refresh", "-q", extra={"LATTICE_SCAN_DIR": str(d)})
+        p = run(home, "--refresh", "--inventory", "-q", extra={"LATTICE_SCAN_DIR": str(d)})
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(os.listdir(home), [])
         for f in d.iterdir():
@@ -83,7 +83,7 @@ class RecordsMode(unittest.TestCase):
     def test_records_mode_loose_files_from_an_older_run_are_tightened(self):
         home = tempfile.mkdtemp(); d = Path(home) / ".lattice-scan"; d.mkdir(mode=0o700)
         old = d / "scan.log"; old.write_text("x"); os.chmod(old, 0o664)
-        run(home, "--refresh", "-q")
+        run(home, "--refresh", "--inventory", "-q")
         self.assertEqual(old.stat().st_mode & 0o077, 0)
 
     def test_records_mode_project_needs_no_home_at_all(self):
