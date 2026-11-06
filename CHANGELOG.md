@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Self-audit (docs/SELF-AUDIT.md): the tool has no runtime dependency, and the `.deb` has no maintainer scripts. The audit found and fixed: a `pom.xml` that declares entities or a DOCTYPE is skipped (it could exhaust memory); a manifest over 5 MB is skipped and named; text taken from an image or from firmware has control characters replaced before it is printed; an RPM database from an image is opened query-only with `trusted_schema` off and at most 50,000 rows; an image reference starting with a dash is not passed to docker; the build tools are required as setuptools 84.1.0 or later in CI and release (older versions have known advisories that affect building, not running).
+
 - `--refresh` now runs the scan. It collects the inventory again, shows its totals, then does what the same command would do without `--refresh` (the daily list when no id is given). Before, it stopped after the inventory. `--refresh --inventory` keeps the old behaviour: inventory only, no network call.
 - The default scan no longer drops the findings still open from earlier runs. When nothing on the day's list matched, it printed only the list's rows; now it also lists every open finding with its saved detail, as a scan of named ids already did.
 - Every row of the default scan's table now has a detail block: for a CISA-listed CVE that matched nothing, the dates, CVSS, EPSS and ransomware flag from namiq.io's list and why it did not match (the words it needs and which this machine has); for a watched critical CVE, why it is watched. Each says how to read the full detail from Lattice (`lattice-scan --cve ID`). No extra call is made.

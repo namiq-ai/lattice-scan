@@ -32,6 +32,6 @@ jobs:
         with:
           python-version: "3.12"
       - run: sudo apt-get update && sudo apt-get install -y fakeroot
-      - run: python -m pip install "setuptools>=77" wheel
+      - run: python -m pip install "setuptools>=84.1.0" wheel
       - run: python packaging/build.py
       - run: dpkg-deb --info dist/*.deb && python dist/lattice-scan.pyz --version

@@ -384,6 +384,18 @@ IMAGE_FILE_LIMIT = 40 * 1024 * 1024
 IMAGE_LIMIT = 60
 
 
+def scrub(v):
+    """clean() applied to every string inside v (dicts, lists, keys too): names, versions and labels read from an image or from firmware are data that someone else wrote,
+    and must not carry terminal escape sequences to the screen."""
+    if isinstance(v, str):
+        return clean(v)
+    if isinstance(v, dict):
+        return {scrub(k): scrub(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [scrub(x) for x in v]
+    return v
+
+
 def hardware() -> dict:
     """What this machine is: manufacturer, model, version, board, firmware. Read from the kernel's own files; serial numbers and UUIDs are left out on purpose."""
     def rd(p: str) -> str:
@@ -421,7 +433,7 @@ def hardware() -> dict:
     except (OSError, StopIteration, ValueError, IndexError):
         pass
     h["virtualisation"] = run(["systemd-detect-virt"]).strip() or ""
-    return {k: v for k, v in h.items() if v not in ("", None)}
+    return scrub({k: v for k, v in h.items() if v not in ("", None)})
 
 
 def run_bytes(cmd: list[str]) -> bytes:
@@ -507,7 +519,9 @@ def parse_rpm_sqlite(db: bytes) -> dict[str, str]:
             f.write_bytes(db)
             con = sqlite3.connect(f"file:{f}?mode=ro", uri=True)
             try:
-                for (blob,) in con.execute("SELECT blob FROM Packages"):
+                con.execute("PRAGMA trusted_schema=OFF")   # the database comes from an image someone else built: no schema-defined functions or triggers
+                con.execute("PRAGMA query_only=ON")
+                for (blob,) in con.execute("SELECT blob FROM Packages LIMIT 50000"):
                     h = parse_rpm_header(bytes(blob))
                     if h.get("name") and h.get("name") != "gpg-pubkey":
                         out[h["name"]] = (f"{h['epoch']}:" if h.get("epoch") else "") + f"{h.get('version', '')}-{h.get('release', '')}"
@@ -811,11 +825,11 @@ def image_details(running: list[str]) -> dict[str, dict]:
         return {}
     sweep_containers(stale_only=True)
     atexit.register(sweep_containers, False)
-    refs = {r: True for r in running}
+    refs = {r: True for r in running if not r.startswith("-")}
     local, size_mb, sizes = set(running), 0.0, {}
     for l in run(["docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}\t{{.Size}}"]).splitlines():
         ref, _, size = l.partition("\t")
-        if ref and "<none>" not in ref:
+        if ref and "<none>" not in ref and not ref.startswith("-"):   # a reference starting with a dash would reach docker as an option
             local.add(ref)
             sizes[ref] = parse_size_mb(size)
             size_mb += sizes[ref]
@@ -848,7 +862,7 @@ def image_details(running: list[str]) -> dict[str, dict]:
         if with_lang and sizes.get(ref, 0) >= 1000:  # only the ones that take a while, so the person knows what the quiet minutes are
             progress(f"[host] reading {ref} ({sizes[ref] / 1024:.1f} GB; the Python/Node/Java/Ruby scan of a large image takes minutes) ...")
         try:
-            d = image_detail(ref, refs[ref], with_lang)
+            d = scrub(image_detail(ref, refs[ref], with_lang))
         except Exception as e:  # noqa: BLE001 - one unreadable image must not stop the scan
             tick(ref, f"skipped, {type(e).__name__}: {str(e)[:80]}", t0)
             return None
@@ -1867,7 +1881,10 @@ def cmd_project(a) -> int:
             print(f"not a folder: {root_s}", file=sys.stderr)
             return 2
         progress(f"[project] {root.name or root}: looking for dependency files under {root}")
+        manifests.SKIPPED.clear()
         comps, files, cut = manifests.read_project(root, on_file=_file_progress)
+        for note in manifests.SKIPPED:
+            print(f"[project] {root.name or root}: skipped {clean(note)}", file=sys.stderr)
         progress(f"[project] {root.name or root}: {len(files)} file(s) read, {len(comps)} declared component(s)" + (" (file search was cut at the limit)" if cut else ""))
         inv, where = project_inventory(comps)
         pinned = sum(1 for c in comps if c.version)

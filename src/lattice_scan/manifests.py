@@ -22,6 +22,18 @@ except ImportError:  # 3.9 / 3.10
 
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "env", "__pycache__", ".tox", ".mypy_cache", ".next", "dist", "build", "site-packages", ".impl-worktrees", ".claude", "runtime", "workspace", "target", ".gradle", "cmake-build-debug", "cmake-build-release"}
 MAX_FILES = 400
+MAX_BYTES = 5 * 1024 * 1024   # a manifest larger than this is not read: a hostile folder must not exhaust memory
+SKIPPED: list[str] = []       # files not read for being too large or for declaring entities, so the report can name them
+
+
+def _text(path: Path) -> str:
+    try:
+        if path.stat().st_size > MAX_BYTES:
+            SKIPPED.append(f"{path.name}: larger than {MAX_BYTES // 1048576} MB, not read")
+            return ""
+        return path.read_text(errors="replace")
+    except OSError:
+        return ""
 MAX_BYTES = 2_000_000
 
 
@@ -62,7 +74,7 @@ def requirements_txt(path: Path, root: Path, _seen: set | None = None) -> list[C
         return []
     seen.add(path.resolve())
     out: list[Component] = []
-    lines = path.read_text(errors="replace").splitlines()
+    lines = _text(path).splitlines()
     i = 0
     while i < len(lines):
         raw, ln = lines[i], i + 1
@@ -213,7 +225,7 @@ def _toml(text: str) -> dict:
 
 
 def pyproject_toml(path: Path, root: Path) -> list[Component]:
-    text = path.read_text(errors="replace")
+    text = _text(path)
     d = _toml(text)
     rel = str(path.relative_to(root))
     out: list[Component] = []
@@ -241,10 +253,10 @@ def pyproject_toml(path: Path, root: Path) -> list[Component]:
 
 def package_json(path: Path, root: Path) -> list[Component]:
     try:
-        d = json.loads(path.read_text(errors="replace"))
+        d = json.loads(_text(path))
     except ValueError:
         return []
-    text = path.read_text(errors="replace")
+    text = _text(path)
     out = []
     for key in ("dependencies", "devDependencies", "optionalDependencies"):
         for name, spec in (d.get(key) or {}).items():
@@ -257,7 +269,7 @@ def package_json(path: Path, root: Path) -> list[Component]:
 def package_lock(path: Path, root: Path) -> list[Component]:
     """package-lock.json (lockfileVersion 2/3): every resolved package with its exact version. The lockfile is what is actually installed, so it pins what package.json only ranges."""
     try:
-        d = json.loads(path.read_text(errors="replace"))
+        d = json.loads(_text(path))
     except ValueError:
         return []
     rel = str(path.relative_to(root))
@@ -296,7 +308,7 @@ def dockerfile(path: Path, root: Path) -> list[Component]:
     out: list[Component] = []
     args: dict[str, str] = {}
     stages: set[str] = set()
-    lines = path.read_text(errors="replace").splitlines()
+    lines = _text(path).splitlines()
     i = 0
     while i < len(lines):
         ln = i + 1
@@ -340,7 +352,7 @@ def dockerfile(path: Path, root: Path) -> list[Component]:
 def compose_file(path: Path, root: Path) -> list[Component]:
     rel = str(path.relative_to(root))
     out = []
-    for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+    for n, line in enumerate(_text(path).splitlines(), 1):
         m = re.match(r"^\s*image:\s*(.+?)\s*(?:#.*)?$", line)
         if m:
             c = _image(m.group(1), rel, n, {})
@@ -359,9 +371,13 @@ def _xml_text(el, tag: str) -> str:
 def pom_xml(path: Path, root: Path) -> list[Component]:
     """pom.xml: dependencies and dependencyManagement, `${property}` resolved from <properties> (and the parent's version for ${project.version}); an unresolved property is no version."""
     import xml.etree.ElementTree as ET
+    raw = _text(path)
+    if re.search(r"<!(DOCTYPE|ENTITY)", raw, re.I):   # a pom never needs either; entity expansion is how an XML file exhausts memory
+        SKIPPED.append(f"{path.name}: declares a DOCTYPE or entities, not read")
+        return []
     try:
-        tree = ET.parse(path).getroot()
-    except (ET.ParseError, OSError):
+        tree = ET.fromstring(raw)
+    except ET.ParseError:
         return []
     rel = str(path.relative_to(root))
     props = {"project.version": _xml_text(tree, "version")}
@@ -388,7 +404,7 @@ _GRADLE_DEP = re.compile(r"""(?:implementation|api|compile|compileOnly|runtimeOn
 def gradle_build(path: Path, root: Path) -> list[Component]:
     rel = str(path.relative_to(root))
     out = []
-    for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+    for n, line in enumerate(_text(path).splitlines(), 1):
         for m in _GRADLE_DEP.finditer(line):
             v = (m.group(3) or "").strip()
             pinned = v if re.fullmatch(r"\d+(\.\d+)*([.-][A-Za-z0-9]+)*", v) else None
@@ -399,7 +415,7 @@ def gradle_build(path: Path, root: Path) -> list[Component]:
 def gradle_lockfile(path: Path, root: Path) -> list[Component]:
     rel = str(path.relative_to(root))
     out = []
-    for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+    for n, line in enumerate(_text(path).splitlines(), 1):
         m = re.match(r"^([\w.-]+):([\w.-]+):([^=\s]+)=", line)
         if m:
             out.append(Component(f"{m.group(1)}:{m.group(2)}".lower(), "maven", m.group(3), m.group(3), rel, n))
@@ -408,7 +424,7 @@ def gradle_lockfile(path: Path, root: Path) -> list[Component]:
 
 def gradle_catalog(path: Path, root: Path) -> list[Component]:
     """gradle/libs.versions.toml: [versions] and [libraries] (module = "g:a", version or version.ref)."""
-    text = path.read_text(errors="replace")
+    text = _text(path)
     d = _toml(text)
     versions = {k: (v if isinstance(v, str) else (v or {}).get("require") or (v or {}).get("strictly") or "") for k, v in (d.get("versions") or {}).items()}
     rel = str(path.relative_to(root))
@@ -429,7 +445,7 @@ def gradle_catalog(path: Path, root: Path) -> list[Component]:
 
 
 def cargo_toml(path: Path, root: Path) -> list[Component]:
-    text = path.read_text(errors="replace")
+    text = _text(path)
     rel = str(path.relative_to(root))
     d = _toml(text)
     out = []
@@ -458,7 +474,7 @@ def cargo_toml(path: Path, root: Path) -> list[Component]:
 
 
 def cargo_lock(path: Path, root: Path) -> list[Component]:
-    text = path.read_text(errors="replace")
+    text = _text(path)
     rel = str(path.relative_to(root))
     return [Component(m.group(1).lower(), "cargo", "==" + m.group(2), m.group(2), rel, text.count("\n", 0, m.start()) + 1)
             for m in re.finditer(r'\[\[package\]\]\s*\nname\s*=\s*"([^"]+)"\s*\nversion\s*=\s*"([^"]+)"', text)]
@@ -468,7 +484,7 @@ def conanfile(path: Path, root: Path) -> list[Component]:
     rel = str(path.relative_to(root))
     out = []
     sect = ""
-    for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+    for n, line in enumerate(_text(path).splitlines(), 1):
         s = line.split("#", 1)[0].strip()
         if path.suffix == ".py":
             refs = re.findall(r"""requires\s*(?:=|\()\s*\[?\s*["']([^"'\s]+)["']""", s) + re.findall(r"""["']([A-Za-z][\w.+-]*/[^"'\s@]+)(?:@[^"']*)?["']""", s if "requires" in s or "tool_requires" in s else "")
@@ -488,7 +504,7 @@ def conanfile(path: Path, root: Path) -> list[Component]:
 
 def vcpkg_json(path: Path, root: Path) -> list[Component]:
     try:
-        d = json.loads(path.read_text(errors="replace"))
+        d = json.loads(_text(path))
     except ValueError:
         return []
     rel = str(path.relative_to(root))
@@ -513,7 +529,7 @@ _LIBNAME = {"ssl": "openssl", "crypto": "openssl", "z": "zlib", "xml2": "libxml2
 
 def cmake_file(path: Path, root: Path) -> list[Component]:
     """CMakeLists.txt / *.cmake: find_package(Name 1.2 [EXACT]), FetchContent_Declare / ExternalProject_Add (GIT_TAG, URL), CPMAddPackage, pkg_check_modules. Only what is written."""
-    text = re.sub(r"(?m)#.*$", "", path.read_text(errors="replace"))
+    text = re.sub(r"(?m)#.*$", "", _text(path))
     rel = str(path.relative_to(root))
     out = []
     for m in _CMAKE_CMD.finditer(text):
@@ -561,7 +577,7 @@ def makefile(path: Path, root: Path) -> list[Component]:
     rel = str(path.relative_to(root))
     out = []
     seen = set()
-    for n, raw in enumerate(path.read_text(errors="replace").splitlines(), 1):
+    for n, raw in enumerate(_text(path).splitlines(), 1):
         line = raw.split("#", 1)[0]
         m = re.match(r"^\s*([A-Za-z][A-Za-z0-9_]*?)_(?:VERSION|VER)\s*[:?+]?=\s*v?(\d+(?:\.\d+)+)\s*$", line)
         if m:
