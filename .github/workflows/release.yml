@@ -64,7 +64,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: sudo apt-get update && sudo apt-get install -y fakeroot
-      - run: python -m pip install "setuptools>=77" wheel
+      - run: python -m pip install "setuptools>=84.1.0" wheel
       - name: Tag must equal the package version
         run: |
           v=$(python -c "import sys; sys.path.insert(0,'src'); from lattice_scan import __version__ as v; print(v)")
