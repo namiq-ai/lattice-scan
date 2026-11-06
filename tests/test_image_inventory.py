@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 NamiQ LLC
 """the inventory knows the machine's hardware and what is inside each container image. Invented products, a fake docker, reserved ids only."""
-import io, json, shutil, sys, tarfile, tempfile, unittest
+import io, json, os, shutil, sys, tarfile, tempfile, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -55,10 +55,15 @@ class FakeDocker:
         return tar_of(txt) if txt else b""
 
 
-def collect(running=("redis:7-alpine",), lang="off"):
+def collect(running=("redis:7-alpine",), lang="off", level="deep", images=None):
     fd = FakeDocker()
     with mock.patch.object(cli, "run", fd.run), mock.patch.object(cli, "run_bytes", fd.run_bytes), mock.patch.object(cli.shutil, "which", lambda c: "/x/docker"):
-        with mock.patch.dict("os.environ", {"LATTICE_SCAN_IMAGES_LANG": lang}):
+        envs = {"LATTICE_SCAN_LEVEL": level}
+        if lang:
+            envs["LATTICE_SCAN_IMAGES_LANG"] = lang
+        if images:
+            envs["LATTICE_SCAN_IMAGES"] = images
+        with mock.patch.dict("os.environ", envs):
             return cli.image_details(list(running)), fd
 
 
@@ -282,13 +287,64 @@ class Languages(unittest.TestCase):
         self.assertIn("redis:7-alpine", why)
         self.assertEqual(vers, ["9.8", "9.9"])
 
-    def test_default_scans_languages_only_for_running_images(self):
+    def test_language_scan_can_be_limited_to_running_images(self):
         seen = []
         with mock.patch.object(cli, "image_languages", lambda cid: (seen.append(cid) or ({"pypi": {"zz": "1"}}, True))):
             d, _ = collect(lang="running")
         self.assertEqual(seen, ["cid-redis:7-alpine"])
         self.assertEqual(d["redis:7-alpine"]["languages"], {"pypi": {"zz": "1"}})
         self.assertNotIn("languages", d["app:1"])
+
+
+class Levels(unittest.TestCase):
+    def test_quick_is_the_default_and_opens_only_running_images_without_language_scan(self):
+        with mock.patch.dict("os.environ", {}, clear=False):
+            for k in ("LATTICE_SCAN_LEVEL", "LATTICE_SCAN_IMAGES", "LATTICE_SCAN_IMAGES_LANG", "HOST_SCAN_LEVEL"):
+                os.environ.pop(k, None)
+            seen = []
+            with mock.patch.object(cli, "image_languages", lambda cid: seen.append(cid) or ({}, True)):
+                fd = FakeDocker()
+                with mock.patch.object(cli, "run", fd.run), mock.patch.object(cli, "run_bytes", fd.run_bytes), mock.patch.object(cli.shutil, "which", lambda c: "/x/docker"):
+                    d = cli.image_details(["redis:7-alpine"])
+        self.assertEqual(list(d), ["redis:7-alpine"])
+        self.assertEqual(seen, [])
+
+    def test_quick_still_finds_the_base_from_an_unopened_local_image(self):
+        base = {"Id": "sha256:b", "RootFS": {"Layers": ["l1"]}, "Config": {}}
+        app = {"Id": "sha256:a", "RootFS": {"Layers": ["l1", "l2"]}, "Config": {}}
+
+        def run(cmd):
+            if cmd[:3] == ["docker", "image", "inspect"]:
+                return json.dumps([{"app:1": app, "base:1": base}[cmd[3]]])
+            if cmd[:3] == ["docker", "image", "ls"]:
+                return "app:1\nbase:1\n"
+            return "cid\n" if cmd[:2] == ["docker", "create"] else ""
+        with mock.patch.dict("os.environ", {"LATTICE_SCAN_LEVEL": "quick"}), mock.patch.object(cli, "run", run), mock.patch.object(cli, "run_bytes", lambda c: b""), \
+                mock.patch.object(cli.shutil, "which", lambda c: "/x/docker"):
+            d = cli.image_details(["app:1"])
+        self.assertEqual(list(d), ["app:1"])
+        self.assertEqual(d["app:1"]["builtOn"], "base:1")
+
+    def test_deep_opens_every_image_and_scans_languages(self):
+        seen = []
+        with mock.patch.object(cli, "image_languages", lambda cid: (seen.append(cid) or ({}, True))):
+            d, _ = collect(lang=None, level="deep")
+        self.assertEqual(set(d), {"redis:7-alpine", "app:1", "tiny:1"})
+        self.assertEqual(len(seen), 3)
+
+    def test_deep_flag_sets_the_level(self):
+        with mock.patch.dict("os.environ", {"LATTICE_SCAN_LEVEL": "deep"}):
+            self.assertEqual(cli.scan_level(), "deep")
+        with mock.patch.dict("os.environ", {"LATTICE_SCAN_LEVEL": ""}):
+            self.assertEqual(cli.scan_level(), "quick")
+
+    def test_package_database_is_chosen_by_os_family(self):
+        _, fd = collect()
+        cps = [c[2] for c in fd.calls if c[:2] == ["docker", "cp"]]
+        mine = lambda ref: [p.split(":/", 1)[1] for p in cps if p.startswith("cid-" + ref + ":")]  # noqa: E731
+        self.assertEqual(mine("redis:7-alpine"), ["etc/os-release", "lib/apk/db/installed"])
+        self.assertEqual(mine("app:1"), ["etc/os-release", "var/lib/dpkg/status"])
+        self.assertEqual(len(mine("tiny:1")), 7)  # an image with no OS file tries every database once
 
 
 class Lineage(unittest.TestCase):

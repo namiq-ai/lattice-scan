@@ -604,10 +604,27 @@ def image_detail(ref: str, running: bool, lang: bool = False) -> dict | None:
     langs: dict = {}
     try:
         got: dict = {}
-        for key, path in IMAGE_FILES:
-            blob = run_bytes(["docker", "cp", f"{cid}:/{path}", "-"])
+        paths = dict(IMAGE_FILES)
+
+        def fetch(key: str) -> bool:
+            blob = run_bytes(["docker", "cp", f"{cid}:/{paths[key]}", "-"])
             if blob:
                 got[key] = tar_members(blob)
+            return bool(got.get(key))
+        # one copy per file that can exist: the OS file first, then the package database that OS family uses, and the other databases only if that found nothing
+        _ = fetch("os") or fetch("os2")
+        fam = parse_os_release(next(iter((got.get("os") or got.get("os2") or {}).values()), b"").decode("utf-8", "replace"))
+        ids = f"{fam.get('ID', '')} {fam.get('ID_LIKE', '')}".lower().split()
+        order = [k for k in ("apk", "dpkg", "dpkgd", "rpm", "rpm2")]
+        if "alpine" in ids:
+            order = ["apk"] + [k for k in order if k != "apk"]
+        elif {"debian", "ubuntu"} & set(ids):
+            order = ["dpkg", "dpkgd"] + [k for k in order if k not in ("dpkg", "dpkgd")]
+        elif {"fedora", "rhel", "centos", "amzn", "suse", "sles", "opensuse", "ol", "rocky", "almalinux"} & set(ids):
+            order = ["rpm", "rpm2"] + [k for k in order if k not in ("rpm", "rpm2")]
+        for k in order:
+            if fetch(k):
+                break
         if lang:
             langs, complete = image_languages(cid)
             if not complete:
@@ -646,15 +663,19 @@ def image_detail(ref: str, running: bool, lang: bool = False) -> dict | None:
     return d
 
 
-def lineage(details: dict[str, dict]) -> None:
+def scan_level() -> str:
+    """quick (default) or deep. Deep opens every local image and the language packages inside; see --deep."""
+    return "deep" if env("LEVEL", "quick").lower() == "deep" else "quick"
+
+
+def lineage(details: dict[str, dict], others: dict[str, list] | None = None) -> None:
     """Which local image each image was built on: another local image whose layers are exactly the first layers of this one (the longest wins; an image
     with the same layers is a tag of the same image, not a base). Layer lists are dropped afterwards, keeping the count."""
     for ref, d in details.items():
         mine = d.get("layers") or []
         best = ""
         bestn = 0
-        for other, o in details.items():
-            ol = o.get("layers") or []
+        for other, ol in [(k, v.get("layers") or []) for k, v in details.items()] + list((others or {}).items()):
             if other != ref and 0 < len(ol) < len(mine) and mine[:len(ol)] == ol and len(ol) > bestn:
                 best, bestn = other, len(ol)
         if best:
@@ -665,8 +686,10 @@ def lineage(details: dict[str, dict]) -> None:
 
 
 def image_details(running: list[str]) -> dict[str, dict]:
-    """Detail for every image on this machine, keyed by its reference. LATTICE_SCAN_IMAGES: all (default), running, or off."""
-    mode = env("IMAGES", "all").lower()
+    """Detail for every image on this machine, keyed by its reference. LATTICE_SCAN_LEVEL / --deep sets the defaults (quick: running images, no language scan; deep: all images and the language scan);
+    LATTICE_SCAN_IMAGES (all, running, off) and LATTICE_SCAN_IMAGES_LANG (all, running, off) override them."""
+    deep = scan_level() == "deep"
+    mode = env("IMAGES", "all" if deep else "running").lower()
     if mode == "off" or not shutil.which("docker"):
         return {}
     refs = {r: True for r in running}
@@ -675,14 +698,27 @@ def image_details(running: list[str]) -> dict[str, dict]:
             if l and "<none>" not in l:
                 refs.setdefault(l, False)
     out = {}
-    lang_mode = env("IMAGES_LANG", "running").lower()
-    for ref in sorted(refs)[:IMAGE_LIMIT]:
-        deep = lang_mode == "all" or (lang_mode == "running" and refs[ref])
-        progress(f"[host] looking inside image {ref}" + (" (including Python/Node/Java/Ruby packages; can take minutes)" if deep else "") + " ...")
-        d = image_detail(ref, refs[ref], deep)
-        if d:
-            out[ref] = d
-    lineage(out)
+    lang_mode = env("IMAGES_LANG", "all" if deep else "off").lower()
+    todo = sorted(refs)[:IMAGE_LIMIT]
+
+    def one(ref: str) -> dict | None:
+        with_lang = lang_mode == "all" or (lang_mode == "running" and refs[ref])
+        progress(f"[host] looking inside image {ref}" + (" (also Python/Node/Java/Ruby packages; can take minutes)" if with_lang else "") + " ...")
+        return image_detail(ref, refs[ref], with_lang)
+    from concurrent.futures import ThreadPoolExecutor
+    workers = 2 if lang_mode in ("all", "running") else 4  # the docker daemon does the work; the export stream is disk-heavy, so fewer at once
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for ref, d in zip(todo, ex.map(one, todo)):
+            if d:
+                out[ref] = d
+    others = {}  # images that were not opened still show their layers, which is all lineage needs and costs one inspect
+    for l in run(["docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}"]).splitlines() if mode == "running" else []:
+        if l and "<none>" not in l and l not in out and l not in refs:
+            try:
+                others[l] = (json.loads(run(["docker", "image", "inspect", l]))[0].get("RootFS") or {}).get("Layers") or []
+            except (ValueError, IndexError, TypeError):
+                pass
+    lineage(out, others)
     if len(refs) > IMAGE_LIMIT:
         progress(f"[host] {len(refs) - IMAGE_LIMIT} more images not opened (limit {IMAGE_LIMIT}); set LATTICE_SCAN_IMAGES=running to open only running ones")
     return out
@@ -2056,6 +2092,7 @@ def main() -> int:
     p.add_argument("--discover", action="store_true", help="find exploited CVEs added in the window (needs LATTICE_API_KEY)")
     p.add_argument("--debug", action="store_true", help="detailed execution log to stderr and debug.log (also LATTICE_SCAN_DEBUG=1)")
     p.add_argument("--keep", action="store_true", help="keep this run's records in the default folder even with no terminal (also LATTICE_SCAN_KEEP=1); without it a terminal-less run with no folder yet uses a temporary one")
+    p.add_argument("--deep", action="store_true", help="deep inventory: open every local image, not only running ones, and list the Python/Node/Java/Ruby packages inside them (minutes). Default is quick")
     p.add_argument("--refresh", action="store_true", help="collect the inventory again now and print all of it; with ids, also re-read them. Alone it makes no Lattice call")
     p.add_argument("--again", action="store_true", help="re-read ids already read before")
     p.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print what is being checked, step by step, on stderr (the default; see --quiet)")
@@ -2105,6 +2142,8 @@ def main() -> int:
     il = sub.add_parser("inventory", help="show inventory.log: counts and changes per run"); il.add_argument("-n", type=int, default=20)
     lg = sub.add_parser("log"); lg.add_argument("-n", type=int, default=20, help="last N lines (default 20)")
     a = p.parse_args()
+    if getattr(a, "deep", False):
+        os.environ["LATTICE_SCAN_LEVEL"] = "deep"
     global DEBUG, PROGRESS, KEEP
     DEBUG = a.debug or env("DEBUG") == "1"
     KEEP = a.keep or env("KEEP") == "1"
