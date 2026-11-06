@@ -25,7 +25,16 @@ def with_links(cve="CVE-2099-0001", **k):
     return r
 
 
-class Context(Client):
+class Base(unittest.TestCase):
+    """The stub server and records folder of the Client tests, without re-running their tests."""
+    setUpClass = classmethod(Client.setUpClass.__func__)
+    tearDownClass = classmethod(Client.tearDownClass.__func__)
+    setUp = Client.setUp
+    tearDown = Client.tearDown
+    run_cli = Client.run_cli
+
+
+class Context(Base):
     def setUp(self):
         super().setUp()
         Stub.answers = {"CVE-2099-0001": with_links()}
@@ -100,6 +109,41 @@ class Context(Client):
         Stub.answers["CVE-2099-0003"]["items"][1]["due_date"] = "2027-01-01"
         rc, out, _ = self.run_cli("--cve", "CVE-2099-0003,CVE-2099-0001")
         self.assertLess(out.index("  CVE-2099-0001  "), out.index("  CVE-2099-0003  "))
+
+
+class Unlisted(Base):
+    """A named id that CISA does not list still shows what Lattice holds on it."""
+    def setUp(self):
+        super().setUp()
+        node = copy.deepcopy(NODE)
+        node["properties"].update(status="Deferred", date_created="2026-11-05", date_modified="2026-11-05")
+        node["properties"]["metadata"] = {}
+        Stub.answers = {"CVE-2099-0005": with_links("CVE-2099-0005", kev=False)}
+        Stub.nodes = {"u-nvd": node}
+
+    def tearDown(self):
+        Stub.nodes = {}
+        super().tearDown()
+
+    def test_named_unlisted_id_prints_the_block_with_one_detail_read(self):
+        rc, out, err = self.run_cli("--cve", "CVE-2099-0005")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("not CISA-listed (that is not the same as safe or unexploited)", out)
+        self.assertIn("NVD record: status Deferred, created 2026-11-05", out)
+        self.assertIn("NVD lists no affected products yet, so no version check is possible", out)
+        self.assertIn("weakness: CWE-502", out); self.assertIn("ATT&CK: T1190", out); self.assertIn("what it is (NVD):", out)
+        self.assertNotIn("priority:", out)
+        self.assertEqual(len([1 for m, _, _ in Stub.seen if m == "tools/call"]), 2)          # the lookup and one detail read
+        self.assertEqual(cli.events(), [])                                                   # nothing recorded as a finding
+
+    def test_no_nvd_node_or_a_refusing_server_prints_what_it_printed_before(self):
+        Stub.nodes = {}                                                                      # graph_node is refused ...
+        Stub.answers = {"CVE-2099-0005": lookup("CVE-2099-0005", kev=False)}                 # ... and the lookup has no links
+        rc, out, err = self.run_cli("--cve", "CVE-2099-0005")
+        self.assertEqual(rc, 0, err); self.assertNotIn("what Lattice holds on it", out); self.assertIn("unlisted", out)
+        Stub.answers = {}                                                                    # no nodes at all
+        rc, out, _ = self.run_cli("--cve", "CVE-2099-9999")
+        self.assertNotIn("what Lattice holds on it", out); self.assertIn("not 'safe'", out)
 
 
 if __name__ == "__main__":

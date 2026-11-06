@@ -243,6 +243,7 @@ class Lattice:
         self.session = ""
         self.n = 0
         self.last_gap = 0.0
+        self.last_unlisted: dict | None = None   # the NVD node of the last lookup that had no CISA entry, for a named id
 
     @staticmethod
     def _wait_to_retry(attempt: int, why: str) -> None:
@@ -658,6 +659,9 @@ def context(lat: "Lattice", e: dict) -> dict:
     ssvc = md.get("ssvc") or {}
     if ssvc:
         ctx["ssvc"] = {k: clean(str(ssvc[k])) for k in ("exploitation", "automatable", "technical_impact") if ssvc.get(k)}
+    if props.get("status") or props.get("date_created"):
+        ctx["record"] = {"status": clean(str(props.get("status", ""))), "created": clean(str(props.get("date_created", ""))), "modified": clean(str(props.get("date_modified", ""))),
+                         "products": len(md.get("affected_products") or [])}
     if props.get("cwe_refs"):
         ctx["cwe"] = [clean(str(c)) for c in props["cwe_refs"]][:5]
     if props.get("description"):
@@ -721,7 +725,12 @@ def kev_entry(lat: Lattice, cve: str) -> dict | None:
     """
     items = lat.call("graph_lookup", id=cve).get("items", [])
     kev = next((i for i in items if i.get("source") == "kev"), None)
+    lat.last_unlisted = None
     if not kev:
+        nvd0 = next((i for i in items if i.get("source") == "nvd"), None)
+        if nvd0 and nvd0.get("uid"):
+            prim = next((i for i in items if i.get("primary")), nvd0)
+            lat.last_unlisted = {"cve": cve, "nvdUid": nvd0["uid"], "ranges": [], "links": prim.get("links") if isinstance(prim.get("links"), list) else []}
         return None
     nvd = next((i for i in items if i.get("source") == "nvd"), {})
     primary = next((i for i in items if i.get("primary")), nvd)
@@ -913,6 +922,7 @@ def cmd_run(a) -> int:
     lat = Lattice()
     known = {e["ref"] for e in events()}
     hits, again_hits, read, not_listed = [], [], 0, []
+    unlisted_ctx: list[tuple[str, dict]] = []   # named ids CISA does not list, with what Lattice holds on them
     rows: list[list[str]] = []   # the result table, one row per CVE (columns in the report.table call below)
     try:
         lat.start()
@@ -937,6 +947,10 @@ def cmd_run(a) -> int:
                 not_listed.append(cve)
                 progress(f"{tag}  not in CISA's exploited list in this snapshot (that is not the same as safe)")
                 rows.append([cve, *cells(None), "unlisted", "not in CISA's list in this snapshot (not the same as safe)"])
+                if cve in named and lat.last_unlisted:
+                    ctx = context(lat, lat.last_unlisted)
+                    if ctx:
+                        unlisted_ctx.append((cve, ctx))
                 continue
             if e["added"] and not (floor <= e["added"] <= TODAY) and not a.cve and not a.cve_file:
                 dbg(f"{cve}: outside window {floor}..{TODAY} (added {e['added']}), skipped")
@@ -995,6 +1009,9 @@ def cmd_run(a) -> int:
         print_impact(imp)
     if not_listed:
         print(f"not in the graph's CISA list (not 'safe', only 'not listed in this snapshot'): {', '.join(not_listed)}")
+    for cve, ctx in unlisted_ctx:
+        print(f"  {cve}  not CISA-listed (that is not the same as safe or unexploited); what Lattice holds on it:")
+        print_context({"context": ctx})
     if inv["restartRequired"]:
         print("restart required: an installed update is waiting for a reboot")
     detail_files(inv)
@@ -1534,6 +1551,10 @@ def print_context(imp: dict) -> None:
     ctx, pr = imp.get("context"), imp.get("priority")
     if not ctx:
         return
+    if ctx.get("record"):
+        r = ctx["record"]
+        print(f"      NVD record: status {r['status'] or '-'}, created {r['created'] or '-'}, modified {r['modified'] or '-'}"
+              + ("" if r["products"] else "; NVD lists no affected products yet, so no version check is possible"))
     if pr:
         print(f"      priority: {pr['level']}" + (f" ({'; '.join(pr['reasons'])})" if pr["reasons"] else "") + " [the tool's reading of CISA and FIRST fields, not a verdict]")
     if ctx.get("epss"):
