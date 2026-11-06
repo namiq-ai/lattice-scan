@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The host inventory now knows the machine and what is inside each container image. Hardware: manufacturer, product model and version, board, firmware version and date, architecture, CPU, memory, virtualisation (from the kernel's DMI table, or the device tree on ARM boards; serial numbers and UUIDs are not read). Images: for every local image the tool reads its metadata and, without starting it (`docker create --network none`, then `docker cp` of the OS release file and the apk or dpkg package list, then `docker rm`), its base OS and release, its packages, its version label and its `*_VERSION` variables. Before, `postgres:16-alpine` was only a name, so a flaw in the musl or busybox inside it could never become a candidate. Now a CISA entry whose product words are all found in one image becomes a candidate that names that image and compares that image's package version. A CISA entry for firmware or a board matches the machine's maker and model. Other environment values of an image are never kept. `--refresh` prints the hardware and each image's OS and package count. `LATTICE_SCAN_IMAGES=running` opens only running images, `off` none. Distroless images and RPM databases give metadata only. Nothing leaves the machine.
+
 ## 0.4.1 — 2026-11-06
 
 - A host scan now prints the saved detail (priority, EPSS, SSVC, weakness, description, techniques, references, version check) for every open finding recorded by an earlier run, not only for the CVEs read in this run. Before, such a CVE showed one table row (`OPEN ... not read in this run`) and nothing else. The detail comes from the records file: no extra call, nothing leaves the machine. Only CVEs that were read and matched nothing (`unmatch`) still have no detail block.

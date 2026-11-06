@@ -1,0 +1,169 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 NamiQ LLC
+"""the inventory knows the machine's hardware and what is inside each container image. Invented products, a fake docker, reserved ids only."""
+import io, json, shutil, sys, tarfile, tempfile, unittest
+from pathlib import Path
+from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from lattice_scan import cli  # noqa: E402
+
+ALPINE_OS = 'NAME="Alpine Linux"\nID=alpine\nVERSION_ID=3.21.3\nPRETTY_NAME="Alpine Linux v3.21"\n'
+APK_DB = "P:musl\nV:1.2.5-r8\n\nP:busybox\nV:1.37.0-r12\n\nP:libexampleq\nV:2.0.1-r0\n"
+DEBIAN_OS = 'ID=debian\nVERSION_ID="13"\nPRETTY_NAME="Debian GNU/Linux 13 (trixie)"\n'
+DPKG = "Package: zlib1g\nStatus: install ok installed\nVersion: 1:1.3.dfsg-1\n\nPackage: gone\nStatus: deinstall ok config-files\nVersion: 9\n"
+
+
+def tar_of(text: str) -> bytes:
+    b = io.BytesIO()
+    with tarfile.open(fileobj=b, mode="w") as t:
+        i = tarfile.TarInfo("f")
+        i.size = len(text.encode())
+        t.addfile(i, io.BytesIO(text.encode()))
+    return b.getvalue()
+
+
+IMAGES = {
+    "redis:7-alpine": {"Id": "sha256:aaaaaaaaaaaaaaaa", "Os": "linux", "Architecture": "arm64",
+                       "Config": {"Env": ["PATH=/x", "REDIS_VERSION=7.4.9", "GOSU_VERSION=1.19", "REDIS_PASSWORD=hunter2"], "Labels": {}},
+                       "files": {"etc/os-release": ALPINE_OS, "lib/apk/db/installed": APK_DB}},
+    "app:1": {"Id": "sha256:bbbbbbbbbbbbbbbb", "Os": "linux", "Architecture": "amd64", "Config": {"Env": [], "Labels": {"org.opencontainers.image.version": "4.5"}},
+              "files": {"etc/os-release": DEBIAN_OS, "var/lib/dpkg/status": DPKG}},
+    "tiny:1": {"Id": "sha256:cccccccccccccccc", "Os": "linux", "Architecture": "amd64", "Config": {}, "files": {}},
+}
+
+
+class FakeDocker:
+    def __init__(self):
+        self.calls = []
+
+    def run(self, cmd):
+        self.calls.append(cmd)
+        if cmd[:3] == ["docker", "image", "inspect"]:
+            m = IMAGES.get(cmd[3])
+            return json.dumps([{k: v for k, v in m.items() if k != "files"}]) if m else ""
+        if cmd[:2] == ["docker", "create"]:
+            return "cid-" + cmd[-1] + "\n"
+        if cmd[:3] == ["docker", "image", "ls"]:
+            return "redis:7-alpine\napp:1\ntiny:1\n<none>:<none>\n"
+        return ""
+
+    def run_bytes(self, cmd):
+        self.calls.append(cmd)
+        ref, path = cmd[2][4:].split(":/", 1)
+        txt = IMAGES[ref]["files"].get(path)
+        return tar_of(txt) if txt else b""
+
+
+def collect(running=("redis:7-alpine",)):
+    fd = FakeDocker()
+    with mock.patch.object(cli, "run", fd.run), mock.patch.object(cli, "run_bytes", fd.run_bytes), mock.patch.object(cli.shutil, "which", lambda c: "/x/docker"):
+        return cli.image_details(list(running)), fd
+
+
+class Images(unittest.TestCase):
+    def test_alpine_image_is_identified_with_its_packages(self):
+        d, _ = collect()
+        r = d["redis:7-alpine"]
+        self.assertEqual((r["os"], r["osVersion"], r["packageManager"]), ("alpine", "3.21.3", "apk"))
+        self.assertEqual(r["packages"]["musl"], "1.2.5-r8")
+        self.assertTrue(r["running"])
+        self.assertEqual(cli.product_version(r), "7.4.9")
+
+    def test_debian_image_reads_only_installed_dpkg_packages(self):
+        d, _ = collect()
+        self.assertEqual(d["app:1"]["packages"], {"zlib1g": "1:1.3.dfsg-1"})
+        self.assertEqual(d["app:1"]["os"], "debian")
+        self.assertFalse(d["app:1"]["running"])
+        self.assertEqual(cli.product_version(d["app:1"]), "4.5")
+
+    def test_environment_secrets_are_never_kept(self):
+        d, _ = collect()
+        self.assertNotIn("hunter2", json.dumps(d))
+        self.assertEqual(set(d["redis:7-alpine"]["versions"]), {"REDIS_VERSION", "GOSU_VERSION"})
+
+    def test_minimal_image_is_noted_not_fatal(self):
+        d, _ = collect()
+        self.assertIn("minimal or distroless", d["tiny:1"]["note"])
+
+    def test_no_container_is_ever_started(self):
+        _, fd = collect()
+        verbs = {tuple(c[:2]) for c in fd.calls}
+        self.assertNotIn(("docker", "run"), verbs)
+        self.assertNotIn(("docker", "start"), verbs)
+        created = [c for c in fd.calls if c[:2] == ["docker", "create"]]
+        self.assertTrue(created and all("--network" in c and "none" in c for c in created))
+        self.assertEqual(len([c for c in fd.calls if c[:3] == ["docker", "rm", "-f"]]), len(created))
+
+    def test_off_and_running_modes(self):
+        with mock.patch.dict("os.environ", {"LATTICE_SCAN_IMAGES": "off"}):
+            self.assertEqual(collect()[0], {})
+        with mock.patch.dict("os.environ", {"LATTICE_SCAN_IMAGES": "running"}):
+            self.assertEqual(set(collect()[0]), {"redis:7-alpine"})
+
+    def test_unreadable_image_is_skipped(self):
+        fd = FakeDocker()
+        fd.run = lambda cmd: ""
+        with mock.patch.object(cli, "run", fd.run), mock.patch.object(cli.shutil, "which", lambda c: "/x/docker"):
+            self.assertEqual(cli.image_details(["ghost:1"]), {})
+
+
+class Matching(unittest.TestCase):
+    def inv(self):
+        d, _ = collect()
+        return {"kernel": "7.0.0", "os": "x", "packages": {}, "snaps": {}, "images": ["redis:7-alpine"], "node": "", "imageDetails": d, "host": {}}
+
+    def test_cisa_entry_for_musl_names_the_alpine_image(self):
+        hit = cli.candidate({"cve": "CVE-2099-0001", "vendor": "Musl", "product": "musl", "title": "t"}, self.inv())
+        self.assertIsNotNone(hit)
+        why, installed, vers = hit
+        self.assertIn("inside container image redis:7-alpine", why)
+        self.assertEqual(installed, ["musl 1.2.5-r8 (image redis:7-alpine)"])
+        self.assertEqual(vers, ["1.2.5-r8"])
+
+    def test_image_product_matches_with_its_version(self):
+        hit = cli.candidate({"cve": "CVE-2099-0002", "vendor": "Redis", "product": "redis", "title": "t"}, self.inv())
+        self.assertIn("7.4.9", hit[2])
+
+    def test_a_package_in_another_image_does_not_match_a_word_in_this_one(self):
+        self.assertIsNone(cli.candidate({"cve": "CVE-2099-0003", "vendor": "x", "product": "zlib1g redis", "title": "t"}, self.inv()))
+
+    def test_image_packages_never_count_as_host_packages_for_changelog_check(self):
+        inv = self.inv()
+        inv["packages"] = {"musl": "9"}
+        self.assertEqual(cli.changelog_mentions("CVE-2099-0001", ["musl 1.2.5-r8 (image redis:7-alpine)"], inv), [])
+
+    def test_hardware_advisory_matches_the_machine(self):
+        inv = self.inv()
+        inv["host"] = {"manufacturer": "Examplecorp", "model": "Widgetbox9", "biosVersion": "2.1"}
+        hit = cli.candidate({"cve": "CVE-2099-0004", "vendor": "Examplecorp", "product": "Widgetbox9", "title": "t"}, inv)
+        self.assertEqual(hit[2], ["2.1"])
+
+    def test_old_inventory_without_the_new_keys_still_matches(self):
+        inv = {"kernel": "7.0.0", "os": "x", "packages": {"openssl": "3.0.1"}, "snaps": {}, "images": [], "node": ""}
+        self.assertIsNotNone(cli.candidate({"cve": "CVE-2099-0005", "vendor": "OpenSSL", "product": "openssl", "title": "t"}, inv))
+
+
+class Hardware(unittest.TestCase):
+    def test_placeholders_and_serials_are_left_out(self):
+        files = {"sys_vendor": "Examplecorp", "product_name": "To Be Filled By O.E.M.", "product_version": "1.0", "product_serial": "SN123", "chassis_type": "35"}
+        real = Path.read_text
+
+        def fake(self, *a, **k):
+            if str(self).startswith("/sys/class/dmi/id/"):
+                n = self.name
+                if n in files:
+                    return files[n] + "\n"
+                raise OSError
+            if str(self) == "/proc/device-tree/model":
+                return "Example Board 2\0"
+            return real(self, *a, **k)
+        with mock.patch.object(Path, "read_text", fake), mock.patch.object(cli, "run", lambda c: ""):
+            h = cli.hardware()
+        self.assertEqual((h["manufacturer"], h["version"], h["chassis"]), ("Examplecorp", "1.0", "mini PC"))
+        self.assertEqual(h["model"], "Example Board 2")
+        self.assertNotIn("SN123", json.dumps(h))
+
+
+if __name__ == "__main__":
+    unittest.main()
