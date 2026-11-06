@@ -1,10 +1,12 @@
 # lattice-scan
 
 Looks up CVEs that CISA lists as exploited, through the Lattice MCP server, and compares each with what is installed on **this** machine: packages,
-snaps, the hardware, the running container images and what is inside them, the kernel. It prints the evidence, including installed version, CISA's dates and required action, and NVD's affected
+snaps, the hardware, the running container images and what is inside them (all local images with `--deep`), the kernel. It prints the evidence, including installed version, CISA's dates and required action, and NVD's affected
 version ranges. A person reads it and decides. It does not detect incidents or decide whether the host is affected, and it never closes a finding by itself.
 
-Standard library only. Python 3.9 or newer.
+`lattice-scan posture` also shows what the host exposes and runs: listening ports, firewall, SSH settings, services and processes that no package owns.
+
+Standard library only: no runtime dependency. Python 3.9 or newer. [Self-audit](https://github.com/namiq-ai/lattice-scan/blob/main/docs/SELF-AUDIT.md).
 
 ## Install
 
@@ -26,18 +28,59 @@ The signing key's fingerprint is `C473 6154 4115 8A3E 775C 2EC2 7E61 15F4 0A41 0
 Or take the single-file `lattice-scan.pyz` or the `.deb` from the [releases page](https://github.com/namiq-ai/lattice-scan/releases) and check it with
 `sha256sum -c SHA256SUMS`: `python3 lattice-scan.pyz --cve CVE-...`.
 
+## What it does
+
+| You want to | Run | It reads | What leaves the machine |
+|---|---|---|---|
+| Check a CVE you know of | `lattice-scan --cve CVE-...` | this host's inventory, locally | the CVE id |
+| Start with nothing (an agent, a morning check) | `lattice-scan` or `lattice-scan recent` | namiq.io's list of recent CVEs, then this host | nothing for the list; only the ids that may match |
+| See what this host has installed, quickly | `lattice-scan --refresh --inventory` | packages, snaps, hardware, the images containers run | nothing |
+| Look through every container image | `lattice-scan --deep` | every local image (OS and packages) and the Python, Node, Java and Ruby packages in them; minutes | nothing |
+| See what this host exposes and runs | `lattice-scan posture` (`--deep`) | listening ports, firewall, SSH settings, services; deep: processes no package owns | nothing |
+| Check a project's declared dependencies | `lattice-scan project .` | manifests, Dockerfiles, compose files | the CVE ids |
+| Look up ids from an audit or advisory | `... \| lattice-scan enrich` | the text you pipe in | the CVE ids |
+
+A person reads what it prints and decides. It also ships as a Claude Code and OpenAI Codex skill (`/plugin install lattice-scan --marketplace namiq-ai/lattice-scan`).
+
 ## Use
 
+**A CVE you name** (no key needed):
+
 ```bash
-lattice-scan --cve CVE-2021-44228 --cve CVE-2026-46300     # works without a key
-LATTICE_API_KEY=... lattice-scan --discover                # a key lists what was added in the last week
+lattice-scan --cve CVE-2021-44228 --cve CVE-2026-46300     # compared with this host; prints the evidence, priority, EPSS, SSVC, weakness, ATT&CK
+LATTICE_API_KEY=... lattice-scan --discover                # a key lists what CISA added in the last week
+lattice-scan list | impact CVE-... | resolve CVE-... --status fixed --proof "..."    # the findings recorded so far, one in detail, and closing one
+```
+
+**Nothing to start from:**
+
+```bash
 lattice-scan                                               # no arguments: the same as `recent --daily`
-lattice-scan recent                                        # no CVE id? read namiq.io's weekly list of recent exploited/critical CVEs; only likely matches go to Lattice (--daily: last day or two; --open: older ones, overdue first)
+lattice-scan recent                                        # namiq.io's weekly list of recent exploited/critical CVEs; only likely matches go to Lattice (--daily: last day or two; --open: older ones, overdue first)
 printf '...' | lattice-scan enrich                         # ids from an audit or advisory: exploited? since when? patch due? ransomware? (no key: 20 ids a run)
-lattice-scan get-key --name ... --position ... --company ... --email ... --purpose "..."   # asks nothing until --accept-terms; for a real person who read the terms
+```
+
+**This host and its container images** (`quick` by default; `--deep` for everything):
+
+```bash
 lattice-scan --refresh                                     # collect the inventory again, show its totals, then run the daily scan
 lattice-scan --refresh --inventory                         # only the inventory: totals, no scan, no network call (--list prints every package)
-lattice-scan list | impact CVE-... | resolve CVE-... --status fixed --proof "..."
+lattice-scan --deep                                        # deep inventory: every local image and the packages inside them (about 6 minutes for 24 images)
+```
+
+**What this host exposes and runs** (read only; nothing is sent):
+
+```bash
+lattice-scan posture                                       # listening ports, firewall, SSH settings, services (seconds)
+lattice-scan posture --deep                                # also processes no package owns, and persistence points (about a minute)
+sudo lattice-scan posture --deep                           # as root: firewall rules, effective SSH settings, every process
+```
+
+**A project, a key, and what is happening:**
+
+```bash
+lattice-scan project . --cve CVE-2026-46300                # what the project declares (see below)
+lattice-scan get-key --name ... --position ... --company ... --email ... --purpose "..."   # asks nothing until --accept-terms; for a real person who read the terms
 lattice-scan --progress --cve CVE-...                      # which CVE, and which part of the host or project, as it runs (on by default; -q silences)
 lattice-scan --debug --cve CVE-...                         # every request, response and match decision
 ```
