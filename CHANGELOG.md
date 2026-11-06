@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.1 — 2026-11-06
 
 - A host scan now prints the saved detail (priority, EPSS, SSVC, weakness, description, techniques, references, version check) for every open finding recorded by an earlier run, not only for the CVEs read in this run. Before, such a CVE showed one table row (`OPEN ... not read in this run`) and nothing else. The detail comes from the records file: no extra call, nothing leaves the machine. Only CVEs that were read and matched nothing (`unmatch`) still have no detail block.
 - A CVE you name that CISA does not list now shows what Lattice holds on it, instead of only `unlisted`: NVD's record status and dates, EPSS and SSVC when present, the weakness, the start of the description, the linked ATT&CK techniques ("likely" when inferred) and references, and a line saying so when NVD lists no affected products yet (no version check is possible). It costs one more call per such id and applies only to ids you typed, not to `recent`, `enrich` or discovery. There is no priority line and nothing is recorded as a finding. The skill explains how to read it and not to call a not-listed CVE safe.
