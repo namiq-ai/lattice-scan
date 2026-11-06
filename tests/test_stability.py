@@ -25,7 +25,7 @@ class Stability(EntryBase):
         Entry.rate_left = 1
         rc, out, err = self.run_cli("--cve", "CVE-2099-0001")
         self.assertEqual(rc, 0, err); self.assertIn("CVE-2099-0001", out)
-        self.assertEqual(Entry.rate_seen, 2)                              # the refused call and the retry
+        self.assertEqual(Entry.rate_seen, 3)                              # the refused call, the retry, and the candidate's detail read
         self.assertTrue(any(s >= 3 for s in self.sleeps), self.sleeps)    # it waited what Lattice asked, plus a second
         self.assertIn("waiting 3s as it asked", err)
 

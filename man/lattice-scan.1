@@ -49,6 +49,7 @@ the host's inventory is collected (dpkg, rpm or apk packages, snaps, running Doc
 A match is a
 .IR candidate ,
 not a finding about the host: the report shows the installed version against NVD's ranges and whether the installed package's own Debian changelog names the CVE.
+For each candidate the tool also reads one more node from Lattice (no key needed) and prints a priority (fix first, fix soon or read, with its reasons), the EPSS score, CISA's SSVC assessment, the weakness, the start of NVD's description, the ATT&CK techniques the graph links to the CVE (marked likely when inferred), the first unaffected upstream version NVD lists and up to three references. Candidates are printed highest priority first. The priority is the tool's reading of CISA and FIRST fields, not a risk score or a verdict. If Lattice does not give the detail, the candidate is printed without it.
 .TP
 .BI \-\-cve " ID"
 A CVE id to check. Repeatable.
@@ -354,7 +355,7 @@ If the folder cannot be created and \fBLATTICE_SCAN_DIR\fR was not set, the run 
 Without a key Lattice allows 5 calls a minute, 20 reads an hour and 60 a day. lattice\-scan keeps the times of its recent calls (in the user's cache folder, not in the records), so separate runs one after another space themselves out and stay under 5 a minute; it prints a line when it waits. If Lattice still answers "too many requests, retry after N seconds" with N about a minute or less, it waits that long and tries again, twice at most. A run that reaches the hourly or daily limit stops, lists what it did not read, and exits 3.
 A key is for a real person (https://namiq.io/lattice/docs). The tool asks for one only through \fBget\-key\fR, with the person's own details and only after \fB\-\-accept\-terms\fR; it never opens a link from a reply.
 .SH WHAT LEAVES THE MACHINE
-CVE ids, and the key if one is set. Package names, versions, file names and the inventory are never sent; matching happens locally.
+CVE ids, the node ids Lattice returned for them, and the key if one is set. Package names, versions, file names and the inventory are never sent; matching happens locally.
 \fBrecent\fR downloads a public list: that request carries no id and nothing about this host. \fBget\-key\fR sends the name, position, company, email address and purpose it is given, after \fB\-\-accept\-terms\fR, to the key service.
 .SH EXAMPLES
 Check a host for two CVEs:
