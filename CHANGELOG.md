@@ -11,6 +11,8 @@
 
 - A person (or an agent) now learns that a deeper scan exists and how far a scan has got. After a quick inventory, one line on stderr says how many local images were opened, that the packages inside images were not, how long `--deep` takes (a rough estimate) and when a deep scan was last done (a repeat is suggested after 30 days). A deep scan prints the estimate first, then `[n/N %]` with elapsed time for each image, and a summary (opened, not opened, seconds); a completed one is recorded in `deep.json`. `--quiet` prints none of it. The skill runs quick first, says what quick did not cover, offers deep only after the hint or a thorough request, runs it in the background and reports one line per check-in.
 
+- `--refresh` now prints totals instead of every package: the OS, kernel and hardware, the number of snaps and packages, a summary of the images (how many were opened, by base OS, packages inside them) and the path of `inventory.json`, which still holds the full lists. About 30 lines instead of 2,800 on the test host. `--list` prints everything as before.
+
 ## 0.4.1 — 2026-11-06
 
 - A host scan now prints the saved detail (priority, EPSS, SSVC, weakness, description, techniques, references, version check) for every open finding recorded by an earlier run, not only for the CVEs read in this run. Before, such a CVE showed one table row (`OPEN ... not read in this run`) and nothing else. The detail comes from the records file: no extra call, nothing leaves the machine. Only CVEs that were read and matched nothing (`unmatch`) still have no detail block.

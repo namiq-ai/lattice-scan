@@ -35,7 +35,7 @@ lattice-scan                                               # no arguments: the s
 lattice-scan recent                                        # no CVE id? read namiq.io's weekly list of recent exploited/critical CVEs; only likely matches go to Lattice (--daily: last day or two; --open: older ones, overdue first)
 printf '...' | lattice-scan enrich                         # ids from an audit or advisory: exploited? since when? patch due? ransomware? (no key: 20 ids a run)
 lattice-scan get-key --name ... --position ... --company ... --email ... --purpose "..."   # asks nothing until --accept-terms; for a real person who read the terms
-lattice-scan --refresh                                     # collect and print the inventory; no network call
+lattice-scan --refresh                                     # collect the inventory and print its totals; no network call (--list prints every package)
 lattice-scan list | impact CVE-... | resolve CVE-... --status fixed --proof "..."
 lattice-scan --progress --cve CVE-...                      # which CVE, and which part of the host or project, as it runs (on by default; -q silences)
 lattice-scan --debug --cve CVE-...                         # every request, response and match decision

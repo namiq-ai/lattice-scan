@@ -41,7 +41,8 @@ python3 scripts/lattice-scan.pyz --version
 python3 scripts/lattice-scan.pyz recent                             # no id? start here (weekly list); --daily for the last day or two
 python3 scripts/lattice-scan.pyz --cve CVE-2026-1234 --cve CVE-2026-5678   # look these up
 npm audit --json | python3 scripts/lattice-scan.pyz enrich          # ids found in any text, read once each
-python3 scripts/lattice-scan.pyz --refresh > /dev/null              # inventory only, no network call (it prints every installed package: do not show that to the user)
+python3 scripts/lattice-scan.pyz --refresh                           # inventory only, no network call; prints totals (about 30 lines), the full lists are in inventory.json
+python3 scripts/lattice-scan.pyz --refresh --list > /dev/null       # every package, snap and image (thousands of lines: do not show that to the user)
 python3 scripts/lattice-scan.pyz list                               # findings recorded so far
 python3 scripts/lattice-scan.pyz impact CVE-2026-1234               # the evidence for one finding
 ```

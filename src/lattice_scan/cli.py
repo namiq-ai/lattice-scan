@@ -1435,7 +1435,8 @@ def state() -> dict[str, dict]:
     return s
 
 
-def show_inventory(inv: dict) -> None:
+def show_inventory(inv: dict, full: bool = False) -> None:
+    """The inventory for a person: totals and a short summary. The lists (every package, snap and image) are in inventory.json; full=True (--list) prints them."""
     print(f"inventory {inv['hash']}: {inv['os']}, kernel {inv['kernel']}, node {inv.get('node') or '-'}, restartRequired={inv['restartRequired']}")
     h = inv.get("host") or {}
     if h:
@@ -1445,15 +1446,41 @@ def show_inventory(inv: dict) -> None:
                          ("arch", "architecture"), ("cpu", "cpu"), ("memoryGiB", "memory GiB"), ("virtualisation", "virtualisation")):
             if h.get(k):
                 print(f"  {label:<17} {h[k]}")
-    print(f"\nimages ({len(inv['images'])} running, {len(inv.get('imageDetails') or {})} opened):" + "".join(f"\n  {i}" for i in inv["images"]))
-    for ref, d in sorted((inv.get("imageDetails") or {}).items()):
-        print(f"  {ref}{'' if d.get('running') else ' (not running)'}: " + (d.get("osName") or d.get("note") or "OS unknown")
-              + (f", {len(d['packages'])} {d['packageManager']} packages" if d.get("packages") else "")
-              + (f", product version {product_version(d)}" if product_version(d) else "") + (f", {d['arch']}" if d.get("arch") else "")
-              + (f", built on {d['builtOn']} ({d['sharedLayers']} of {d['layerCount']} layers shared)" if d.get("builtOn") else "")
-              + "".join(f", {len(v)} {e}" for e, v in sorted((d.get("languages") or {}).items())) + (" (language scan stopped at its time limit)" if d.get("languagesPartial") else ""))
-    print(f"\nsnaps ({len(inv['snaps'])}):" + "".join(f"\n  {n:<32} {v}" for n, v in sorted(inv["snaps"].items())))
-    print(f"\npackages ({len(inv['packages'])}):" + "".join(f"\n  {n:<44} {v}" for n, v in sorted(inv["packages"].items())))
+    det = inv.get("imageDetails") or {}
+    scan = inv.get("imageScan") or {}
+    print(f"\nimages: {len(inv['images'])} running, {len(det)} opened" + (f" of {scan['local']} local ({scan.get('level')} scan)" if scan.get("local") else ""))
+    if det and not full:
+        by_os: dict[str, int] = {}
+        for d in det.values():
+            k = (d.get("osName") or d.get("os") or "OS unknown").split(" (")[0]
+            by_os[k] = by_os.get(k, 0) + 1
+        print("  by base OS: " + ", ".join(f"{k} {n}" for k, n in sorted(by_os.items(), key=lambda x: (-x[1], x[0]))))
+        pk = sum(len(d.get("packages") or {}) for d in det.values())
+        lang = {}
+        for d in det.values():
+            for e, v in (d.get("languages") or {}).items():
+                lang[e] = lang.get(e, 0) + len(v)
+        print(f"  packages inside images: {pk}" + "".join(f", {e} {n}" for e, n in sorted(lang.items())))
+        built = sum(1 for d in det.values() if d.get("builtOn"))
+        if built:
+            print(f"  built on another local image: {built}")
+        partial = [r for r, d in det.items() if d.get("languagesPartial")]
+        if partial:
+            print(f"  language scan stopped at its time limit for {len(partial)} image(s)")
+    if full:
+        print("".join(f"  {i}\n" for i in inv["images"]), end="")
+        for ref, d in sorted(det.items()):
+            print(f"  {ref}{'' if d.get('running') else ' (not running)'}: " + (d.get("osName") or d.get("note") or "OS unknown")
+                  + (f", {len(d['packages'])} {d['packageManager']} packages" if d.get("packages") else "")
+                  + (f", product version {product_version(d)}" if product_version(d) else "") + (f", {d['arch']}" if d.get("arch") else "")
+                  + (f", built on {d['builtOn']} ({d['sharedLayers']} of {d['layerCount']} layers shared)" if d.get("builtOn") else "")
+                  + "".join(f", {len(v)} {e}" for e, v in sorted((d.get("languages") or {}).items())) + (" (language scan stopped at its time limit)" if d.get("languagesPartial") else ""))
+    if full:
+        print(f"\nsnaps ({len(inv['snaps'])}):" + "".join(f"\n  {n:<32} {v}" for n, v in sorted(inv["snaps"].items())))
+        print(f"\npackages ({len(inv['packages'])}):" + "".join(f"\n  {n:<44} {v}" for n, v in sorted(inv["packages"].items())))
+    else:
+        print(f"\nsnaps: {len(inv['snaps'])}\npackages: {len(inv['packages'])}")
+        print(f"\nfull lists: {OUT / 'inventory.json'}  (or run again with --list)")
 
 
 def detail_files(inv: dict) -> None:
@@ -1505,7 +1532,7 @@ def cmd_run(a) -> int:
             prev = None
         inventory_log(inv, prev, refresh=True)
         write_private(inv_f, json.dumps(inv, indent=1, sort_keys=True))
-        show_inventory(inv)
+        show_inventory(inv, full=a.list)
         scanlog(f"refresh inventory={inv['hash']} packages={len(inv['packages'])} snaps={len(inv['snaps'])} images={len(inv['images'])}")
         return 0
     if not ids and not a.discover:
@@ -1528,7 +1555,7 @@ def cmd_run(a) -> int:
         prev = None
     inventory_log(inv, prev, refresh=a.refresh)
     if a.refresh:
-        show_inventory(inv)
+        show_inventory(inv, full=a.list)
     write_private(inv_f, json.dumps(inv, indent=1, sort_keys=True))
     dbg(f"run: today={TODAY} window={WINDOW}d floor={floor} url={URL} key={'set' if KEY else 'none'} ids={len(set(ids))} discover={a.discover} again={a.again} records={OUT}")
     lat = Lattice()
@@ -2249,6 +2276,7 @@ def main() -> int:
     p.add_argument("--discover", action="store_true", help="find exploited CVEs added in the window (needs LATTICE_API_KEY)")
     p.add_argument("--debug", action="store_true", help="detailed execution log to stderr and debug.log (also LATTICE_SCAN_DEBUG=1)")
     p.add_argument("--keep", action="store_true", help="keep this run's records in the default folder even with no terminal (also LATTICE_SCAN_KEEP=1); without it a terminal-less run with no folder yet uses a temporary one")
+    p.add_argument("--list", action="store_true", help="with --refresh or when the inventory is shown: print every package, snap and image instead of totals")
     p.add_argument("--deep", action="store_true", help="deep inventory: open every local image, not only running ones, and list the Python/Node/Java/Ruby packages inside them (minutes). Default is quick")
     p.add_argument("--refresh", action="store_true", help="collect the inventory again now and print all of it; with ids, also re-read them. Alone it makes no Lattice call")
     p.add_argument("--again", action="store_true", help="re-read ids already read before")

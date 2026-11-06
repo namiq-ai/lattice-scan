@@ -478,6 +478,37 @@ class Progress(unittest.TestCase):
         self.assertGreater(cli.deep_estimate(24, 31 * 1024), 250)
 
 
+class Display(unittest.TestCase):
+    def inv(self):
+        d, _ = collect()
+        return {"hash": "h", "os": "Ubuntu", "kernel": "7", "node": "", "restartRequired": False, "host": {"manufacturer": "Examplecorp"},
+                "packages": {f"pkg{i}": "1.0" for i in range(500)}, "snaps": {"core": "1"}, "images": ["redis:7-alpine"], "imageDetails": d,
+                "imageScan": {"level": "quick", "local": 3, "opened": 3}}
+
+    def show(self, full):
+        import contextlib
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli.show_inventory(self.inv(), full=full)
+        return out.getvalue()
+
+    def test_default_shows_totals_and_no_lists(self):
+        t = self.show(False)
+        self.assertLess(len(t.splitlines()), 30)
+        self.assertIn("packages: 500", t)
+        self.assertIn("snaps: 1", t)
+        self.assertIn("inventory.json", t)
+        self.assertNotIn("pkg499", t)
+        self.assertIn("by base OS", t)
+        self.assertIn("Examplecorp", t)
+
+    def test_list_shows_everything(self):
+        t = self.show(True)
+        self.assertIn("pkg499", t)
+        self.assertIn("redis:7-alpine", t)
+        self.assertIn("core", t)
+
+
 class Levels(unittest.TestCase):
     def test_quick_is_the_default_and_opens_only_running_images_without_language_scan(self):
         with mock.patch.dict("os.environ", {}, clear=False):
