@@ -993,8 +993,10 @@ def cmd_run(a) -> int:
     print(f"host scan {TODAY}: {read} exploited entries read, {len(hits)} candidates (a person must read each against the installed version)")
     open_n = [f for f in state().values() if f["status"] in ("open", "verified")]
     listed_now = {r[0] for r in rows}
+    earlier: list[dict] = []   # open findings not read in this run: their saved detail is printed below the table, from the file, with no call
     for f in open_n:   # an open finding from an earlier run stays in the table, so it is listed once, in the table
         if f["ref"] not in listed_now:
+            earlier.append(f)
             rows.append([f["ref"], "yes" if f.get("kind", "kev") == "kev" else "-", cvss_cell(f.get("cvss")), f.get("listed") or "-", due_cell(f.get("due", "")),
                          ransom(f.get("ransomware", "")), "-", f["status"].upper(),
                          f"{f.get('why', '')} (recorded {f.get('found', '?')}, not read in this run)"[:240]])
@@ -1007,6 +1009,12 @@ def cmd_run(a) -> int:
     for e, why, imp in again_hits:
         print(f"  {e['cve']}  matches again ({why}); already recorded as {state()[e['cve']]['status']}, not counted as new")
         print_impact(imp)
+    for f in earlier:
+        print(f"  {f['ref']}  {str(f.get('title', ''))[:70]}  [{f['status']}, recorded {f.get('found', '?')}; not read in this run, so this is the detail saved then]\n      because: {f.get('why', '')}")
+        if f.get("impact"):
+            print_impact(f["impact"])
+        else:
+            print("      no impact record (found before the impact check existed, or added by hand)")
     if not_listed:
         print(f"not in the graph's CISA list (not 'safe', only 'not listed in this snapshot'): {', '.join(not_listed)}")
     for cve, ctx in unlisted_ctx:
