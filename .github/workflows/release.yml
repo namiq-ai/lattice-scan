@@ -69,6 +69,8 @@ jobs:
         run: |
           v=$(python -c "import sys; sys.path.insert(0,'src'); from lattice_scan import __version__ as v; print(v)")
           test "v$v" = "${TAG}" || { echo "tag ${TAG} != package version v$v"; exit 1; }
+          p=$(python -c "import json; print(json.load(open('.claude-plugin/plugin.json'))['version'])")
+          test "$p" = "$v" || { echo "Claude plugin.json says $p, package is $v: bump .claude-plugin/plugin.json"; exit 1; }
       - name: Release notes (the hand-written file; made from the CHANGELOG only on a manual run)
         env:
           EVENT: ${{ github.event_name }}
@@ -87,7 +89,8 @@ jobs:
           body = f"# lattice-scan {v}\n\n## Changes\n\n{m.group(1).strip()}\n\n## Install and verify\n\n"
           body += f"- PyPI: `pip install lattice-scan=={v}`, or `uv tool upgrade lattice-scan`\n"
           body += "- Signed apt repository: <https://namiq.io/apt>\n"
-          body += f"- Assets below: `lattice-scan.pyz`, `lattice-scan_{v}_all.deb`, the wheel and `SHA256SUMS`. Check with `sha256sum -c SHA256SUMS`.\n\n"
+          body += f"- Claude Code: `/plugin marketplace add namiq-ai/lattice-scan`, then `/plugin install lattice-scan@namiq-lattice` (or unzip `lattice-scan-claude-plugin-{v}.zip` and run `claude --plugin-dir <folder>`)\n"
+          body += f"- Assets below: `lattice-scan.pyz`, `lattice-scan_{v}_all.deb`, the wheel, the Claude and OpenAI plugin ZIPs and `SHA256SUMS`. Check with `sha256sum -c SHA256SUMS`.\n\n"
           body += "These notes were made from the CHANGELOG because there is no `release-notes/" + os.environ["TAG"] + ".md`; edit the draft before publishing.\n"
           open("notes/body.md", "w", encoding="utf-8").write(body)
           PY
@@ -97,6 +100,7 @@ jobs:
           cat notes/body.md
       - run: python -W error::ResourceWarning -m unittest discover -s tests
       - run: python packaging/build.py
+      - run: python packaging/build_claude_plugin.py
       - run: python packaging/build_openai_plugin.py
       - run: python packaging/check_openai_plugin.py dist/lattice-scan-openai-plugin-*.zip
       - run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
