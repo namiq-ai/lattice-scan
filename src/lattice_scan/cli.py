@@ -32,7 +32,7 @@ Env: LATTICE_URL (default https://lattice.namiq.io/mcp), LATTICE_API_KEY, LATTIC
 LATTICE_SCAN_TODAY (YYYY-MM-DD), LATTICE_SCAN_WINDOW (days back; default 6 = seven days counting today).
 """
 from __future__ import annotations
-import argparse, atexit, datetime as dt, hashlib, json, os, re, shutil, statistics, subprocess, sys, tempfile, time, urllib.error, urllib.request
+import argparse, atexit, datetime as dt, hashlib, json, os, re, shutil, signal, statistics, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request
 from pathlib import Path
 
 from lattice_scan import __version__
@@ -370,6 +370,10 @@ CHASSIS = {1: "other", 2: "unknown", 3: "desktop", 4: "low-profile desktop", 5: 
 IMAGE_FILES = (("os", "etc/os-release"), ("os2", "usr/lib/os-release"), ("apk", "lib/apk/db/installed"), ("dpkg", "var/lib/dpkg/status"),
                ("dpkgd", "var/lib/dpkg/status.d"), ("rpm", "usr/lib/sysimage/rpm/rpmdb.sqlite"), ("rpm2", "var/lib/rpm/rpmdb.sqlite"))
 LANG_SECONDS = 180
+CONTAINER_LABEL = "io.lattice-scan.run"
+RUN_ID = f"{os.getpid()}-{int(time.time())}"
+STALE_MINUTES = 15  # LATTICE_SCAN_STALE_MINUTES
+
 IMAGE_FILE_LIMIT = 40 * 1024 * 1024
 IMAGE_LIMIT = 60
 
@@ -415,16 +419,36 @@ def hardware() -> dict:
 
 
 def run_bytes(cmd: list[str]) -> bytes:
-    """Like run(), for output that is not text (a tar stream); empty on any failure, and larger than IMAGE_FILE_LIMIT counts as a failure."""
+    """Like run(), for output that is not text (a tar stream). Reads at most IMAGE_FILE_LIMIT bytes into memory, then stops the command: a huge file is a failure,
+    not an out-of-memory. Empty on any failure."""
     try:
-        p = subprocess.run(cmd, capture_output=True, timeout=120)
-    except (OSError, subprocess.TimeoutExpired) as e:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError as e:
         dbg(f"collect: {' '.join(cmd[:3])}: failed {e!r}")
         return b""
-    if p.returncode or len(p.stdout) > IMAGE_FILE_LIMIT:
-        dbg(f"collect: {' '.join(cmd[:3])}: rc={p.returncode} {len(p.stdout)} bytes, skipped")
+    try:
+        timer = threading.Timer(120, proc.kill)
+        timer.start()
+        try:
+            data = proc.stdout.read(IMAGE_FILE_LIMIT + 1)
+        finally:
+            timer.cancel()
+        if len(data) > IMAGE_FILE_LIMIT:
+            proc.kill()
+            dbg(f"collect: {' '.join(cmd[:3])}: more than {IMAGE_FILE_LIMIT} bytes, skipped")
+            return b""
+        proc.wait()
+        if proc.returncode:
+            dbg(f"collect: {' '.join(cmd[:3])}: rc={proc.returncode}, skipped")
+            return b""
+        return data
+    except OSError as e:
+        dbg(f"collect: {' '.join(cmd[:3])}: failed {e!r}")
         return b""
-    return p.stdout
+    finally:
+        proc.kill()
+        proc.wait()
+        proc.stdout.close()
 
 
 def tar_members(blob: bytes) -> dict[str, bytes]:
@@ -446,6 +470,8 @@ def tar_members(blob: bytes) -> dict[str, bytes]:
 def parse_rpm_header(blob: bytes) -> dict[str, str]:
     """name, version, release, epoch from one RPM header blob (the value stored in rpmdb.sqlite): int32 index count, int32 data size, 16-byte index entries, data."""
     import struct
+    if len(blob) < 8:
+        return {}
     il, dl = struct.unpack(">II", blob[:8])
     if il > 100000 or 8 + il * 16 + dl > len(blob):
         return {}
@@ -454,7 +480,10 @@ def parse_rpm_header(blob: bytes) -> dict[str, str]:
     for i in range(il):
         tag, typ, off, cnt = struct.unpack(">IIII", blob[8 + i * 16:24 + i * 16])
         if tag in (1000, 1001, 1002) and typ == 6 and off < len(data):
-            out[{1000: "name", 1001: "version", 1002: "release"}[tag]] = data[off:data.index(b"\0", off)].decode("utf-8", "replace")
+            end = data.find(b"\0", off)
+            if end < 0:
+                continue
+            out[{1000: "name", 1001: "version", 1002: "release"}[tag]] = data[off:end].decode("utf-8", "replace")
         elif tag == 1003 and typ == 4 and off + 4 <= len(data):
             out["epoch"] = str(struct.unpack(">I", data[off:off + 4])[0])
     return out
@@ -466,19 +495,20 @@ def parse_rpm_sqlite(db: bytes) -> dict[str, str]:
     out: dict[str, str] = {}
     if not db.startswith(b"SQLite format 3"):
         return out
-    with tempfile.TemporaryDirectory() as d:
-        f = Path(d) / "rpmdb.sqlite"
-        f.write_bytes(db)
-        con = sqlite3.connect(f"file:{f}?mode=ro", uri=True)
-        try:
-            for (blob,) in con.execute("SELECT blob FROM Packages"):
-                h = parse_rpm_header(bytes(blob))
-                if h.get("name") and h.get("name") != "gpg-pubkey":
-                    out[h["name"]] = (f"{h['epoch']}:" if h.get("epoch") else "") + f"{h.get('version', '')}-{h.get('release', '')}"
-        except sqlite3.Error as e:
-            dbg(f"collect: rpmdb unreadable {e!r}")
-        finally:
-            con.close()
+    try:
+        with tempfile.TemporaryDirectory() as d:  # removed on leaving, also on an error; a full disk makes the write fail and the image is read without packages
+            f = Path(d) / "rpmdb.sqlite"
+            f.write_bytes(db)
+            con = sqlite3.connect(f"file:{f}?mode=ro", uri=True)
+            try:
+                for (blob,) in con.execute("SELECT blob FROM Packages"):
+                    h = parse_rpm_header(bytes(blob))
+                    if h.get("name") and h.get("name") != "gpg-pubkey":
+                        out[h["name"]] = (f"{h['epoch']}:" if h.get("epoch") else "") + f"{h.get('version', '')}-{h.get('release', '')}"
+            finally:
+                con.close()
+    except (OSError, sqlite3.Error, ValueError, TypeError) as e:
+        dbg(f"collect: rpmdb unreadable {e!r}")
     return out
 
 
@@ -523,12 +553,13 @@ def image_languages(cid: str) -> tuple[dict[str, dict[str, str]], bool]:
                     gm = re.match(r"^(.+)-(\d[\w.]*?)(?:-[a-z0-9_]+)?$", last)
                     if gm:
                         add("gem", gm.group(1), gm.group(2))
-    except (tarfile.TarError, OSError, EOFError) as e:
+    except Exception as e:  # noqa: BLE001 - a damaged tar or an odd member must cost this image its language list, not the scan
         dbg(f"collect: export of {cid[:12]}: {e!r}")
         complete = False
     finally:
         proc.kill()
         proc.wait()
+        proc.stdout.close()
     return {k: {n: "|".join(sorted(v)) for n, v in d.items()} for k, d in found.items() if d}, complete
 
 
@@ -596,7 +627,7 @@ def image_detail(ref: str, running: bool, lang: bool = False) -> dict | None:
             versions[k] = v
     if versions:
         d["versions"] = versions
-    cid = run(["docker", "create", "--pull", "never", "--network", "none", ref]).strip().splitlines()
+    cid = run(["docker", "create", "--pull", "never", "--network", "none", "--label", f"{CONTAINER_LABEL}={RUN_ID}", ref]).strip().splitlines()
     cid = cid[-1] if cid else ""
     if not cid:
         d["note"] = "metadata only: no container could be created to read files"
@@ -663,6 +694,43 @@ def image_detail(ref: str, running: bool, lang: bool = False) -> dict | None:
     return d
 
 
+def sweep_containers(stale_only: bool) -> int:
+    """Remove the never-started containers this tool made: every one of this run (at the end and on exit), or, at the start, those of an earlier run that
+    was killed before it could clean up (older than STALE_MINUTES, so a scan running at the same time is not disturbed). Only containers carrying this
+    tool's label are touched."""
+    removed = 0
+    for line in run(["docker", "container", "ls", "-a", "--no-trunc", "--filter", f"label={CONTAINER_LABEL}", "--filter", "status=created",
+                     "--format", "{{.ID}}\t{{.Label \"" + CONTAINER_LABEL + "\"}}\t{{.CreatedAt}}"]).splitlines():
+        cid, _, rest = line.partition("\t")
+        run_id, _, created = rest.partition("\t")
+        if not cid:
+            continue
+        if stale_only:
+            if run_id == RUN_ID:
+                continue
+            try:
+                age = time.time() - dt.datetime.strptime(created[:19], "%Y-%m-%d %H:%M:%S").timestamp()
+            except ValueError:
+                continue
+            if age < int(env("STALE_MINUTES", str(STALE_MINUTES))) * 60:
+                continue
+        elif run_id != RUN_ID:
+            continue
+        run(["docker", "rm", "-f", cid])
+        removed += 1
+    if removed:
+        progress(f"[host] removed {removed} leftover scan container{'s' if removed > 1 else ''}" + (" from an earlier run that was stopped" if stale_only else ""))
+    return removed
+
+
+def docker_free_mb() -> int | None:
+    root = run(["docker", "info", "--format", "{{.DockerRootDir}}"]).strip()
+    try:
+        return shutil.disk_usage(root).free // 1048576 if root else None
+    except OSError:
+        return None
+
+
 def scan_level() -> str:
     """quick (default) or deep. Deep opens every local image and the language packages inside; see --deep."""
     return "deep" if env("LEVEL", "quick").lower() == "deep" else "quick"
@@ -692,6 +760,12 @@ def image_details(running: list[str]) -> dict[str, dict]:
     mode = env("IMAGES", "all" if deep else "running").lower()
     if mode == "off" or not shutil.which("docker"):
         return {}
+    free, need = docker_free_mb(), int(env("MIN_FREE_MB", "1024") or 1024)
+    if free is not None and free < need:
+        progress(f"[host] images not opened: only {free} MB free where Docker keeps its data (needs {need}; LATTICE_SCAN_MIN_FREE_MB); the image names are still listed")
+        return {}
+    sweep_containers(stale_only=True)
+    atexit.register(sweep_containers, False)
     refs = {r: True for r in running}
     if mode != "running":
         for l in run(["docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}"]).splitlines():
@@ -701,16 +775,29 @@ def image_details(running: list[str]) -> dict[str, dict]:
     lang_mode = env("IMAGES_LANG", "all" if deep else "off").lower()
     todo = sorted(refs)[:IMAGE_LIMIT]
 
+    deadline = time.time() + int(env("DEEP_SECONDS", "1800") or 1800)
+    skipped: list[str] = []
+
     def one(ref: str) -> dict | None:
+        if time.time() > deadline:
+            skipped.append(ref)
+            return None
         with_lang = lang_mode == "all" or (lang_mode == "running" and refs[ref])
         progress(f"[host] looking inside image {ref}" + (" (also Python/Node/Java/Ruby packages; can take minutes)" if with_lang else "") + " ...")
-        return image_detail(ref, refs[ref], with_lang)
+        try:
+            return image_detail(ref, refs[ref], with_lang)
+        except Exception as e:  # noqa: BLE001 - one unreadable image must not stop the scan
+            progress(f"[host] image {ref}: skipped, {type(e).__name__}: {str(e)[:100]}")
+            return None
     from concurrent.futures import ThreadPoolExecutor
     workers = 2 if lang_mode in ("all", "running") else 4  # the docker daemon does the work; the export stream is disk-heavy, so fewer at once
     with ThreadPoolExecutor(max_workers=workers) as ex:
         for ref, d in zip(todo, ex.map(one, todo)):
             if d:
                 out[ref] = d
+    sweep_containers(stale_only=False)
+    if skipped:
+        progress(f"[host] {len(skipped)} image(s) not opened, the time limit of {env('DEEP_SECONDS', '1800')} s (LATTICE_SCAN_DEEP_SECONDS) was reached: " + ", ".join(sorted(skipped)[:5]))
     others = {}  # images that were not opened still show their layers, which is all lineage needs and costs one inspect
     for l in run(["docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}"]).splitlines() if mode == "running" else []:
         if l and "<none>" not in l and l not in out and l not in refs:
@@ -2142,6 +2229,7 @@ def main() -> int:
     il = sub.add_parser("inventory", help="show inventory.log: counts and changes per run"); il.add_argument("-n", type=int, default=20)
     lg = sub.add_parser("log"); lg.add_argument("-n", type=int, default=20, help="last N lines (default 20)")
     a = p.parse_args()
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # a stopped run still cleans up (atexit); only SIGKILL cannot, and the next run sweeps what it left
     if getattr(a, "deep", False):
         os.environ["LATTICE_SCAN_LEVEL"] = "deep"
     global DEBUG, PROGRESS, KEEP

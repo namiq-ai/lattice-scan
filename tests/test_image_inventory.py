@@ -296,6 +296,112 @@ class Languages(unittest.TestCase):
         self.assertNotIn("languages", d["app:1"])
 
 
+class Faults(unittest.TestCase):
+    """A deep scan that meets an error loses that image, never the scan, and leaves nothing behind."""
+
+    def test_run_bytes_stops_a_file_larger_than_the_limit(self):
+        with mock.patch.object(cli, "IMAGE_FILE_LIMIT", 10):
+            self.assertEqual(cli.run_bytes([sys.executable, "-c", "print('x' * 1000)"]), b"")
+            self.assertEqual(cli.run_bytes([sys.executable, "-c", "print('ok')"]), b"ok\n")
+        self.assertEqual(cli.run_bytes(["/nonexistent-command"]), b"")
+        self.assertEqual(cli.run_bytes([sys.executable, "-c", "import sys; sys.exit(3)"]), b"")
+
+    def test_damaged_rpm_data_costs_the_packages_only(self):
+        self.assertEqual(cli.parse_rpm_header(b"\x00\x00"), {})
+        self.assertEqual(cli.parse_rpm_header(b"\x00\x00\x00\x01\x00\x00\x00\x04" + b"\x00\x00\x03\xe8\x00\x00\x00\x06\x00\x00\x00\x00\x00\x00\x00\x01" + b"abcd"), {})
+        db = rpm_sqlite([("bash", "5", "1")])
+        with mock.patch.object(Path, "write_bytes", side_effect=OSError(28, "No space left on device")):
+            self.assertEqual(cli.parse_rpm_sqlite(db), {})
+        self.assertEqual(cli.parse_rpm_sqlite(db[:200]), {})
+
+    def test_rpm_temp_folder_is_removed(self):
+        seen = []
+        real = tempfile.TemporaryDirectory
+
+        class Spy(real):
+            def __init__(self, *a, **k):
+                super().__init__(*a, **k)
+                seen.append(self.name)
+        with mock.patch.object(cli.tempfile, "TemporaryDirectory", Spy):
+            cli.parse_rpm_sqlite(rpm_sqlite([("bash", "5", "1")]))
+            cli.parse_rpm_sqlite(b"SQLite format 3\x00 broken")
+        self.assertEqual(len(seen), 2)
+        self.assertFalse(any(Path(x).exists() for x in seen))
+
+    def test_damaged_export_stream_marks_partial_and_closes_the_pipe(self):
+        closed = []
+
+        class P:
+            class stdout:
+                @staticmethod
+                def read(*a): return b"not a tar archive" * 100
+                @staticmethod
+                def readinto(*a): return 0
+                @staticmethod
+                def close(): closed.append(1)
+            def kill(self): closed.append("kill")
+            def wait(self): pass
+        with mock.patch.object(cli.subprocess, "Popen", lambda *a, **k: P()):
+            langs, complete = cli.image_languages("cid")
+        self.assertEqual((langs, complete), ({}, False))
+        self.assertIn("kill", closed)
+
+    def test_one_image_that_raises_does_not_stop_the_others(self):
+        real = cli.image_detail
+
+        def flaky(ref, running, lang=False):
+            if ref == "app:1":
+                raise RuntimeError("boom")
+            return real(ref, running, lang)
+        fd = FakeDocker()
+        with mock.patch.object(cli, "image_detail", flaky), mock.patch.object(cli, "run", fd.run), mock.patch.object(cli, "run_bytes", fd.run_bytes), \
+                mock.patch.object(cli.shutil, "which", lambda c: "/x/docker"), mock.patch.dict("os.environ", {"LATTICE_SCAN_LEVEL": "deep", "LATTICE_SCAN_IMAGES_LANG": "off"}):
+            d = cli.image_details(["redis:7-alpine"])
+        self.assertEqual(set(d), {"redis:7-alpine", "tiny:1"})
+
+    def test_low_storage_opens_no_image(self):
+        fd = FakeDocker()
+        with mock.patch.object(cli, "run", fd.run), mock.patch.object(cli, "docker_free_mb", lambda: 200), mock.patch.object(cli.shutil, "which", lambda c: "/x/docker"):
+            self.assertEqual(cli.image_details(["redis:7-alpine"]), {})
+        self.assertFalse([c for c in fd.calls if c[:2] == ["docker", "create"]])
+
+    def test_time_limit_skips_the_remaining_images(self):
+        fd = FakeDocker()
+        with mock.patch.object(cli, "run", fd.run), mock.patch.object(cli, "run_bytes", fd.run_bytes), mock.patch.object(cli.shutil, "which", lambda c: "/x/docker"), \
+                mock.patch.dict("os.environ", {"LATTICE_SCAN_LEVEL": "deep", "LATTICE_SCAN_DEEP_SECONDS": "-1", "LATTICE_SCAN_IMAGES_LANG": "off"}):
+            self.assertEqual(cli.image_details(["redis:7-alpine"]), {})
+
+    def test_every_created_container_is_removed_even_when_a_copy_fails(self):
+        fd = FakeDocker()
+
+        def boom(cmd):
+            fd.calls.append(cmd)
+            raise OSError("disk gone")
+        with mock.patch.object(cli, "run", fd.run), mock.patch.object(cli, "run_bytes", boom):
+            with self.assertRaises(OSError):
+                cli.image_detail("redis:7-alpine", True)
+        self.assertEqual(len([c for c in fd.calls if c[:2] == ["docker", "create"]]), len([c for c in fd.calls if c[:3] == ["docker", "rm", "-f"]]))
+
+    def test_sweep_removes_this_runs_containers_and_only_old_ones_of_other_runs(self):
+        old = "2020-01-01 00:00:00 +0000 UTC"
+        new = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S") + " +0000 UTC"
+        rows = f"mine\t{cli.RUN_ID}\t{new}\nstale\t999-1\t{old}\nfresh\t999-2\t{new}\n"
+        removed = []
+
+        def run(cmd):
+            if cmd[:3] == ["docker", "container", "ls"]:
+                return rows
+            if cmd[:3] == ["docker", "rm", "-f"]:
+                removed.append(cmd[3])
+            return ""
+        with mock.patch.object(cli, "run", run):
+            cli.sweep_containers(stale_only=True)
+            self.assertEqual(removed, ["stale"])
+            removed.clear()
+            cli.sweep_containers(stale_only=False)
+            self.assertEqual(removed, ["mine"])
+
+
 class Levels(unittest.TestCase):
     def test_quick_is_the_default_and_opens_only_running_images_without_language_scan(self):
         with mock.patch.dict("os.environ", {}, clear=False):
