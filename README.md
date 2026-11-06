@@ -35,7 +35,8 @@ lattice-scan                                               # no arguments: the s
 lattice-scan recent                                        # no CVE id? read namiq.io's weekly list of recent exploited/critical CVEs; only likely matches go to Lattice (--daily: last day or two; --open: older ones, overdue first)
 printf '...' | lattice-scan enrich                         # ids from an audit or advisory: exploited? since when? patch due? ransomware? (no key: 20 ids a run)
 lattice-scan get-key --name ... --position ... --company ... --email ... --purpose "..."   # asks nothing until --accept-terms; for a real person who read the terms
-lattice-scan --refresh                                     # collect the inventory and print its totals; no network call (--list prints every package)
+lattice-scan --refresh                                     # collect the inventory again, show its totals, then run the daily scan
+lattice-scan --refresh --inventory                         # only the inventory: totals, no scan, no network call (--list prints every package)
 lattice-scan list | impact CVE-... | resolve CVE-... --status fixed --proof "..."
 lattice-scan --progress --cve CVE-...                      # which CVE, and which part of the host or project, as it runs (on by default; -q silences)
 lattice-scan --debug --cve CVE-...                         # every request, response and match decision
@@ -145,7 +146,7 @@ Every host scan starts by taking an inventory of the machine. It has two levels,
 
 After a quick scan the tool prints one line on stderr saying how many local images were opened, how long `--deep` would take and when a deep scan was last done (it suggests repeating one after 30 days). A deep scan prints a rough estimate first, then `[n/N %]` with elapsed time for each image and a summary. `-q` silences all of it. **A quick result is not "all clear":** stopped images and the packages inside images were not read.
 
-`lattice-scan --refresh` prints the totals and a short summary of the images (by base OS, packages inside them); the full lists are in `inventory.json` in the records folder, and `--refresh --list` prints them.
+`lattice-scan --refresh --inventory` prints the totals and a short summary of the images (by base OS, packages inside them); the full lists are in `inventory.json` in the records folder, and `--refresh --inventory --list` prints them.
 
 **How images are read.** Nothing is started or pulled. For each image the tool runs `docker image inspect`, then `docker create` (with `--pull never`, `--network none` and the label `io.lattice-scan.run`), copies out only the OS release file and the package database with `docker cp`, and removes the container. The package database is chosen by the OS family: apk (Alpine), dpkg (Debian, Ubuntu, and distroless images through `status.d`) and rpm (sqlite databases: Fedora, RHEL 9 and later, Amazon Linux 2023; Berkeley DB and ndb databases are not read). In a deep scan it also streams `docker export` once per image and records the names and versions of Python (`dist-info`), Node (`package.json`), Java (jar file names) and Ruby (gems) packages, with a limit of 180 seconds per image after which that image is marked partial. Go and Rust binaries, Composer and NuGet are not read. The tool compares the image's own package versions, not the host's. A candidate found inside an image names the image (`musl 1.2.5-r8 (image redis:7-alpine)`). Environment variables of an image are never kept, except those ending in `_VERSION`. Serial numbers and UUIDs of the machine are never read. No registry is contacted.
 

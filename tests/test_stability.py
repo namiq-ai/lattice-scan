@@ -124,7 +124,7 @@ class Stability(EntryBase):
         _, out, _ = self.run_cli("recent")                                # explicit recent is still weekly
         self.assertIn("CANDIDATE", out)
         Stub_seen_before = len(__import__("test_lattice_scan").Stub.seen)
-        rc, out, _ = self.run_cli("--refresh")                            # inventory only: no feed, no Lattice call
+        rc, out, _ = self.run_cli("--refresh", "--inventory")                            # inventory only: no feed, no Lattice call
         self.assertEqual(rc, 0); self.assertEqual(len(__import__("test_lattice_scan").Stub.seen), Stub_seen_before)
         rc, _, err = self.run_cli("--discover")                           # needs a key: still its own usage error
         self.assertEqual(rc, 2); self.assertIn("--discover needs a key", err)
