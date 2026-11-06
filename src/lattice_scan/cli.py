@@ -661,7 +661,7 @@ def context(lat: "Lattice", e: dict) -> dict:
     if props.get("cwe_refs"):
         ctx["cwe"] = [clean(str(c)) for c in props["cwe_refs"]][:5]
     if props.get("description"):
-        ctx["description"] = clean(str(props["description"]))[:CONTEXT_DESC]
+        ctx["description"] = " ".join(clean(str(props["description"])).split())[:CONTEXT_DESC]   # NVD hard-wraps its text: one line
     refs = [clean(str(r)) for r in props.get("references") or [] if str(r).startswith(("http://", "https://"))][:3]
     if refs:
         ctx["references"] = refs
