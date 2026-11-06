@@ -5,7 +5,7 @@
 lattice-scan \- check this host, or a project's declared dependencies, against the CVEs CISA lists as exploited, through Lattice
 .SH SYNOPSIS
 .B lattice-scan
-[\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-discover\fR] [\fB\-\-refresh\fR] [\fB\-\-list\fR] [\fB\-\-deep\fR] [\fB\-\-again\fR] [\fB\-\-keep\fR] [\fB\-\-debug\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
+[\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-discover\fR] [\fB\-\-refresh\fR [\fB\-\-inventory\fR]] [\fB\-\-list\fR] [\fB\-\-deep\fR] [\fB\-\-again\fR] [\fB\-\-keep\fR] [\fB\-\-debug\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
 .br
 .B lattice-scan project
 [\fIPATH\fR...] [\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-kev\-catalogue\fR \fIFILE\fR] [\fB\-\-max\-read\fR \fIN\fR]
@@ -67,7 +67,10 @@ days (default 6). Needs
 graph_search is not keyless.
 .TP
 .B \-\-refresh
-Collect the inventory again now and print all of it. With no ids it makes no network call at all.
+Collect the inventory again now and show it (totals; \fB\-\-list\fR for everything), then run the scan that would have run without it: the daily list of recent CVEs when no id is given, or the ids named. The findings still open from earlier runs are listed with their saved detail, and every CVE in the table has a detail block. With \fB\-\-inventory\fR the run stops after the inventory: no scan and no network call.
+.TP
+.B \-\-inventory
+With \fB\-\-refresh\fR, only collect and show the inventory. Makes no network call.
 .TP
 .B \-\-list
 With \fB\-\-refresh\fR, print every installed package, snap and image. Without it the inventory shows totals, the hardware and a summary of the images (by base OS, packages inside them), and the path of inventory.json, which always holds the full lists.

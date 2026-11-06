@@ -119,8 +119,8 @@ class AgentStart(unittest.TestCase):
 
     def test_the_inventory_dump_is_not_the_first_thing_an_agent_runs(self):
         t = SKILL.read_text()
-        self.assertIn("--refresh --list > /dev/null", t)   # the full dump is for a file, never for the user
-        self.assertNotIn("--refresh --list   ", t)
+        self.assertIn("--refresh --inventory --list > /dev/null", t)   # the full dump is for a file, never for the user
+        self.assertNotIn("--inventory --list   ", t)
 
 
 class Wording(unittest.TestCase):

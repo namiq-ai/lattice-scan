@@ -1522,17 +1522,10 @@ def cmd_run(a) -> int:
             return 2
         ids += split_ids(l.split("#")[0] for l in lines)
     named = set(ids)  # ids the user typed or listed: always read. `seen` only stops --discover re-reading what it has already read.
-    if a.refresh and not ids and not a.discover:
-        # Inventory only: collect again now, show all of it, log it. No Lattice call, nothing leaves the machine.
+    if a.refresh and a.inventory and not ids and not a.discover:
+        # Inventory only (--refresh --inventory): collect again now, show it, log it. No Lattice call, nothing leaves the machine.
         inv = inventory()
-        inv_f = OUT / "inventory.json"
-        try:
-            prev = json.loads(inv_f.read_text()) if inv_f.exists() else None
-        except ValueError:
-            prev = None
-        inventory_log(inv, prev, refresh=True)
-        write_private(inv_f, json.dumps(inv, indent=1, sort_keys=True))
-        show_inventory(inv, full=a.list)
+        refresh_inventory(inv, full=a.list)
         scanlog(f"refresh inventory={inv['hash']} packages={len(inv['packages'])} snaps={len(inv['snaps'])} images={len(inv['images'])}")
         return 0
     if not ids and not a.discover:
@@ -1630,15 +1623,7 @@ def cmd_run(a) -> int:
             + "".join(f" [{e['cve']}: {why}]" for e, why, imp in hits) + (f" not-listed={','.join(not_listed)}" if not_listed else "")
             + (" restart-required" if inv["restartRequired"] else ""))
     print(f"host scan {TODAY}: {read} exploited entries read, {len(hits)} candidates (a person must read each against the installed version)")
-    open_n = [f for f in state().values() if f["status"] in ("open", "verified")]
-    listed_now = {r[0] for r in rows}
-    earlier: list[dict] = []   # open findings not read in this run: their saved detail is printed below the table, from the file, with no call
-    for f in open_n:   # an open finding from an earlier run stays in the table, so it is listed once, in the table
-        if f["ref"] not in listed_now:
-            earlier.append(f)
-            rows.append([f["ref"], "yes" if f.get("kind", "kev") == "kev" else "-", cvss_cell(f.get("cvss")), f.get("listed") or "-", due_cell(f.get("due", "")),
-                         ransom(f.get("ransomware", "")), "-", f["status"].upper(),
-                         f"{f.get('why', '')} (recorded {f.get('found', '?')}, not read in this run)"[:240]])
+    earlier = earlier_findings(rows)   # open findings not read in this run: their saved detail is printed below the table, from the file, with no call
     rows += getattr(a, "extra_rows", [])   # `recent`: the feed's ids that were ruled out on this host and never sent to Lattice
     print_table(rows)
     hits.sort(key=lambda h: PRIORITY_RANK.get((h[2].get("priority") or {}).get("level", "read"), 2))   # fix first, then fix soon, then read; ties keep the id order
@@ -1648,17 +1633,16 @@ def cmd_run(a) -> int:
     for e, why, imp in again_hits:
         print(f"  {e['cve']}  matches again ({why}); already recorded as {state()[e['cve']]['status']}, not counted as new")
         print_impact(imp)
-    for f in earlier:
-        print(f"  {f['ref']}  {str(f.get('title', ''))[:70]}  [{f['status']}, recorded {f.get('found', '?')}; not read in this run, so this is the detail saved then]\n      because: {f.get('why', '')}")
-        if f.get("impact"):
-            print_impact(f["impact"])
-        else:
-            print("      no impact record (found before the impact check existed, or added by hand)")
+    print_earlier(earlier)
+    for block in getattr(a, "extra_detail", []):
+        print(block)
     if not_listed:
         print(f"not in the graph's CISA list (not 'safe', only 'not listed in this snapshot'): {', '.join(not_listed)}")
     for cve, ctx in unlisted_ctx:
         print(f"  {cve}  not CISA-listed (that is not the same as safe or unexploited); what Lattice holds on it:")
         print_context({"context": ctx})
+        if ctx.get("description"):
+            print_leads(ctx["description"], inv)
     if inv["restartRequired"]:
         print("restart required: an installed update is waiting for a reboot")
     detail_files(inv)
@@ -2022,6 +2006,86 @@ def feed_cells(r: dict) -> list[str]:
             f"{r.get('vendor', '')} {r.get('product', '')}".strip() or "-"]
 
 
+def refresh_inventory(inv: dict, full: bool = False) -> None:
+    """Save the inventory (compared with the previous one in inventory.log) and show it."""
+    inv_f = OUT / "inventory.json"
+    try:
+        prev = json.loads(inv_f.read_text()) if inv_f.exists() else None
+    except ValueError:
+        prev = None
+    inventory_log(inv, prev, refresh=True)
+    write_private(inv_f, json.dumps(inv, indent=1, sort_keys=True))
+    show_inventory(inv, full=full)
+
+
+def earlier_findings(rows: list[list[str]]) -> list[dict]:
+    """Findings still open from earlier runs that this run did not read. Each gets a row in `rows` (an open finding stays in the table, so it is listed once, there)."""
+    listed_now = {r[0] for r in rows}
+    earlier: list[dict] = []
+    for f in (f for f in state().values() if f["status"] in ("open", "verified")):
+        if f["ref"] not in listed_now:
+            earlier.append(f)
+            rows.append([f["ref"], "yes" if f.get("kind", "kev") == "kev" else "-", cvss_cell(f.get("cvss")), f.get("listed") or "-", due_cell(f.get("due", "")),
+                         ransom(f.get("ransomware", "")), "-", f["status"].upper(),
+                         f"{f.get('why', '')} (recorded {f.get('found', '?')}, not read in this run)"[:240]])
+    return earlier
+
+
+def print_earlier(earlier: list[dict]) -> None:
+    for f in earlier:
+        print(f"  {f['ref']}  {str(f.get('title', ''))[:70]}  [{f['status']}, recorded {f.get('found', '?')}; not read in this run, so this is the detail saved then]\n      because: {f.get('why', '')}")
+        if f.get("impact"):
+            print_impact(f["impact"])
+        else:
+            print("      no impact record (found before the impact check existed, or added by hand)")
+
+
+def why_not(entry: dict, inv: dict) -> str:
+    """Why a CISA entry matched nothing here: the distinctive words of its product, and which of them this machine has."""
+    want = words(entry.get("product", "").lower())
+    if not want:
+        return "its product name has no distinctive word to compare"
+    have = set()
+    for n in list(inv["packages"]) + list(inv["snaps"]) + list(inv["images"]):
+        have |= stems(n)
+    for ref, d in (inv.get("imageDetails") or {}).items():
+        have |= set(image_words(ref, d))
+    have |= {w for v in (inv.get("host") or {}).values() if isinstance(v, str) for w in stems(v)}
+    found, missing = sorted(w for w in want if w in have), sorted(w for w in want if w not in have)
+    return (f"needs all of: {', '.join(sorted(want))}; this machine has {', '.join(found) if found else 'none of them'}"
+            + (f" (missing: {', '.join(missing)})" if found and missing else "") + f" among {len(inv['packages'])} packages, {len(inv['snaps'])} snaps, "
+            f"{len(inv['images'])} running images and {len(inv.get('imageDetails') or {})} opened images")
+
+
+def feed_detail(r: dict, kind: str, inv: dict, reason: str = "") -> str:
+    """A detail block for a row that came from the feed only (nothing was sent to Lattice for it): what the feed says, and why it is or is not a match."""
+    prod = f"{r.get('vendor', '')} {r.get('product', '')}".strip() or "-"
+    out = [f"  {r['id']}  {prod}  [{'CISA-listed exploited, nothing here matches' if kind == 'exploited' else 'critical, not known exploited, may match: watch'}]"]
+    bits = []
+    if r.get("added"):
+        bits.append(f"listed {r['added']}")
+    if r.get("due"):
+        try:
+            left = (dt.date.fromisoformat(r["due"]) - dt.date.fromisoformat(TODAY)).days
+            bits.append(f"due {r['due']} (" + (f"overdue by {-left} days" if left < 0 else f"in {left} days" if left else "today") + ")")
+        except ValueError:
+            bits.append(f"due {r['due']}")
+    if r.get("published"):
+        bits.append(f"published {r['published']}")
+    if r.get("cvss") is not None:
+        bits.append(f"CVSS {r['cvss']}" + (f" ({r['cvssSource']})" if r.get("cvssSource") else ""))
+    if isinstance(r.get("epss"), (int, float)):
+        bits.append(f"EPSS {r['epss']:.3f}")
+    if kind == "exploited":
+        bits.append("ransomware use: " + ("known" if ransom(r.get("ransomware", "")) == "known" else "not recorded by CISA"))
+    if r.get("priority"):
+        bits.append(f"namiq.io list priority: {r['priority']}")
+    out.append("      " + "; ".join(bits))
+    out.append("      " + (f"why it is a watch: {reason}" if kind != "exploited" else "why no match: " + why_not(r, inv)))
+    out.append(f"      full detail from Lattice (one id is sent): lattice-scan --cve {r['id']}")
+    return "\n".join(out)
+
+
 def cmd_recent(a) -> int:
     """Start here when you have no CVE id: read namiq.io's recent exploited and critical ids, rule out locally what this host cannot have, and read only
     the rest from Lattice by exact id. The host's inventory never leaves the machine; the feed request carries no id and no host data."""
@@ -2033,8 +2097,11 @@ def cmd_recent(a) -> int:
         print(f"stopped: {err}", file=sys.stderr)
         return 1
     inv = inventory()
+    if getattr(a, "refresh", False):   # --refresh: collect again, show it, log it, then run the scan on it
+        refresh_inventory(inv, full=getattr(a, "list", False))
     rows: list[list[str]] = []
     look: list[str] = []
+    details: list[str] = []
     for r in feed["exploited"][: a.max_read]:
         entry = {"cve": r["id"], "vendor": r.get("vendor", ""), "product": r.get("product", "")}
         m = candidate(entry, inv)
@@ -2043,6 +2110,7 @@ def cmd_recent(a) -> int:
             look.append(r["id"])
         else:
             rows.append([r["id"], *feed_cells(r), "unmatch", "no package, snap, image or kernel matches (not sent to Lattice)"])
+            details.append(feed_detail(r, "exploited", inv))
     watch = 0
     if not a.no_critical:
         for r in feed["critical"]:
@@ -2051,15 +2119,20 @@ def cmd_recent(a) -> int:
                 watch += 1
                 rows.append([r["id"], "no", cvss_cell(r.get("cvss")), "-", "-", "-", f"{r.get('vendor', '')} {r.get('product', '')}".strip() or "-", "WATCH",
                              f"critical, not known exploited: {m[0]}"])
+                details.append(feed_detail(r, "critical", inv, m[0]))
     progress(f"[recent] {a.period} list {feed['from'] or '?'} to {feed['to'] or '?'}: {len(feed['exploited'])} exploited and {len(feed['critical'])} critical ids (CISA catalogue as of {feed['asOf'] or '?'}); "
              f"{len(look)} exploited may match this host, {watch} critical may match")
-    a.inv, a.extra_rows = inv, rows
+    a.inv, a.extra_rows, a.extra_detail = inv, rows, details
     if look:
         a.cve, a.cve_file, a.discover, a.refresh, a.again = look, None, False, False, False
         return cmd_run(a)
     print(f"recent {TODAY} ({a.period}, {feed['from'] or '?'} to {feed['to'] or '?'}): {len(feed['exploited'])} exploited and {len(feed['critical'])} critical CVEs read from namiq.io (as of {feed['asOf'] or '?'}); "
           f"none of the exploited ones match this host's installed software, so nothing was sent to Lattice")
+    earlier = earlier_findings(rows)   # the findings still open from earlier runs belong in every scan, whether or not today's list matched anything
     print_table(rows)
+    for block in details:
+        print(block)
+    print_earlier(earlier)
     print("That is not the same as safe: the list holds only what was recently added. To check a CVE you know of, run: lattice-scan --cve CVE-YYYY-NNNN")
     return 0
 
@@ -2193,6 +2266,49 @@ def print_impact(imp: dict) -> None:
     print_context(imp)
 
 
+STOP_LEADS = set("""linux server client system windows version before after between affected allows allow when without which where there their other using used file files user
+users string password passwords account accounts access attack attacker attackers remote local possible certain through under into this that with from have been does lack lacks
+workaround misinterpretation related some configurations intended whether hash libc library package packages default configuration authentication function value values characters character bytes strings numbers length data name names""".split())
+
+
+def installed_leads(text: str, inv: dict) -> dict:
+    """Words of a CVE description that are also the name of something installed, on the host and in each opened image. A lead for a person, not a match:
+    it uses the description only, which NVD may not have tied to products yet."""
+    want = {w for w in words(text) if len(w) >= 4 and w not in STOP_LEADS}
+    host: dict[str, list[str]] = {}
+    for n, v in sorted(inv["packages"].items()):
+        for w in stems(n) & want:
+            host.setdefault(w, []).append(f"{n} {v}")
+    for n, v in inv["snaps"].items():
+        for w in stems(n) & want:
+            host.setdefault(w, []).append(f"snap {n} {v}")
+    images: dict[str, list[str]] = {}
+    for ref, d in sorted((inv.get("imageDetails") or {}).items()):
+        for w in set(image_words(ref, d)) & want:
+            images.setdefault(w, []).append(ref)
+    leads = sorted(set(host) | set(images))
+    opened = sorted((inv.get("imageDetails") or {}))
+    both = [r for r in opened if leads and all(r in images.get(w, []) for w in leads)]
+    return {"words": leads, "host": host, "images": images, "allIn": both, "opened": len(opened)}
+
+
+def print_leads(text: str, inv: dict) -> None:
+    lead = installed_leads(text, inv)
+    if not lead["words"]:
+        print("      installed things the description names: none (no word of the description is the name of an installed package, snap or opened image)")
+        return
+    print("      installed things the description names (a lead for a person to read, not a match; NVD has not tied this CVE to products yet):")
+    for w in lead["words"]:
+        h, im = lead["host"].get(w, []), lead["images"].get(w, [])
+        print(f"        {w}: " + (f"on the host {', '.join(h[:3])}{' ...' if len(h) > 3 else ''}" if h else "not on the host") + "; "
+              + (f"in {len(im)} opened image{'s' if len(im) > 1 else ''}: {', '.join(im[:4])}{' ...' if len(im) > 4 else ''}" if im else "in no opened image"))
+    if len(lead["words"]) > 1:
+        print("      images that have all of " + ", ".join(lead["words"]) + ": " + (", ".join(lead["allIn"]) if lead["allIn"] else f"none of the {lead['opened']} opened") + ".")
+    m = re.search(r"\bbefore ([0-9][\w.]*)", text)
+    if m:
+        print(f"      the description says: before {m.group(1)} (compare it with the installed version yourself)")
+
+
 def print_context(imp: dict) -> None:
     """The 'why it matters' lines. Server text, shown as data; priority is the tool's reading, not a verdict."""
     ctx, pr = imp.get("context"), imp.get("priority")
@@ -2276,6 +2392,7 @@ def main() -> int:
     p.add_argument("--discover", action="store_true", help="find exploited CVEs added in the window (needs LATTICE_API_KEY)")
     p.add_argument("--debug", action="store_true", help="detailed execution log to stderr and debug.log (also LATTICE_SCAN_DEBUG=1)")
     p.add_argument("--keep", action="store_true", help="keep this run's records in the default folder even with no terminal (also LATTICE_SCAN_KEEP=1); without it a terminal-less run with no folder yet uses a temporary one")
+    p.add_argument("--inventory", action="store_true", help="with --refresh: only collect and show the inventory, no scan and no network call")
     p.add_argument("--list", action="store_true", help="with --refresh or when the inventory is shown: print every package, snap and image instead of totals")
     p.add_argument("--deep", action="store_true", help="deep inventory: open every local image, not only running ones, and list the Python/Node/Java/Ruby packages inside them (minutes). Default is quick")
     p.add_argument("--refresh", action="store_true", help="collect the inventory again now and print all of it; with ids, also re-read them. Alone it makes no Lattice call")
@@ -2335,7 +2452,7 @@ def main() -> int:
     KEEP = a.keep or env("KEEP") == "1"
     # OCO-5837: progress goes to stderr and is on by default; --quiet or LATTICE_SCAN_PROGRESS=0 turns it off. stdout is never touched.
     PROGRESS = not getattr(a, "quiet", False) and (getattr(a, "progress", False) or env("PROGRESS") != "0")
-    if a.c is None and not (a.cve or a.cve_file or a.discover or a.refresh):
+    if a.c is None and not (a.cve or a.cve_file or a.discover or (a.refresh and a.inventory)):
         # Nothing asked for: do what a person or an agent with no CVE id wants, the daily list (lattice-scan recent --daily). Daily, not weekly: the weekly list is
         # long, and a keyless run that has to look many entries up reaches Lattice's limit (about 20 reads an hour).
         a.c, a.period, a.max_read, a.no_critical = "recent", "daily", 40, False
