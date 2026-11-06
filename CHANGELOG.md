@@ -1,10 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.4.3 — 2026-11-06
 
+- Self-audit (docs/SELF-AUDIT.md): the tool has no runtime dependency, and the `.deb` has no maintainer scripts. The audit found and fixed: a `pom.xml` that declares entities or a DOCTYPE is skipped (it could exhaust memory); a manifest over 5 MB is skipped and named; text taken from an image or from firmware has control characters replaced before it is printed; an RPM database from an image is opened query-only with `trusted_schema` off and at most 50,000 rows; an image reference starting with a dash is not passed to docker; the build tools are required as setuptools 84.1.0 or later in CI and release (older versions have known advisories that affect building, not running).
 - New command `lattice-scan posture`: what this host exposes and runs, beyond what is installed. Quick: the listening TCP and UDP sockets (all interfaces, loopback only or one address) with the owning process, package or container image; the host firewall (ufw, firewalld, nftables, iptables); the SSH server settings (first value wins, `Include` followed, OpenSSH defaults for unset keywords); the running services and whether a package owns each program. `--deep` also reads every process it may (program in a temporary folder, deleted while running, memory only, owned by no package, and outbound connections of those) and persistence points (`ld.so.preload`, extra uid 0 accounts, cron and setuid files no package owns). The scope follows the user: as root it reads firewall rules, `sshd -T` and every process; otherwise it lists what it could not read and never runs `sudo`. It reports signals for a person to read, each saying why it can be harmless; it is not an incident detector. Read only, nothing is sent, command line arguments are never recorded. Programs replaced by a package update after they started are one restart note, not a suspicion.
-
-## Unreleased
 
 - `--refresh` now runs the scan. It collects the inventory again, shows its totals, then does what the same command would do without `--refresh` (the daily list when no id is given). Before, it stopped after the inventory. `--refresh --inventory` keeps the old behaviour: inventory only, no network call.
 - The default scan no longer drops the findings still open from earlier runs. When nothing on the day's list matched, it printed only the list's rows; now it also lists every open finding with its saved detail, as a scan of named ids already did.

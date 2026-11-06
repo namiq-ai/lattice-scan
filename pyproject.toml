@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77"]  # 77 is the first to read an SPDX licence expression
+requires = ["setuptools>=78.1.1"]  # 77 is the first to read an SPDX licence expression; before 78.1.1 setuptools had a path traversal flaw (CVE-2025-47273)
 build-backend = "setuptools.build_meta"
 
 [project]
