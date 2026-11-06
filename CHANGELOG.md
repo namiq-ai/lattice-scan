@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A CVE you name that CISA does not list now shows what Lattice holds on it, instead of only `unlisted`: NVD's record status and dates, EPSS and SSVC when present, the weakness, the start of the description, the linked ATT&CK techniques ("likely" when inferred) and references, and a line saying so when NVD lists no affected products yet (no version check is possible). It costs one more call per such id and applies only to ids you typed, not to `recent`, `enrich` or discovery. There is no priority line and nothing is recorded as a finding. The skill explains how to read it and not to call a not-listed CVE safe.
+
 ## 0.4.0 — 2026-11-06
 
 - A candidate now says how urgent it is and what it is. For each candidate the tool reads one more node from Lattice, which needs no key since Lattice began serving it keyless, and prints a priority (`fix first`, `fix soon` or `read`, with the reasons), the EPSS score and percentile, CISA's SSVC assessment, the weakness (CWE), the start of NVD's description, the linked ATT&CK techniques (marked "likely" when the graph inferred the link), the first unaffected upstream version NVD lists, and up to three references. Candidates are listed highest priority first, and `lattice-scan impact CVE-...` shows the saved context. The priority is the tool's reading of CISA and FIRST fields, not a risk score or a verdict. A server that refuses the read or sends no links leaves the candidate exactly as before, with one line on stderr. A candidate costs one more call, which counts against the keyless limit. Only CVE ids and node ids Lattice returned leave the machine.

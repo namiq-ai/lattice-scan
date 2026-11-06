@@ -99,6 +99,17 @@ For each candidate the tool also reads one more node from Lattice (no key needed
 - Candidates are printed highest priority first. Do not reorder them, and do not drop a `read` candidate.
 - `lattice-scan impact CVE-...` prints the saved context again without a new call.
 
+### A named CVE that CISA does not list
+
+When the user names a CVE and CISA's exploited list does not hold it, the table says `unlisted` and, under it, the tool prints a block headed `not CISA-listed (that is not the same as safe or unexploited); what Lattice holds on it`. This is how to analyse a brand-new CVE. Read it as follows:
+
+- **`NVD record: status ...`** is NVD's own workflow state and the record's dates. Quote them. A status such as `Received` or `Deferred` on a record created days ago means NVD has not finished with it: scores, affected products and versions may be missing or may change. Say that, and do not guess which state means what beyond what NVD says.
+- **`NVD lists no affected products yet, so no version check is possible`** means the tool could not compare this host's versions with anything. Do not write "not affected" or "affected". Tell the user to read the advisory (the description and references say which product and versions) and compare by hand.
+- **There is no `priority` line** for these, because the priority rests on CISA's exploited-list fields. Do not make one up. EPSS and SSVC lines appear only when Lattice has them, and a new CVE often has neither: say "not yet scored", not "low".
+- **Techniques marked "likely"** were inferred by the graph, not declared by a source: write "likely".
+- The description is cut at 300 characters. For the full text and the fixed version, read the first reference, as the user's own step, and quote it with its address.
+- Never write that the CVE is safe, unexploited or not a risk because CISA does not list it. CISA lists exploitation it has seen, and a new CVE has had little time to appear.
+
 ### The result table
 
 The host check and the console project report print one `RESULT BY CVE` table, one line per CVE, and a `DETAILED RESULT FILES` section that says where the full detail is. Show the

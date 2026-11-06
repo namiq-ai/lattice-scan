@@ -49,7 +49,7 @@ the host's inventory is collected (dpkg, rpm or apk packages, snaps, running Doc
 A match is a
 .IR candidate ,
 not a finding about the host: the report shows the installed version against NVD's ranges and whether the installed package's own Debian changelog names the CVE.
-For each candidate the tool also reads one more node from Lattice (no key needed) and prints a priority (fix first, fix soon or read, with its reasons), the EPSS score, CISA's SSVC assessment, the weakness, the start of NVD's description, the ATT&CK techniques the graph links to the CVE (marked likely when inferred), the first unaffected upstream version NVD lists and up to three references. Candidates are printed highest priority first. The priority is the tool's reading of CISA and FIRST fields, not a risk score or a verdict. If Lattice does not give the detail, the candidate is printed without it.
+For each candidate the tool also reads one more node from Lattice (no key needed) and prints a priority (fix first, fix soon or read, with its reasons), the EPSS score, CISA's SSVC assessment, the weakness, the start of NVD's description, the ATT&CK techniques the graph links to the CVE (marked likely when inferred), the first unaffected upstream version NVD lists and up to three references. Candidates are printed highest priority first. The priority is the tool's reading of CISA and FIRST fields, not a risk score or a verdict. If Lattice does not give the detail, the candidate is printed without it. A CVE named with \\fB\\-\\-cve\\fR that CISA does not list gets the same block without a priority (NVD's record status, EPSS and SSVC when present, weakness, description, techniques, references), at the cost of one more call.
 .TP
 .BI \-\-cve " ID"
 A CVE id to check. Repeatable.
