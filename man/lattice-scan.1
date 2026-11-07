@@ -373,6 +373,15 @@ on (default) or off. A complete deep scan is kept in the records folder (deep-im
 .B LATTICE_SCAN_DEEP_CACHE_DAYS
 How old a kept deep scan may be before it is not used (default 30).
 .TP
+.B LATTICE_SCAN_READ_CACHE
+on (default) or off. An answer Lattice gave to a lookup of one CVE id, or to the detail read of one node, is kept in the user's cache folder (read\-cache.json) and reused for a few hours, so a repeat run asks Lattice nothing. It holds graph data about public CVEs only, nothing about this host. off, \-\-again and \-\-refresh ask Lattice again.
+.TP
+.B LATTICE_SCAN_READ_CACHE_HOURS
+How old a kept answer may be before it is not used (default 6).
+.TP
+.B LATTICE_SCAN_READ_CACHE_FILE
+Where the read cache is kept (default: read\-cache.json in the user's cache folder).
+.TP
 .B LATTICE_SCAN_STALE_MINUTES
 Age after which a leftover scan container from an earlier, killed run is removed (default 15).
 .TP
@@ -414,7 +423,7 @@ Host mode and \fBget\-key\fR, mode 0700, every file 0600: findings.jsonl, runs.j
 The file \fBkey\fR (mode 0600), written by \fBget\-key\fR, holds a Lattice key; it is read only while no one else can read it. \fBenrich\fR and \fBproject\fR write nothing there.
 If the folder cannot be created and \fBLATTICE_SCAN_DIR\fR was not set, the run says so on one line and uses a temporary folder. If \fBLATTICE_SCAN_DIR\fR was set and cannot be used, the run stops with exit status 1 and one line naming it. \fBget\-key\fR never uses a temporary folder, because the key must outlive the run.
 .SH LIMITS
-Without a key Lattice allows 5 calls a minute, 20 reads an hour and 60 a day. lattice\-scan keeps the times of its recent calls (in the user's cache folder, not in the records), so separate runs one after another space themselves out and stay under 5 a minute; it prints a line when it waits. If Lattice still answers "too many requests, retry after N seconds" with N about a minute or less, it waits that long and tries again, twice at most. A run that reaches the hourly or daily limit stops, lists what it did not read, and exits 3.
+Without a key Lattice allows a small number of calls a minute, hour and day, and says what they are in every answer (the access object). lattice\-scan remembers the per\-minute figure the server last reported (5 until it has been told otherwise) and keeps the times of its recent calls (in the user's cache folder, not in the records), so separate runs one after another space themselves out and stay under it; it prints a line when it waits. If Lattice still answers "too many requests, retry after N seconds" with N about a minute or less, it waits that long and tries again, twice at most. A run that reaches the hourly or daily limit stops, lists what it did not read, and exits 3.
 A key is for a real person (https://namiq.io/lattice/docs). The tool asks for one only through \fBget\-key\fR, with the person's own details and only after \fB\-\-accept\-terms\fR; it never opens a link from a reply.
 .SH WHAT LEAVES THE MACHINE
 CVE ids, the node ids Lattice returned for them, and the key if one is set. Package names, versions, file names and the inventory are never sent; matching happens locally.

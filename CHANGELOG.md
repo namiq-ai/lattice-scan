@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- A repeat run asks Lattice nothing it was just told. Answers to a lookup of one CVE id and to a detail read are kept in your cache folder for 6 hours (`LATTICE_SCAN_READ_CACHE`, `LATTICE_SCAN_READ_CACHE_HOURS`); `--again` and `--refresh` ask again. They hold public graph data only, nothing about this host.
+- Keyless pacing follows the server. The per-minute limit Lattice reports in each answer (`access.limits.calls_per_minute`) is remembered for a week, so a limit the operator raises shortens your scans without a new release. Until told otherwise it stays 5 a minute.
+- `recent` reads the most urgent ids first (ransomware use recorded, patch date passed, then CISA priority and EPSS), and says before the first call how many calls that will be, how many are already cached and how long pacing makes it. A run that is stopped has read what mattered most.
+- The "20 reads an hour and 60 a day" wording is gone from the tool, the manual and the skill: the server states the allowance in every answer.
+
 ## 0.4.6 — 2026-11-06
 
 - `lattice-scan recent` now reads everything in namiq.io's recent list, as the name says. It read only the weekly part (7 days), so the 32 exploited CVEs CISA added earlier in the last 30 days (the `open` part) were left out unless you ran `recent --open`; on one day the list held 65 ids and the scan looked at 33. The default is now `--period all` (weekly and open together, each id once); `--daily`, `--weekly` and `--open` still narrow it, and `--all` names the default. `--max-read` defaults to 200, so the whole list is considered. Running `lattice-scan` with no argument still reads the daily list.
