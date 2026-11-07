@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A deep scan is no longer lost to the next quick run. Every run collected the inventory from scratch and overwrote `inventory.json`, so the image contents a deep scan read (all local images, and the Python, Node, Java and Ruby packages inside them) were gone after one plain run, and the CVE checks and "installed things the description names" leads fell back to the running images only. A complete deep scan is now kept in `deep-images.json` in the records folder, with each image's id. A later quick run reuses it for every local image whose id is unchanged (at most 30 days old, `LATTICE_SCAN_DEEP_CACHE_DAYS`), says so on stderr, and opens only what is new or changed. An image that changed or is gone is not reused. `--refresh` or `LATTICE_SCAN_DEEP_CACHE=off` opens every image again. Host packages, snaps, running images and the kernel are still collected on every run.
 - The RESULT BY CVE row of a CVE you name that CISA does not list now says what the detail below it found. When the description names something installed, the row reads `lead` (not `unlisted`) and its last column names it: for example `openssh on the host (...)`, `musl in 9 opened images`, whether any opened image has all of them, and the "before X" version the description gives. It is a lead for a person to read, not a match. A CVE whose description names nothing installed keeps the plain `unlisted` row.
 
 ## 0.4.4 — 2026-11-06

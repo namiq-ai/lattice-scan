@@ -367,6 +367,12 @@ Free space needed where Docker keeps its data before images are opened (default 
 .B LATTICE_SCAN_DEEP_SECONDS
 Seconds after which no further image is opened (default 1800). Images not opened are named.
 .TP
+.B LATTICE_SCAN_DEEP_CACHE
+on (default) or off. A complete deep scan is kept in the records folder (deep-images.json); a later quick run uses it for every local image whose id is unchanged, instead of opening that image again. off, or \-\-refresh, opens them again.
+.TP
+.B LATTICE_SCAN_DEEP_CACHE_DAYS
+How old a kept deep scan may be before it is not used (default 30).
+.TP
 .B LATTICE_SCAN_STALE_MINUTES
 Age after which a leftover scan container from an earlier, killed run is removed (default 15).
 .TP

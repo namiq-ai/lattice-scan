@@ -779,6 +779,10 @@ def deep_hint(inv: dict) -> None:
     s = inv.get("imageScan") or {}
     if s.get("level") != "quick" or not s.get("local"):
         return
+    r = s.get("reusedDeep")
+    if r:
+        progress(f"[host] Quick scan; {r['images']} image(s) come from the deep scan of {r['on']} (their id is unchanged). Run lattice-scan --deep to read them again.")
+        return
     last = ""
     try:
         d = json.loads((OUT / DEEP_STAMP).read_text())
@@ -812,6 +816,51 @@ def lineage(details: dict[str, dict], others: dict[str, list] | None = None) -> 
         d["layerCount"] = len(d.pop("layers", []) or [])
 
 
+DEEP_IMAGES = "deep-images.json"
+
+
+def deep_cache_days() -> int:
+    try:
+        return int(env("DEEP_CACHE_DAYS", "30") or 30)
+    except ValueError:
+        return 30
+
+
+def save_deep(out: dict[str, dict], ids_now: dict[str, str], seconds: int) -> None:
+    """Keep what a complete deep scan read of each image (with the image id it read), so a later quick run does not lose it. Private to this user."""
+    keep = {r: {"id": d.get("id") or ids_now.get(r, ""), "detail": d} for r, d in out.items() if d}
+    try:
+        write_private(OUT / DEEP_STAMP, json.dumps({"on": TODAY, "images": len(out), "seconds": seconds}))
+        write_private(OUT / DEEP_IMAGES, json.dumps({"on": TODAY, "images": keep}))
+    except OSError:
+        pass
+
+
+def reuse_deep(out: dict[str, dict], ids_now: dict[str, str], running: set[str]) -> None:
+    """A quick run: for each local image whose id is unchanged since the last complete deep scan (at most LATTICE_SCAN_DEEP_CACHE_DAYS old), use that deep
+    reading in place of the quick one, or add it when the quick run did not open the image. An image that changed, or is gone, is not reused.
+    LATTICE_SCAN_DEEP_CACHE=off (and --refresh) turns this off."""
+    if env("DEEP_CACHE", "on").lower() == "off":
+        return
+    try:
+        saved = json.loads((OUT / DEEP_IMAGES).read_text())
+        age = (dt.date.fromisoformat(TODAY) - dt.date.fromisoformat(saved["on"])).days
+        images = saved["images"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return
+    if age > deep_cache_days() or not isinstance(images, dict):
+        return
+    reused = 0
+    for ref, rec in images.items():
+        now = ids_now.get(ref)
+        if now and isinstance(rec, dict) and isinstance(rec.get("detail"), dict) and rec.get("id") == now:
+            out[ref] = {**rec["detail"], "running": ref in running}   # what the image holds is from the deep scan; whether it runs is as of now
+            reused += 1
+    if reused:
+        IMAGE_SCAN["reusedDeep"] = {"on": saved["on"], "images": reused}
+        progress(f"[host] {reused} image(s) read from the deep scan of {saved['on']} ({age} days ago; their id is unchanged), not opened again. --refresh opens them again")
+
+
 def image_details(running: list[str]) -> dict[str, dict]:
     """Detail for every image on this machine, keyed by its reference. LATTICE_SCAN_LEVEL / --deep sets the defaults (quick: running images, no language scan; deep: all images and the language scan);
     LATTICE_SCAN_IMAGES (all, running, off) and LATTICE_SCAN_IMAGES_LANG (all, running, off) override them."""
@@ -826,11 +875,14 @@ def image_details(running: list[str]) -> dict[str, dict]:
     sweep_containers(stale_only=True)
     atexit.register(sweep_containers, False)
     refs = {r: True for r in running if not r.startswith("-")}
+    ids_now: dict[str, str] = {}   # reference -> short image id now, to tell whether a saved deep reading still describes the image
     local, size_mb, sizes = set(running), 0.0, {}
-    for l in run(["docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}\t{{.Size}}"]).splitlines():
-        ref, _, size = l.partition("\t")
+    for l in run(["docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}\t{{.Size}}\t{{.ID}}"]).splitlines():
+        ref, _, rest = l.partition("\t")
+        size, _, short_id = rest.partition("\t")
         if ref and "<none>" not in ref and not ref.startswith("-"):   # a reference starting with a dash would reach docker as an option
             local.add(ref)
+            ids_now[ref] = short_id.strip()
             sizes[ref] = parse_size_mb(size)
             size_mb += sizes[ref]
             if mode != "running":
@@ -878,11 +930,6 @@ def image_details(running: list[str]) -> dict[str, dict]:
     sweep_containers(stale_only=False)
     IMAGE_SCAN.update({"opened": len(out), "skipped": len(skipped), "seconds": int(time.time() - t_start)})
     progress(f"[host] images: {len(out)} opened, {len(todo) - len(out)} not opened, {fmt_secs(time.time() - t_start)} in all")
-    if deep and not skipped and out:
-        try:
-            write_private(OUT / DEEP_STAMP, json.dumps({"on": TODAY, "images": len(out), "seconds": IMAGE_SCAN["seconds"]}))
-        except OSError:
-            pass
     if skipped:
         progress(f"[host] {len(skipped)} image(s) not opened, the time limit of {env('DEEP_SECONDS', '1800')} s (LATTICE_SCAN_DEEP_SECONDS) was reached: " + ", ".join(sorted(skipped)[:5]))
     others = {}  # images that were not opened still show their layers, which is all lineage needs and costs one inspect
@@ -893,6 +940,10 @@ def image_details(running: list[str]) -> dict[str, dict]:
             except (ValueError, IndexError, TypeError):
                 pass
     lineage(out, others)
+    if deep and not skipped and out:
+        save_deep(out, ids_now, int(IMAGE_SCAN.get("seconds", 0)))
+    elif not deep:
+        reuse_deep(out, ids_now, {r for r, on in refs.items() if on})
     if len(refs) > IMAGE_LIMIT:
         progress(f"[host] {len(refs) - IMAGE_LIMIT} more images not opened (limit {IMAGE_LIMIT}); set LATTICE_SCAN_IMAGES=running to open only running ones")
     return out
@@ -2566,6 +2617,8 @@ def main() -> int:
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # a stopped run still cleans up (atexit); only SIGKILL cannot, and the next run sweeps what it left
     if getattr(a, "deep", False):
         os.environ["LATTICE_SCAN_LEVEL"] = "deep"
+    if getattr(a, "refresh", False):
+        os.environ["LATTICE_SCAN_DEEP_CACHE"] = "off"   # --refresh opens every image again, as it says
     global DEBUG, PROGRESS, KEEP
     DEBUG = a.debug or env("DEBUG") == "1"
     KEEP = a.keep or env("KEEP") == "1"
