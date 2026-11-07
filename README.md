@@ -204,6 +204,9 @@ After a quick scan the tool prints one line on stderr saying how many local imag
 | `LATTICE_SCAN_DEEP_SECONDS` | no further image is started after this many seconds (default 1800) |
 | `LATTICE_SCAN_DEEP_CACHE` | `on` (default) or `off`: a quick run uses the last complete deep scan for each image whose id is unchanged; `--refresh` opens them again |
 | `LATTICE_SCAN_DEEP_CACHE_DAYS` | how old a kept deep scan may be (default 30) |
+| `LATTICE_SCAN_READ_CACHE` | `on` (default) or `off`: an answer Lattice gave about one CVE id is kept in your cache folder and reused for a few hours, so a repeat run asks it nothing; `--again` and `--refresh` ask again |
+| `LATTICE_SCAN_READ_CACHE_HOURS` | how old a kept answer may be (default 6) |
+| `LATTICE_SCAN_READ_CACHE_FILE` | where the read cache is kept (default: your cache folder) |
 | `LATTICE_SCAN_STALE_MINUTES` | age after which a leftover container of a killed run is removed (default 15) |
 
 **The inventory file.** `inventory.json` (and the file named by `LATTICE_SCAN_INVENTORY`, which replaces the collection for tests and other tools) is a JSON object with `kernel`, `os`, `node`, `restartRequired`, `packages` (name to version), `snaps` (name to version) and `images` (running image names). The new, optional keys are `host` (the hardware: `manufacturer`, `model`, `version`, `board`, `biosVersion`, ...), `imageDetails` (image reference to `{os, osVersion, osName, packageManager, packages, versions, languages, builtOn, running, ...}`) and `imageScan` (`level`, `local`, `opened`, `skipped`, `deepSeconds`). An inventory without them still works.

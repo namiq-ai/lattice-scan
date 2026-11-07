@@ -120,7 +120,8 @@ class LatticeError(Exception):
 
 
 RATE_RETRIES, MAX_RATE_WAIT = 2, 70.0   # a 429 that says 'retry after N seconds' is waited out (at most twice, and only if N is a minute or so)
-PACE_CALLS, PACE_WINDOW = 5, 60.5         # keyless: 5 calls a minute, counted across runs; half a second of margin
+PACE_CALLS, PACE_WINDOW = 5, 60.5         # keyless: calls a minute until the server says otherwise, counted across runs; half a second of margin
+READ_CACHE_MAX = 400                      # entries kept in the read cache
 RETRY_DELAYS = (2.0, 6.0)   # seconds before the 2nd and 3rd try of a request that failed on the network or with 502/503/504
 MAX_REPLY = 8 * 1024 * 1024  # a reply bigger than this is not a Lattice answer
 
@@ -203,6 +204,7 @@ def retry_after(header: str | None, body: str) -> float | None:
 
 
 PACE_FILE: Path | None = None   # tests point this at a temp file
+CACHE_FILE: Path | None = None  # tests point this at a temp file
 
 
 def pace_path() -> Path:
@@ -212,6 +214,123 @@ def pace_path() -> Path:
     if env("PACE_FILE"):
         return Path(env("PACE_FILE"))
     return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "lattice-scan" / "pace.json"
+
+
+def cache_dir() -> Path:
+    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "lattice-scan"
+
+
+def limits_path() -> Path:
+    if PACE_FILE or env("PACE_FILE"):   # a test or an operator that moved the pace file moves everything that belongs beside it
+        p = pace_path()
+        return p.with_name(p.name + ".limits.json")
+    return cache_dir() / "server-limits.json"
+
+
+def write_cache_file(f: Path, text: str) -> None:
+    """Write a file in the user's cache folder, readable by the user only (the folder is already 0700). Atomic; raises OSError, which callers ignore:
+    a cache that cannot be written (read-only home, a sandbox) just means nothing is remembered."""
+    f.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = f.with_name(f"{f.name}.{os.getpid()}")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(text)
+    os.replace(tmp, f)
+
+
+def pace_calls() -> int:
+    """Calls a minute the server last said keyless access allows (its `access.limits.calls_per_minute`), else the built-in 5. Remembered across runs
+    for a week, so a limit the operator raises is followed without a new release."""
+    try:
+        d = json.loads(limits_path().read_text())
+        n = int(d["calls_per_minute"])
+        if 1 <= n <= 600 and time.time() - float(d["seen"]) < 7 * 86400 and d.get("url") == URL:   # a limit seen on another server is not this server's
+            return n
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return PACE_CALLS
+
+
+def pace_learn(access: object) -> None:
+    """Remember the per-minute limit a keyless answer reports. Best effort; nothing but one number and a time is stored."""
+    try:
+        n = int((access or {}).get("limits", {}).get("calls_per_minute"))   # type: ignore[union-attr]
+    except (TypeError, ValueError, AttributeError):
+        return
+    if not 1 <= n <= 600 or n == pace_calls():
+        return
+    try:
+        write_cache_file(limits_path(), json.dumps({"calls_per_minute": n, "seen": time.time(), "url": URL}))
+    except OSError:
+        pass
+
+
+def read_cache_path() -> Path:
+    if CACHE_FILE:
+        return CACHE_FILE
+    if env("READ_CACHE_FILE"):
+        return Path(env("READ_CACHE_FILE"))
+    if PACE_FILE or env("PACE_FILE"):
+        p = pace_path()
+        return p.with_name(p.name + ".read-cache.json")
+    return cache_dir() / "read-cache.json"
+
+
+def read_cache_hours() -> float:
+    """How long a lookup or node read is reused. LATTICE_SCAN_READ_CACHE=off (and --refresh) turns it off; LATTICE_SCAN_READ_CACHE_HOURS sets the age."""
+    if env("READ_CACHE", "on").lower() == "off":
+        return 0.0
+    try:
+        return max(0.0, float(env("READ_CACHE_HOURS", "6")))
+    except ValueError:
+        return 6.0
+
+
+def _cache_key(tool: str, args: dict) -> str | None:
+    if tool == "graph_lookup" and args.get("id"):
+        return f"lookup:{str(args['id']).upper()}"
+    if tool == "graph_node" and args.get("uid"):
+        return f"node:{args['uid']}"
+    return None
+
+
+def read_cache_load() -> dict:
+    try:
+        d = json.loads(read_cache_path().read_text())
+        return d if isinstance(d, dict) and isinstance(d.get("entries"), dict) else {"entries": {}}
+    except (OSError, ValueError):
+        return {"entries": {}}
+
+
+def read_cache_get(tool: str, args: dict) -> dict | None:
+    """A recent answer to the same lookup or node read, so a repeat run (or a second look at the same id) asks Lattice nothing. The cache holds graph
+    data about public CVEs only, never anything about this host."""
+    hours, key = read_cache_hours(), _cache_key(tool, args)
+    if not hours or not key:
+        return None
+    e = read_cache_load()["entries"].get(key)
+    try:
+        if e and time.time() - float(e["at"]) < hours * 3600 and isinstance(e["data"], dict):
+            return e["data"]
+    except (KeyError, TypeError, ValueError):
+        pass
+    return None
+
+
+def read_cache_put(tool: str, args: dict, data: dict) -> None:
+    key = _cache_key(tool, args)
+    if not read_cache_hours() or not key or data.get("error"):
+        return
+    d = read_cache_load()
+    ents = d["entries"]
+    ents[key] = {"at": time.time(), "data": data}
+    if len(ents) > READ_CACHE_MAX:
+        for k in sorted(ents, key=lambda x: float(ents[x].get("at", 0)))[: len(ents) - READ_CACHE_MAX]:
+            del ents[k]
+    try:
+        write_cache_file(read_cache_path(), json.dumps({"v": 1, "entries": ents}))
+    except OSError:
+        pass
 
 
 def pace_times() -> list[float]:
@@ -224,14 +343,15 @@ def pace_times() -> list[float]:
 def pace_wait(now: float | None = None) -> float:
     """Seconds to wait before the next keyless call so that no more than PACE_CALLS fall in a minute, counting calls made by other runs a moment ago."""
     now = time.time() if now is None else now
+    n = pace_calls()
     recent = sorted(t for t in pace_times() if now - t < PACE_WINDOW)
-    return recent[-PACE_CALLS] + PACE_WINDOW - now if len(recent) >= PACE_CALLS else 0.0
+    return recent[-n] + PACE_WINDOW - now if len(recent) >= n else 0.0
 
 
 def pace_note() -> None:
     """Remember this call's time (a few numbers, no names), so the next run, even a separate one, can space itself. Best effort: a read-only home just means no memory."""
     now = time.time()
-    keep = [t for t in pace_times() if now - t < PACE_WINDOW][-(PACE_CALLS - 1):] + [now]
+    keep = [t for t in pace_times() if now - t < PACE_WINDOW][-(pace_calls() - 1):] + [now]
     f = pace_path()
     try:
         f.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -250,6 +370,7 @@ class Lattice:
         self.n = 0
         self.last_gap = 0.0
         self.last_unlisted: dict | None = None   # the NVD node of the last lookup that had no CISA entry, for a named id
+        self.cached = 0                          # answers served from the read cache in this run
 
     @staticmethod
     def _wait_to_retry(attempt: int, why: str) -> None:
@@ -284,7 +405,7 @@ class Lattice:
                     wait = retry_after(e.headers.get("Retry-After"), detail)
                     if wait is not None and wait <= MAX_RATE_WAIT:
                         rate_tries += 1
-                        progress(f"Lattice's keyless limit (5 calls a minute) was reached; waiting {wait:g}s as it asked, then trying again ({rate_tries} of {RATE_RETRIES})")
+                        progress(f"Lattice's keyless limit ({pace_calls()} calls a minute) was reached; waiting {wait:g}s as it asked, then trying again ({rate_tries} of {RATE_RETRIES})")
                         time.sleep(wait + 1)
                         continue
                 if e.code in (502, 503, 504) and attempt < len(RETRY_DELAYS):
@@ -317,12 +438,17 @@ class Lattice:
             pass  # a stateless server may refuse the notification; calls work without it
 
     def call(self, tool: str, **args) -> dict:
-        # Keyless access allows 5 calls a minute, counted across every run on this machine: space them out instead of burning the day's units on 429s.
+        hit = read_cache_get(tool, args)
+        if hit is not None:   # asked before, recently: no call, no waiting, nothing used
+            self.cached += 1
+            dbg(f"cache: {tool} {args} answered from the read cache")
+            return json.loads(json.dumps(hit))
+        # Keyless access allows a few calls a minute (the server says how many), counted across every run on this machine: space them out instead of burning the day's units on 429s.
         if not KEY:
             wait = pace_wait()
             if wait > 1:   # a sub-second shortfall is not worth a message; the 429 handler covers the rare edge
-                dbg(f"keyless pacing: sleeping {wait:.1f}s (5 calls/minute limit)")
-                progress(f"keyless limit: 5 calls a minute, so waiting {wait:.0f}s before the next lookup")
+                dbg(f"keyless pacing: sleeping {wait:.1f}s ({pace_calls()} calls/minute limit)")
+                progress(f"keyless limit: {pace_calls()} calls a minute, so waiting {wait:.0f}s before the next lookup")
                 time.sleep(wait)
             pace_note()
         self.n += 1
@@ -348,6 +474,10 @@ class Lattice:
         if isinstance(data, dict) and data.get("error"):
             msg = data.get("message", data["error"])
             raise LatticeError(clean(f"{tool}: {data['error']}: {msg}"))
+        if isinstance(data, dict):
+            if not KEY:
+                pace_learn(data.get("access"))
+            read_cache_put(tool, args, data)
         return data
 
 
@@ -1650,7 +1780,7 @@ def cmd_run(a) -> int:
             ids += discover(lat, floor)
             progress(f"[host] discovery found {len(set(ids))} id(s) to read")
             dbg(f"discover: {len(set(ids))} exploited ids to read")
-        order_ids = sorted(set(ids))
+        order_ids = list(dict.fromkeys(ids)) if getattr(a, "keep_order", False) else sorted(set(ids))   # recent passes its ids most urgent first
         for n_cve, cve in enumerate(order_ids, 1):
             tag = f"[{n_cve}/{len(order_ids)}] {cve}"
             if cve in seen and cve not in named and not (a.again or a.refresh):
@@ -2286,6 +2416,31 @@ def feed_detail(r: dict, kind: str, inv: dict, reason: str = "") -> str:
     return "\n".join(out)
 
 
+def read_order(r: dict) -> tuple:
+    """Most urgent first, so a run that is stopped (a limit, a closed laptop) has read the ids that matter most: ransomware use recorded by CISA,
+    then a patch date already passed, then the feed's own priority, then the larger EPSS."""
+    known = str(r.get("ransomware", "")).lower() == "known"
+    prio = {"today": 0, "week": 1, "cycle": 2}.get(str(r.get("priority", "")), 3)
+    try:
+        epss = -float(r.get("epss") or 0)
+    except (TypeError, ValueError):
+        epss = 0.0
+    return (not known, not r.get("overdue"), prio, epss)
+
+
+def estimate_line(tag: str, ids: list[str]) -> str:
+    """What reading these ids will take, said before the first call: how many calls (a lookup and one detail read each, at most), how many are already
+    cached, and how long keyless pacing makes it. A person can stop before it starts."""
+    cached = sum(1 for i in ids if read_cache_get("graph_lookup", {"id": i}) is not None)
+    new = len(ids) - cached
+    calls = new * 2
+    when = ""
+    if calls and not KEY:
+        when = f"; at {pace_calls()} calls a minute that is about {max(1, round(calls / pace_calls()))} minute(s)"
+    return (f"{tag} {len(ids)} id(s) to read from Lattice: {cached} already cached, so up to {calls} call(s) (a lookup, then one detail read for each match){when}. "
+            f"The most urgent are read first; the server's own limit is reported in each answer.")
+
+
 def cmd_recent(a) -> int:
     """Start here when you have no CVE id: read namiq.io's recent exploited and critical ids, rule out locally what this host cannot have, and read only
     the rest from Lattice by exact id. The host's inventory never leaves the machine; the feed request carries no id and no host data."""
@@ -2301,6 +2456,7 @@ def cmd_recent(a) -> int:
         refresh_inventory(inv, full=getattr(a, "list", False))
     rows: list[list[str]] = []
     look: list[str] = []
+    by_id: dict[str, dict] = {}
     details: list[str] = []
     for r in feed["exploited"][: a.max_read]:
         entry = {"cve": r["id"], "vendor": r.get("vendor", ""), "product": r.get("product", "")}
@@ -2308,6 +2464,7 @@ def cmd_recent(a) -> int:
         progress(f"[recent] {r['id']}  {entry['vendor']} {entry['product']}: " + ("something installed may match, will read it from Lattice" if m else "nothing installed matches, not sent to Lattice"))
         if m:
             look.append(r["id"])
+            by_id[r["id"]] = r
         else:
             rows.append([r["id"], *feed_cells(r), "unmatch", "no package, snap, image or kernel matches (not sent to Lattice)"])
             details.append(feed_detail(r, "exploited", inv))
@@ -2323,6 +2480,9 @@ def cmd_recent(a) -> int:
     progress(f"[recent] {'whole' if a.period == 'all' else a.period} list {feed['from'] or '?'} to {feed['to'] or '?'}: {len(feed['exploited'])} exploited and {len(feed['critical'])} critical ids (CISA catalogue as of {feed['asOf'] or '?'}); "
              f"{len(look)} exploited may match this host, {watch} critical may match")
     a.inv, a.extra_rows, a.extra_detail = inv, rows, details
+    look.sort(key=lambda i: read_order(by_id[i]))
+    if look:
+        progress(estimate_line("[recent]", look))
     considered = min(len(feed["exploited"]), a.max_read)
     crit = 0 if a.no_critical else len(feed["critical"])
     head = (f"recent {TODAY} ({a.period}, {feed['from'] or '?'} to {feed['to'] or '?'}): {len(feed['exploited'])} exploited and {len(feed['critical'])} critical CVEs read from namiq.io "
@@ -2333,6 +2493,7 @@ def cmd_recent(a) -> int:
     if look:
         print(head)
         a.cve, a.cve_file, a.discover, a.refresh, a.again = look, None, False, False, False
+        a.keep_order = True
         return cmd_run(a)
     print(head + " None of the exploited ones match this host's installed software, so nothing was sent to Lattice.")
     withdrawn = recheck_open(inv)
@@ -2411,7 +2572,7 @@ def cmd_enrich(a) -> int:
     print(f"enrich {TODAY}: {len(ids)} CVE ids found, {len(done)} read, {n_exp} exploited (CISA), {sum(1 for _, e in done if e and ransom(e.get('ransomware', '')) == 'known')} with known ransomware use")
     print_table(rows)
     if unread:
-        print(f"{len(unread)} id(s) not read: " + (f"keyless access allows about 20 reads an hour and 60 a day. For more, ask the person for a key: lattice-scan get-key --help" if not KEY else "run again later"))
+        print(f"{len(unread)} id(s) not read: " + (f"keyless access has a small allowance (the server states it in each answer). Run it again later (answers already read are kept for a few hours and cost nothing), or ask the person for a key: lattice-scan get-key --help" if not KEY else "run again later"))
     if a.fail_on == "exploited" and n_exp:
         return 1
     return 3 if unread else 0
@@ -2726,6 +2887,9 @@ def main() -> int:
         os.environ["LATTICE_SCAN_LEVEL"] = "deep"
     if getattr(a, "refresh", False):
         os.environ["LATTICE_SCAN_DEEP_CACHE"] = "off"   # --refresh opens every image again, as it says
+        os.environ["LATTICE_SCAN_READ_CACHE"] = "off"   # ... and asks Lattice again
+    if getattr(a, "again", False):
+        os.environ["LATTICE_SCAN_READ_CACHE"] = "off"   # --again reads the id again, from Lattice
     global DEBUG, PROGRESS, KEEP
     DEBUG = a.debug or env("DEBUG") == "1"
     KEEP = a.keep or env("KEEP") == "1"
