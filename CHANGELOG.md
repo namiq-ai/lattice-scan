@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.5 — 2026-11-06
 
 - Open findings are re-checked on every run, and the report separates today from the past. After a matcher fix, findings made by the old matcher stayed `OPEN` for ever (seven false ones on one host: BeyondTrust, Siemens, ONLYOFFICE and four Plex CVEs, each matched on an ordinary word like `support` or `media`). Now a finding the current matching no longer produces is withdrawn with the reason recorded (`WITHDRAWN` block; `lattice-scan list` still shows it; it no longer counts as open or as touching the host). New findings store the vendor and product they matched on and are matched again as they are; older ones stored only a title and a reason, so only the one rule that changed (an ordinary-word product needs its vendor installed) is applied to them.
 - A second table, `STILL OPEN FROM EARLIER RUNS`, lists the findings recorded before today, apart from the table of what this run read, so "0 may match" is no longer followed by eleven `OPEN` rows without a heading.
