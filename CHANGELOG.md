@@ -6,6 +6,7 @@
 - Keyless pacing follows the server. The per-minute limit Lattice reports in each answer (`access.limits.calls_per_minute`) is remembered for a week, so a limit the operator raises shortens your scans without a new release. Until told otherwise it stays 5 a minute.
 - `recent` reads the most urgent ids first (ransomware use recorded, patch date passed, then CISA priority and EPSS), and says before the first call how many calls that will be, how many are already cached and how long pacing makes it. A run that is stopped has read what mattered most.
 - The "20 reads an hour and 60 a day" wording is gone from the tool, the manual and the skill: the server states the allowance in every answer.
+- One call per match, and ids looked up ten at a time. A Lattice server that carries the urgency fields in its lookup answer (EPSS, CISA's SSVC, weakness, description, references, record status) no longer needs a second `graph_node` read per match, and once it has shown that, the tool fetches up to 10 ids in one request. A 12-id scan on such a server is 3 lookups instead of 12 lookups plus 12 detail reads. Against an older server nothing changes: it is never sent a batch, and `graph_node` still supplies the detail. A batch that fails turns batching off for that run and the ids are looked up one by one.
 
 ## 0.4.6 — 2026-11-06
 
