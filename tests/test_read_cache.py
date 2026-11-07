@@ -128,6 +128,23 @@ class ServerPacing(Base):
         with mock.patch.object(cli, "pace_times", lambda: times):
             self.assertGreater(cli.pace_wait(now), 0.0)                 # ... an eleventh waits
 
+    def test_a_limit_seen_on_another_server_is_not_used(self):
+        cli.limits_path().write_text(json.dumps({"calls_per_minute": 10, "seen": time.time(), "url": "http://test.invalid/mcp"}))
+        self.assertEqual(cli.pace_calls(), 5)
+        cli.limits_path().write_text(json.dumps({"calls_per_minute": 10, "seen": time.time(), "url": cli.URL}))
+        self.assertEqual(cli.pace_calls(), 10)
+
+    def test_the_cache_files_are_private_and_an_unwritable_folder_is_harmless(self):
+        import os, stat
+        cli.read_cache_put("graph_lookup", {"id": "CVE-2099-0001"}, ANSWER)
+        cli.pace_learn({"limits": {"calls_per_minute": 8}})
+        for f in (cli.read_cache_path(), cli.limits_path()):
+            self.assertEqual(stat.S_IMODE(f.stat().st_mode), 0o600, f)
+        blocker = Path(self.tmp.name) / "afile"; blocker.write_text("x")
+        with mock.patch.object(cli, "CACHE_FILE", blocker / "sub" / "read-cache.json"):   # a path that can never be a folder
+            cli.read_cache_put("graph_lookup", {"id": "CVE-2099-0002"}, ANSWER)          # must not raise
+            self.assertIsNone(cli.read_cache_get("graph_lookup", {"id": "CVE-2099-0002"}))
+
     def test_nonsense_or_a_stale_limit_is_ignored(self):
         for bad in (0, -3, 100000, "many", None, True):
             cli.pace_learn({"limits": {"calls_per_minute": bad}})

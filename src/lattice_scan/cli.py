@@ -227,13 +227,24 @@ def limits_path() -> Path:
     return cache_dir() / "server-limits.json"
 
 
+def write_cache_file(f: Path, text: str) -> None:
+    """Write a file in the user's cache folder, readable by the user only (the folder is already 0700). Atomic; raises OSError, which callers ignore:
+    a cache that cannot be written (read-only home, a sandbox) just means nothing is remembered."""
+    f.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = f.with_name(f"{f.name}.{os.getpid()}")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(text)
+    os.replace(tmp, f)
+
+
 def pace_calls() -> int:
     """Calls a minute the server last said keyless access allows (its `access.limits.calls_per_minute`), else the built-in 5. Remembered across runs
     for a week, so a limit the operator raises is followed without a new release."""
     try:
         d = json.loads(limits_path().read_text())
         n = int(d["calls_per_minute"])
-        if 1 <= n <= 600 and time.time() - float(d["seen"]) < 7 * 86400:
+        if 1 <= n <= 600 and time.time() - float(d["seen"]) < 7 * 86400 and d.get("url") == URL:   # a limit seen on another server is not this server's
             return n
     except (OSError, ValueError, KeyError, TypeError):
         pass
@@ -248,12 +259,8 @@ def pace_learn(access: object) -> None:
         return
     if not 1 <= n <= 600 or n == pace_calls():
         return
-    f = limits_path()
     try:
-        f.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        tmp = f.with_name(f"{f.name}.{os.getpid()}")
-        tmp.write_text(json.dumps({"calls_per_minute": n, "seen": time.time()}))
-        os.replace(tmp, f)
+        write_cache_file(limits_path(), json.dumps({"calls_per_minute": n, "seen": time.time(), "url": URL}))
     except OSError:
         pass
 
@@ -320,12 +327,8 @@ def read_cache_put(tool: str, args: dict, data: dict) -> None:
     if len(ents) > READ_CACHE_MAX:
         for k in sorted(ents, key=lambda x: float(ents[x].get("at", 0)))[: len(ents) - READ_CACHE_MAX]:
             del ents[k]
-    f = read_cache_path()
     try:
-        f.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        tmp = f.with_name(f"{f.name}.{os.getpid()}")
-        tmp.write_text(json.dumps({"v": 1, "entries": ents}))
-        os.replace(tmp, f)
+        write_cache_file(read_cache_path(), json.dumps({"v": 1, "entries": ents}))
     except OSError:
         pass
 
