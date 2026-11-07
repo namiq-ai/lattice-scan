@@ -1510,13 +1510,13 @@ def state() -> dict[str, dict]:
     for e in events():
         f = s.setdefault(e["ref"], {"ref": e["ref"], "status": "open"})
         if e["event"] == "found":
-            f.update(listed=e.get("listed", ""), found=e["on"], why=e.get("why", ""), title=e.get("title", ""), due=e.get("due", ""), kind=e.get("kind", "kev"), ransomware=e.get("ransomware", ""), cvss=e.get("cvss"), impact=e.get("impact"))
+            f.update(listed=e.get("listed", ""), found=e["on"], why=e.get("why", ""), title=e.get("title", ""), due=e.get("due", ""), kind=e.get("kind", "kev"), vendor=e.get("vendor", ""), product=e.get("product", ""), ransomware=e.get("ransomware", ""), cvss=e.get("cvss"), impact=e.get("impact"))
         elif e["event"] == "impact":
             f["impact"] = e["impact"]
-        elif e["event"] in ("verified", "fixed", "not-applicable"):
+        elif e["event"] in ("verified", "fixed", "not-applicable", "withdrawn"):
             f["status"] = e["event"]
             f["proof"] = e.get("proof", "")
-            if e["event"] in ("fixed", "not-applicable"):
+            if e["event"] in ("fixed", "not-applicable", "withdrawn"):
                 f["closed"] = e["on"]
     return s
 
@@ -1582,11 +1582,11 @@ def detail_files(inv: dict) -> None:
           "  lattice-scan resolve CVE-... --status fixed --proof \"...\"   record the outcome")
 
 
-def print_table(rows: list[list[str]]) -> None:
+def print_table(rows: list[list[str]], title: str = "RESULT BY CVE") -> None:
     """The RESULT BY CVE table of the host check, `recent` and `enrich` (nine columns, see cells())."""
     if not rows:
         return
-    print("\nRESULT BY CVE")
+    print("\n" + title)
     lines, hidden = report.table(["CVE", "Exploit", "CVSS", "Listed", "Patch due", "Ransom", "Product", "Result", "Matched / compared"], rows,
                                  report.width_for(None), fit=sys.stdout.isatty(), drop=("Listed", "Product", "CVSS"), min_last=45)
     print("\n".join(lines))
@@ -1697,7 +1697,7 @@ def cmd_run(a) -> int:
                 imp = impact(e, inv, installed, vers)
                 add_context(lat, e, imp)
                 dbg(f"{cve}: IMPACT {json.dumps(imp)}")
-                if append_found_once({"event": "found", "ref": cve, "on": TODAY, "listed": e["added"], "due": e["due"], "title": e["title"], "why": why, "kind": "kev", "ransomware": e["ransomware"], "cvss": e["cvss"], "impact": imp}):
+                if append_found_once({"event": "found", "ref": cve, "on": TODAY, "listed": e["added"], "due": e["due"], "title": e["title"], "why": why, "kind": "kev", "vendor": e["vendor"], "product": e["product"], "ransomware": e["ransomware"], "cvss": e["cvss"], "impact": imp}):
                     hits.append((e, why, imp))
                 else:   # another run recorded it a moment ago
                     again_hits.append((e, why, imp))
@@ -1713,9 +1713,12 @@ def cmd_run(a) -> int:
             + "".join(f" [{e['cve']}: {why}]" for e, why, imp in hits) + (f" not-listed={','.join(not_listed)}" if not_listed else "")
             + (" restart-required" if inv["restartRequired"] else ""))
     print(f"host scan {TODAY}: {read} exploited entries read, {len(hits)} candidates (a person must read each against the installed version)")
-    earlier = earlier_findings(rows)   # open findings not read in this run: their saved detail is printed below the table, from the file, with no call
+    withdrawn = recheck_open(inv)   # an open finding from an older, looser matcher is withdrawn, not kept open for ever
     rows += getattr(a, "extra_rows", [])   # `recent`: the feed's ids that were ruled out on this host and never sent to Lattice
+    earlier, earlier_rows = earlier_findings({r[0] for r in rows})   # open findings not read in this run: their saved detail is printed below, from the file, with no call
     print_table(rows)
+    print_table(earlier_rows, EARLIER_TITLE)
+    print_withdrawn(withdrawn)
     hits.sort(key=lambda h: PRIORITY_RANK.get((h[2].get("priority") or {}).get("level", "read"), 2))   # fix first, then fix soon, then read; ties keep the id order
     for e, why, imp in hits:
         print(f"  {e['cve']}  {e['title'][:70]}\n      because: {why}")
@@ -2113,20 +2116,88 @@ def refresh_inventory(inv: dict, full: bool = False) -> None:
     show_inventory(inv, full=full)
 
 
-def earlier_findings(rows: list[list[str]]) -> list[dict]:
-    """Findings still open from earlier runs that this run did not read. Each gets a row in `rows` (an open finding stays in the table, so it is listed once, there)."""
-    listed_now = {r[0] for r in rows}
+DISTRO_REV = re.compile(r"(ubuntu|deb\d|build\d|\.el\d|\.fc\d|\+dfsg|~)")
+
+
+def refine(imp: dict | None) -> tuple[str, str] | None:
+    """A finer reading of a name match, from what the finding saved: (label, note), or None to keep the plain status. Never closes anything.
+
+    OUTSIDE RANGE  every usable NVD range for the product excludes the installed version
+    LIKELY FIXED   the version is inside the upstream range, but it carries a distro revision and its own changelog names the CVE
+    VERIFY         the kernel's upstream number is inside the range, but it is a distro or vendor build that may carry the fix under the same number
+    """
+    if not imp:
+        return None
+    vc = imp.get("versionCheck") or {}
+    inst = " ".join(imp.get("installed") or [])
+    if vc.get("verdict") == "outside-range":
+        return "OUTSIDE RANGE", "the installed version is outside every NVD range for this product"
+    if vc.get("verdict") == "in-range":
+        if inst.startswith("kernel "):
+            return "VERIFY", "upstream number only: this kernel is a distro or vendor build, check its changelog or the vendor's advisory before treating it as exposed"
+        if imp.get("changelogNamesCve") and DISTRO_REV.search(inst):
+            return "LIKELY FIXED", "the version is inside the upstream range, but it has a distro revision and the package's own changelog names this CVE; read that line, then record it with: lattice-scan resolve CVE --status fixed --proof \"...\""
+    return None
+
+
+def recheck_open(inv: dict) -> list[dict]:
+    """Open findings that the CURRENT matching no longer produces: withdrawn, with the reason recorded. A finding made by an older, looser matcher would otherwise stay open for ever.
+    A finding that stored its vendor and product is matched again as it is. An older one stored only its title and reason, so only the one rule that changed is applied to it:
+    a product of ordinary words (WEAK) needs its vendor installed, and the vendor is taken as the first word of the title."""
+    out = []
+    for f in list(state().values()):
+        why = f.get("why", "")
+        if f["status"] != "open" or f.get("kind", "kev") != "kev" or not why.startswith("product "):
+            continue
+        reason = ""
+        if f.get("product"):
+            if not candidate({"cve": f["ref"], "vendor": f.get("vendor", ""), "product": f["product"], "title": f.get("title", "")}, inv):
+                reason = f"CISA's {f.get('vendor', '')} {f['product']}".strip() + " no longer matches anything installed under the current matching"
+        else:
+            m = re.match(r"product (.+?) matches ", why)
+            want = set(m.group(1).split()) if m else set()
+            first = (re.findall(r"[a-z][a-z0-9]+", f.get("title", "").lower()) or [""])[0]
+            seen = set()
+            for n in list(inv["packages"]) + list(inv["snaps"]) + list(inv["images"]):
+                seen |= stems(n)
+            for ref, d in (inv.get("imageDetails") or {}).items():
+                seen |= set(image_words(ref, d))
+            if want and want <= WEAK and first and first not in seen:
+                reason = f"its product is only ordinary words ({' '.join(sorted(want))}) and the vendor ({first}) is not installed: that is no longer a match"
+        if reason:
+            append("findings.jsonl", {"event": "withdrawn", "ref": f["ref"], "on": TODAY, "proof": reason + " (recorded " + f.get("found", "?") + " as: " + why + ")"})
+            out.append({"ref": f["ref"], "title": f.get("title", ""), "found": f.get("found", "?"), "why": why, "reason": reason})
+    return out
+
+
+def print_withdrawn(w: list[dict]) -> None:
+    if not w:
+        return
+    print(f"\nWITHDRAWN: {len(w)} earlier finding(s) the current matching no longer produces (recorded by an older version; not counted as open, `lattice-scan list` still shows them)")
+    for f in w:
+        print(f"  {f['ref']}  {str(f['title'])[:70]}  [recorded {f['found']}: {f['why']}]\n      why withdrawn: {f['reason']}")
+
+
+def earlier_findings(listed_now: set[str]) -> tuple[list[dict], list[list[str]]]:
+    """Findings still open from earlier runs that this run did not read, and a table row for each (so each is listed once, in its own table)."""
     earlier: list[dict] = []
+    rows: list[list[str]] = []
     for f in (f for f in state().values() if f["status"] in ("open", "verified")):
         if f["ref"] not in listed_now:
             earlier.append(f)
+            r = refine(f.get("impact")) if f["status"] == "open" else None
             rows.append([f["ref"], "yes" if f.get("kind", "kev") == "kev" else "-", cvss_cell(f.get("cvss")), f.get("listed") or "-", due_cell(f.get("due", "")),
-                         ransom(f.get("ransomware", "")), "-", f["status"].upper(),
+                         ransom(f.get("ransomware", "")), "-", r[0] if r else f["status"].upper(),
                          f"{f.get('why', '')} (recorded {f.get('found', '?')}, not read in this run)"[:240]])
-    return earlier
+    return earlier, rows
+
+
+EARLIER_TITLE = "STILL OPEN FROM EARLIER RUNS (recorded before today; not part of today's list and not read in this run)"
 
 
 def print_earlier(earlier: list[dict]) -> None:
+    if earlier:
+        print(f"\n{EARLIER_TITLE}\n  {len(earlier)} finding(s); the detail is what was saved when each was recorded, with its ages counted from today")
     for f in earlier:
         print(f"  {f['ref']}  {str(f.get('title', ''))[:70]}  [{f['status']}, recorded {f.get('found', '?')}; not read in this run, so this is the detail saved then]\n      because: {f.get('why', '')}")
         if f.get("impact"):
@@ -2251,8 +2322,11 @@ def cmd_recent(a) -> int:
         return cmd_run(a)
     print(f"recent {TODAY} ({a.period}, {feed['from'] or '?'} to {feed['to'] or '?'}): {len(feed['exploited'])} exploited and {len(feed['critical'])} critical CVEs read from namiq.io (as of {feed['asOf'] or '?'}); "
           f"none of the exploited ones match this host's installed software, so nothing was sent to Lattice")
-    earlier = earlier_findings(rows)   # the findings still open from earlier runs belong in every scan, whether or not today's list matched anything
+    withdrawn = recheck_open(inv)
+    earlier, earlier_rows = earlier_findings({r[0] for r in rows})   # the findings still open from earlier runs belong in every scan, whether or not today's list matched anything
     print_table(rows)
+    print_table(earlier_rows, EARLIER_TITLE)
+    print_withdrawn(withdrawn)
     for block in details:
         print(block)
     print_earlier(earlier)
@@ -2392,9 +2466,25 @@ def cmd_get_key(a) -> int:
     return 0
 
 
+def age_text(listed: str, due: str) -> str:
+    """' (N days ago), due DATE, overdue by N days', counted from today at the moment of printing: a saved finding must not show the ages of the day it was recorded."""
+    day = dt.date.fromisoformat(TODAY)
+    out = ""
+    try:
+        out += f" ({(day - dt.date.fromisoformat(listed)).days} days ago)"
+    except ValueError:
+        pass
+    try:
+        left = (dt.date.fromisoformat(due) - day).days
+        out += f", due {due}, " + (f"overdue by {-left} days" if left < 0 else f"due in {left} days" if left else "due today")
+    except ValueError:
+        out += f", due {due or '-'}"
+    return out
+
+
 def print_impact(imp: dict) -> None:
     print(f"      installed: {'; '.join(imp['installed'])}")
-    print(f"      listed {imp.get('listed') or '-'}" + (f" ({imp['daysSinceListed']} days ago)" if "daysSinceListed" in imp else "") + f", due {imp.get('due') or '-'}" + (f", {imp['dueStatus']}" if "dueStatus" in imp else ""))
+    print(f"      listed {imp.get('listed') or '-'}" + age_text(imp.get("listed") or "", imp.get("due") or ""))
     if imp.get("nvdAlsoNames"):
         print(f"      NVD also lists names found here: {', '.join(imp['nvdAlsoNames'])}")
     if imp.get("action"):
@@ -2402,6 +2492,9 @@ def print_impact(imp: dict) -> None:
     vc = imp.get("versionCheck")
     if vc:
         print(f"      version check: {vc['verdict']}: {vc['why']}")
+    fine = refine(imp)
+    if fine:
+        print(f"      assessment: {fine[0].lower()}: {fine[1]}")
         if vc["verdict"] == "in-range":
             print("      (upstream numbers only: a distro can fix this under the same number, see the changelog line)")
     cl = imp.get("changelogNamesCve")
@@ -2536,13 +2629,13 @@ def stats() -> dict:
     runs = [json.loads(l) for l in rf.read_text().splitlines()] if rf.exists() else []
     s = list(state().values())
     kev = [f for f in s if f.get("kind") == "kev"]
-    real = [f for f in s if f["status"] != "not-applicable"]
+    real = [f for f in s if f["status"] not in ("not-applicable", "withdrawn")]
     fixed = [f for f in real if f["status"] == "fixed"]
     days = sorted({r["on"] for r in runs})
     gaps = [(dt.date.fromisoformat(f["closed"]) - dt.date.fromisoformat(f["listed"])).days for f in fixed if f.get("listed") and f.get("closed")]
     return {"runs": len(runs), "daysOfRecord": len(days), "firstRun": days[0] if days else None, "lastRun": days[-1] if days else None,
             "newExploitedRead": sum(r["read"] for r in runs), "candidates": len(kev),
-            "touchedHost": len([f for f in kev if f["status"] != "not-applicable"]),
+            "touchedHost": len([f for f in kev if f["status"] not in ("not-applicable", "withdrawn")]),
             "wrongMatches": len([f for f in s if f["status"] == "not-applicable"]),
             "fixed": len(fixed), "open": len([f for f in real if f["status"] in ("open", "verified")]),
             "medianDaysListedToFixed": statistics.median(gaps) if gaps else None}

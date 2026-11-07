@@ -148,7 +148,7 @@ class Progress(unittest.TestCase):
         self.assertIn("known", rows["CVE-2099-0001"]); self.assertRegex(rows["CVE-2099-0001"], r"\bknown\b")
         self.assertNotRegex(rows["CVE-2099-0002"], r"\bknown\b")   # CISA's "Unknown" is a '-', never "no ransomware"
         _, out2, _ = self.run_cli("--cve", "CVE-2099-0003")          # an earlier finding keeps its ransomware cell
-        self.assertRegex(out2, r"CVE-2099-0001\s+yes\s+-\s+2026-10-30\s+2026-11-20\s+known\s+-\s+OPEN")
+        self.assertRegex(out2, r"CVE-2099-0001\s+yes\s+-\s+2026-10-30\s+2026-11-20\s+known\s+-\s+(OPEN|OUTSIDE RANGE)")
 
     def test_table_carries_exploited_cvss_dates_and_patch_due(self):
         Stub.answers["CVE-2099-0001"]["items"][0]["cvss_score"] = 9.8
