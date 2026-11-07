@@ -137,7 +137,8 @@ class AgentEntry(EntryBase):
         self.assertIn("unmatch", row["CVE-2099-0005"]); self.assertIn("not sent to Lattice", row["CVE-2099-0005"])
         self.assertIn("WATCH", row["CVE-2099-0003"]); self.assertIn("not known exploited", row["CVE-2099-0003"])
         self.assertNotIn("CVE-2099-0004", out)                          # a critical id that cannot match this host is not listed
-        self.assertIn("weekly list 2026-10-29 to 2026-11-04: 2 exploited and 2 critical ids", err)
+        self.assertIn("whole list 2026-10-29 to 2026-11-04: 2 exploited and 2 critical ids", err)
+        self.assertIn("exploited 1 ruled out, 1 may match; critical 1 ruled out, 1 may match", out)   # the counts add up: nothing silently left out
 
     def test_recent_with_no_match_sends_nothing_to_lattice_and_says_it_is_not_safe(self):
         Entry.feed = feed([exp("CVE-2099-0005", vendor="Otherco", product="Otherthing")])
@@ -156,7 +157,16 @@ class AgentEntry(EntryBase):
         rc, out, _ = self.run_cli("recent", "--period", "weekly")
         self.assertIn("CANDIDATE", out); self.assertEqual(self.lattice_reads(), 2)   # lookup + one detail read for the candidate
 
-    def test_recent_defaults_to_the_weekly_list(self):
+    def test_recent_defaults_to_the_whole_list_weekly_and_open(self):
+        Entry.feed = feed([exp("CVE-2099-0001")], open_=[exp("CVE-2099-0007", vendor="Otherco", product="Otherthing"), exp("CVE-2099-0001")])   # one id twice
+        rc, out, err = self.run_cli("recent")
+        self.assertEqual(rc, 0, err)
+        self.assertIn("(all, 2026-10-06 to 2026-11-04)", out); self.assertIn("CVE-2099-0007", out)   # the older exploited id is read too
+        self.assertIn("2 exploited and 0 critical CVEs", out)                                        # and counted once
+        rc, out, _ = self.run_cli("recent", "--weekly")
+        self.assertNotIn("CVE-2099-0007", out)                                                       # --weekly narrows it
+
+    def test_recent_default_still_finds_a_weekly_candidate(self):
         Entry.feed = feed([exp("CVE-2099-0001")])
         rc, out, _ = self.run_cli("recent")
         self.assertEqual(rc, 0); self.assertIn("CANDIDATE", out)

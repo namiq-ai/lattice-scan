@@ -2085,17 +2085,23 @@ def read_feed(period: str = "weekly") -> dict:
     m = re.fullmatch(r"lattice-recent/(\d+)", str(d.get("schema")))
     if not m or int(m.group(1)) < 2:
         raise LatticeError(f"the recent-CVE list has schema {clean(str(d.get('schema')))!r}; this lattice-scan reads lattice-recent/2 and later. Upgrade lattice-scan.")
-    p = d.get(period)
-    if not isinstance(p, dict):
+    names = ["weekly", "open"] if period == "all" else [period]   # "all": everything in the list. daily is inside weekly, so it adds nothing
+    parts = [d.get(n) for n in names if isinstance(d.get(n), dict)]
+    if not parts or (period != "all" and len(parts) != 1):
         raise LatticeError(f"the recent-CVE list (schema {clean(str(d.get('schema')))}) has no {period} list: upgrade lattice-scan, or ask for daily or weekly")
+
     def rows(key: str) -> list[dict]:
-        out = []
-        for r in p.get(key) or []:
-            if isinstance(r, dict) and isinstance(r.get("id"), str) and re.fullmatch(r"CVE-\d{4}-\d{4,}", r["id"]):
-                out.append({k: clean(str(v)) if isinstance(v, str) else v for k, v in r.items() if isinstance(v, (str, int, float, bool)) or v is None})
+        out, seen = [], set()
+        for p in parts:
+            for r in p.get(key) or []:
+                if isinstance(r, dict) and isinstance(r.get("id"), str) and re.fullmatch(r"CVE-\d{4}-\d{4,}", r["id"]) and r["id"] not in seen:
+                    seen.add(r["id"])
+                    out.append({k: clean(str(v)) if isinstance(v, str) else v for k, v in r.items() if isinstance(v, (str, int, float, bool)) or v is None})
         return out
+    froms = sorted(str(p.get("from", "")) for p in parts if p.get("from"))
+    tos = sorted(str(p.get("to", "")) for p in parts if p.get("to"))
     return {"asOf": clean(str(d.get("exploitedAsOf", ""))), "builtAt": clean(str(d.get("builtAt", ""))), "period": period,
-            "from": clean(str(p.get("from", ""))), "to": clean(str(p.get("to", ""))), "exploited": rows("exploited"), "critical": rows("critical")}
+            "from": clean(froms[0] if froms else ""), "to": clean(tos[-1] if tos else ""), "exploited": rows("exploited"), "critical": rows("critical")}
 
 
 def feed_cells(r: dict) -> list[str]:
@@ -2285,7 +2291,7 @@ def cmd_recent(a) -> int:
     the rest from Lattice by exact id. The host's inventory never leaves the machine; the feed request carries no id and no host data."""
     private_dir()
     try:
-        progress(f"[recent] reading the {a.period} list of recent exploited and critical CVEs from {FEED_URL} ...")
+        progress(f"[recent] reading the {'whole' if a.period == 'all' else a.period} list of recent exploited and critical CVEs from {FEED_URL} ...")
         feed = read_feed(a.period)
     except LatticeError as err:
         print(f"stopped: {err}", file=sys.stderr)
@@ -2314,14 +2320,21 @@ def cmd_recent(a) -> int:
                 rows.append([r["id"], "no", cvss_cell(r.get("cvss")), "-", "-", "-", f"{r.get('vendor', '')} {r.get('product', '')}".strip() or "-", "WATCH",
                              f"critical, not known exploited: {m[0]}"])
                 details.append(feed_detail(r, "critical", inv, m[0]))
-    progress(f"[recent] {a.period} list {feed['from'] or '?'} to {feed['to'] or '?'}: {len(feed['exploited'])} exploited and {len(feed['critical'])} critical ids (CISA catalogue as of {feed['asOf'] or '?'}); "
+    progress(f"[recent] {'whole' if a.period == 'all' else a.period} list {feed['from'] or '?'} to {feed['to'] or '?'}: {len(feed['exploited'])} exploited and {len(feed['critical'])} critical ids (CISA catalogue as of {feed['asOf'] or '?'}); "
              f"{len(look)} exploited may match this host, {watch} critical may match")
     a.inv, a.extra_rows, a.extra_detail = inv, rows, details
+    considered = min(len(feed["exploited"]), a.max_read)
+    crit = 0 if a.no_critical else len(feed["critical"])
+    head = (f"recent {TODAY} ({a.period}, {feed['from'] or '?'} to {feed['to'] or '?'}): {len(feed['exploited'])} exploited and {len(feed['critical'])} critical CVEs read from namiq.io "
+            f"(as of {feed['asOf'] or '?'}). Checked against this host's software: exploited {considered - len(look)} ruled out, {len(look)} may match; "
+            + (f"critical {crit - watch} ruled out, {watch} may match" if not a.no_critical else "critical not checked (--no-critical)") + ".")
+    if considered < len(feed["exploited"]):
+        head += f" Only the first {considered} of {len(feed['exploited'])} exploited ids were considered (--max-read)."
     if look:
+        print(head)
         a.cve, a.cve_file, a.discover, a.refresh, a.again = look, None, False, False, False
         return cmd_run(a)
-    print(f"recent {TODAY} ({a.period}, {feed['from'] or '?'} to {feed['to'] or '?'}): {len(feed['exploited'])} exploited and {len(feed['critical'])} critical CVEs read from namiq.io (as of {feed['asOf'] or '?'}); "
-          f"none of the exploited ones match this host's installed software, so nothing was sent to Lattice")
+    print(head + " None of the exploited ones match this host's installed software, so nothing was sent to Lattice.")
     withdrawn = recheck_open(inv)
     earlier, earlier_rows = earlier_findings({r[0] for r in rows})   # the findings still open from earlier runs belong in every scan, whether or not today's list matched anything
     print_table(rows)
@@ -2683,11 +2696,12 @@ def main() -> int:
     po.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each step on stderr (the default)")
     po.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
     rc = sub.add_parser("recent", help="start here with no CVE id: read namiq.io's recent exploited and critical CVEs, check what this host could have, read only those from Lattice")
-    rc.add_argument("--period", choices=["daily", "weekly", "open"], default="weekly", help="daily: added or published in the last day or two; weekly: the last seven days, which includes daily (default); open: exploited CVEs added before the weekly window but within 30 days, overdue first (overdue means CISA's due date has passed; it says nothing about any machine)")
+    rc.add_argument("--period", choices=["all", "daily", "weekly", "open"], default="all", help="all: everything in the list, the weekly and the open parts (default); daily: added or published in the last day or two; weekly: the last seven days, which includes daily; open: exploited CVEs added before the weekly window but within 30 days, overdue first (overdue means CISA's due date has passed; it says nothing about any machine)")
     rc.add_argument("--open", dest="period", action="store_const", const="open", help="same as --period open")
     rc.add_argument("--daily", dest="period", action="store_const", const="daily", help="same as --period daily")
     rc.add_argument("--weekly", dest="period", action="store_const", const="weekly", help="same as --period weekly")
-    rc.add_argument("--max-read", type=int, default=40, help="most exploited ids to consider from the list (default 40)")
+    rc.add_argument("--all", dest="period", action="store_const", const="all", help="same as --period all (the default)")
+    rc.add_argument("--max-read", type=int, default=200, help="most exploited ids to consider from the list (default 200: the whole list)")
     rc.add_argument("--no-critical", action="store_true", help="leave out the critical (not known exploited) ids")
     rc.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each step on stderr (the default)")
     rc.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")

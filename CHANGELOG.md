@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `lattice-scan recent` now reads everything in namiq.io's recent list, as the name says. It read only the weekly part (7 days), so the 32 exploited CVEs CISA added earlier in the last 30 days (the `open` part) were left out unless you ran `recent --open`; on one day the list held 65 ids and the scan looked at 33. The default is now `--period all` (weekly and open together, each id once); `--daily`, `--weekly` and `--open` still narrow it, and `--all` names the default. `--max-read` defaults to 200, so the whole list is considered. Running `lattice-scan` with no argument still reads the daily list.
+- The summary says what happened to every id: "exploited 32 ruled out, 3 may match; critical 30 ruled out, 0 may match". A critical id that matches nothing installed is not listed, which looked like 27 ids missing from "3 exploited and 30 critical read".
+
 ## 0.4.5 — 2026-11-06
 
 - Open findings are re-checked on every run, and the report separates today from the past. After a matcher fix, findings made by the old matcher stayed `OPEN` for ever (seven false ones on one host: BeyondTrust, Siemens, ONLYOFFICE and four Plex CVEs, each matched on an ordinary word like `support` or `media`). Now a finding the current matching no longer produces is withdrawn with the reason recorded (`WITHDRAWN` block; `lattice-scan list` still shows it; it no longer counts as open or as touching the host). New findings store the vendor and product they matched on and are matched again as they are; older ones stored only a title and a reason, so only the one rule that changed (an ordinary-word product needs its vendor installed) is applied to them.
