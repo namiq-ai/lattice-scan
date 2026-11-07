@@ -371,6 +371,11 @@ class Lattice:
         self.last_gap = 0.0
         self.last_unlisted: dict | None = None   # the NVD node of the last lookup that had no CISA entry, for a named id
         self.cached = 0                          # answers served from the read cache in this run
+        self.pending: list[str] = []             # ids the caller is about to ask for, in order (hint): the next lookup can fetch them together
+        self.prefetched: dict[str, dict] = {}    # answers already fetched in a batch, as a single lookup would have answered
+        self.batch_ok = True                     # turned off for the run when the server does not understand a batch lookup
+        self.server_new = False                  # set once an answer carries the inline fields: only then is a batch tried (an older server is never asked)
+        self.batches = 0
 
     @staticmethod
     def _wait_to_retry(attempt: int, why: str) -> None:
@@ -437,7 +442,52 @@ class Lattice:
         except LatticeError:
             pass  # a stateless server may refuse the notification; calls work without it
 
+    def hint(self, ids: list[str]) -> None:
+        """Tell the client which ids will be looked up, in order. Nothing is sent. The first lookup of one of them then fetches up to 10 together
+        (ADR-LATTICE-API-001 C2), a call of one request instead of ten."""
+        self.pending = list(dict.fromkeys(i.upper() for i in ids))
+
+    def _prefetch(self, first: str) -> None:
+        """Fetch `first` and the next hinted ids that are not already known, at most 10, in one batch lookup. A server that does not understand a batch, or
+        any failure, turns batching off for the run and leaves the single lookups to do the work, so an older server behaves as before."""
+        i = self.pending.index(first)
+        batch = [first]
+        for c in self.pending[i + 1:]:
+            if len(batch) >= 10:
+                break
+            if c not in self.prefetched and read_cache_get("graph_lookup", {"id": c}) is None:
+                batch.append(c)
+        if len(batch) < 2:
+            return
+        try:
+            data = self.call("graph_lookup", ids=batch)
+        except LatticeError as err:
+            dbg(f"batch lookup not used ({clean(str(err))[:120]}); looking ids up one at a time")
+            self.batch_ok = False
+            return
+        results = data.get("results") if isinstance(data, dict) else None
+        if not isinstance(results, list):
+            self.batch_ok = False   # an older server ignored ids and answered something else
+            return
+        self.batches += 1
+        for r in results:
+            if isinstance(r, dict) and r.get("id") and "error" not in r and isinstance(r.get("items"), list):
+                ans = {"snapshot": data.get("snapshot"), "notices": data.get("notices", []), "items": r["items"], "access": data.get("access")}
+                self.prefetched[str(r["id"]).upper()] = ans
+                read_cache_put("graph_lookup", {"id": r["id"]}, ans)
+
     def call(self, tool: str, **args) -> dict:
+        if tool == "graph_lookup" and args.get("id") and self.batch_ok and self.server_new and len(self.pending) > 1:
+            cid = str(args["id"]).upper()
+            if cid not in self.prefetched and cid in self.pending and read_cache_get(tool, args) is None:
+                self._prefetch(cid)
+            if cid in self.prefetched:
+                self.cached += 1
+                dbg(f"batch: {tool} {args} answered from the batch fetched earlier")
+                return json.loads(json.dumps(self.prefetched[cid]))
+        hit0 = read_cache_get(tool, args) if tool == "graph_lookup" else None
+        if hit0 is not None:
+            self._learn(hit0)
         hit = read_cache_get(tool, args)
         if hit is not None:   # asked before, recently: no call, no waiting, nothing used
             self.cached += 1
@@ -478,7 +528,14 @@ class Lattice:
             if not KEY:
                 pace_learn(data.get("access"))
             read_cache_put(tool, args, data)
+            if tool == "graph_lookup" and args.get("id"):
+                self._learn(data)
         return data
+
+    def _learn(self, answer: dict) -> None:
+        """A lookup answer that carries the inline urgency fields (ADR-LATTICE-API-001 C1) comes from a server that also takes a batch (C2)."""
+        if any(inline_context(i) for i in answer.get("items", []) if isinstance(i, dict) and i.get("source") == "nvd"):
+            self.server_new = True
 
 
 from lattice_scan import report  # noqa: E402
@@ -1457,7 +1514,12 @@ def context(lat: "Lattice", e: dict) -> dict:
     links the candidate is left as it was and the reason is one line on stderr. Returns {} when there is nothing.
     """
     props: dict = {}
-    if e.get("nvdUid"):
+    inline = e.get("inline") or {}
+    if inline:   # the lookup already carried them (ADR-LATTICE-API-001 C1): no second call
+        props = {"description": inline.get("description"), "cwe_refs": inline.get("cwe"), "references": inline.get("references"), "status": inline.get("status"),
+                 "date_created": inline.get("date_created"), "date_modified": inline.get("date_modified"),
+                 "metadata": {"epss": inline.get("epss"), "ssvc": inline.get("ssvc"), "affected_products": e.get("affected") or []}}
+    elif e.get("nvdUid"):
         try:
             props = lat.call("graph_node", uid=e["nvdUid"]).get("properties") or {}
         except LatticeError as err:
@@ -1527,6 +1589,15 @@ def add_context(lat: "Lattice", e: dict, imp: dict, reuse: dict | None = None) -
         imp["priority"] = priority(e, imp, ctx)
 
 
+INLINE_KEYS = ("epss", "ssvc", "cwe", "description", "references", "status", "date_created", "date_modified")
+
+
+def inline_context(nvd: dict) -> dict:
+    """The urgency fields a server with ADR-LATTICE-API-001 C1 puts in the NVD item of a lookup. Empty from an older server, which is how the tool knows to
+    ask graph_node instead."""
+    return {k: nvd[k] for k in INLINE_KEYS if k in nvd}
+
+
 def kev_entry(lat: Lattice, cve: str) -> dict | None:
     """The CISA exploited entry for one CVE, or None when the graph has no kev node (which is not 'safe', only 'not listed in this snapshot').
 
@@ -1541,11 +1612,12 @@ def kev_entry(lat: Lattice, cve: str) -> dict | None:
         nvd0 = next((i for i in items if i.get("source") == "nvd"), None)
         if nvd0 and nvd0.get("uid"):
             prim = next((i for i in items if i.get("primary")), nvd0)
-            lat.last_unlisted = {"cve": cve, "nvdUid": nvd0["uid"], "ranges": [], "links": prim.get("links") if isinstance(prim.get("links"), list) else []}
+            lat.last_unlisted = {"cve": cve, "nvdUid": nvd0["uid"], "ranges": [], "links": prim.get("links") if isinstance(prim.get("links"), list) else [], "inline": inline_context(nvd0),
+                                 "affected": [clean(x.strip()) for x in str(nvd0.get("affected_products", "")).split(";") if x.strip()]}
         return None
     nvd = next((i for i in items if i.get("source") == "nvd"), {})
     primary = next((i for i in items if i.get("primary")), nvd)
-    e = {"nvdUid": nvd.get("uid") or "", "links": primary.get("links") if isinstance(primary.get("links"), list) else [],
+    e = {"nvdUid": nvd.get("uid") or "", "links": primary.get("links") if isinstance(primary.get("links"), list) else [], "inline": inline_context(nvd),
          "cve": cve, "title": clean(kev.get("title", "")), "added": clean(str(kev.get("date_added", ""))), "due": clean(str(kev.get("due_date", ""))),
          "vendor": clean(kev.get("vendor_project", "")), "product": clean(kev.get("product", "")), "ransomware": clean(str(kev.get("known_ransomware_use", ""))), "cvss": nvd.get("cvss_score"), "action": clean(kev.get("required_action", "")),
          "affected": [clean(x.strip()) for x in str(nvd.get("affected_products", "")).split(";") if x.strip()],
@@ -1781,6 +1853,7 @@ def cmd_run(a) -> int:
             progress(f"[host] discovery found {len(set(ids))} id(s) to read")
             dbg(f"discover: {len(set(ids))} exploited ids to read")
         order_ids = list(dict.fromkeys(ids)) if getattr(a, "keep_order", False) else sorted(set(ids))   # recent passes its ids most urgent first
+        lat.hint([c for c in order_ids if not (c in seen and c not in named and not (a.again or a.refresh))])   # the ids that will really be read
         for n_cve, cve in enumerate(order_ids, 1):
             tag = f"[{n_cve}/{len(order_ids)}] {cve}"
             if cve in seen and cve not in named and not (a.again or a.refresh):
@@ -2092,6 +2165,7 @@ def cmd_project(a) -> int:
             unread = todo[a.max_read:]
             todo = todo[:a.max_read]
         hits, read, not_listed = [], 0, []
+        lat.hint([c for c in todo if c not in entries])
         checked: list[dict] = []   # one row per id for the result table: what was asked and what came of it
         for n_cve, cve in enumerate(todo, 1):
             tag = f"[{n_cve}/{len(todo)}] {cve}"
@@ -2556,6 +2630,7 @@ def cmd_enrich(a) -> int:
     lat = Lattice()
     try:
         lat.start()
+        lat.hint(todo)
         for n, cve in enumerate(todo, 1):
             progress(f"[{n}/{len(todo)}] {cve}  asking Lattice (only this id is sent) ...")
             done.append((cve, kev_entry(lat, cve)))
