@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.6 — 2026-11-06
 
 - `lattice-scan recent` now reads everything in namiq.io's recent list, as the name says. It read only the weekly part (7 days), so the 32 exploited CVEs CISA added earlier in the last 30 days (the `open` part) were left out unless you ran `recent --open`; on one day the list held 65 ids and the scan looked at 33. The default is now `--period all` (weekly and open together, each id once); `--daily`, `--weekly` and `--open` still narrow it, and `--all` names the default. `--max-read` defaults to 200, so the whole list is considered. Running `lattice-scan` with no argument still reads the daily list.
 - The summary says what happened to every id: "exploited 32 ruled out, 3 may match; critical 30 ruled out, 0 may match". A critical id that matches nothing installed is not listed, which looked like 27 ids missing from "3 exploited and 30 critical read".
