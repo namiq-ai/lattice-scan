@@ -39,7 +39,7 @@ The script is `scripts/lattice-scan.pyz`, in the folder this SKILL.md was loaded
 
 ```bash
 python3 scripts/lattice-scan.pyz --version
-python3 scripts/lattice-scan.pyz recent                             # no id? start here (weekly list); --daily for the last day or two
+python3 scripts/lattice-scan.pyz recent                             # no id? start here (the whole recent list); --daily for the last day or two
 python3 scripts/lattice-scan.pyz --cve CVE-2026-1234 --cve CVE-2026-5678   # look these up
 npm audit --json | python3 scripts/lattice-scan.pyz enrich          # ids found in any text, read once each
 python3 scripts/lattice-scan.pyz --refresh --inventory                # inventory only, no network call; prints totals (about 30 lines), the full lists are in inventory.json

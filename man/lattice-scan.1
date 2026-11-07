@@ -13,7 +13,7 @@ lattice-scan \- check this host, or a project's declared dependencies, against t
 [\fB\-\-color\fR \fBauto\fR|\fBalways\fR|\fBnever\fR] [\fB\-\-width\fR \fIN\fR] [\fB\-\-fail\-on\fR \fBnever\fR|\fBin\-range\fR|\fBcandidate\fR]
 .br
 .B lattice-scan recent
-[\fB\-\-period\fR \fBdaily\fR|\fBweekly\fR|\fBopen\fR] [\fB\-\-daily\fR|\fB\-\-weekly\fR|\fB\-\-open\fR] [\fB\-\-max\-read\fR \fIN\fR] [\fB\-\-no\-critical\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
+[\fB\-\-period\fR \fBall\fR|\fBdaily\fR|\fBweekly\fR|\fBopen\fR] [\fB\-\-all\fR|\fB\-\-daily\fR|\fB\-\-weekly\fR|\fB\-\-open\fR] [\fB\-\-max\-read\fR \fIN\fR] [\fB\-\-no\-critical\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
 .br
 .B lattice-scan enrich
 [\fB\-\-cve\fR \fITEXT\fR]... [\fB\-\-file\fR \fIFILE\fR]... [\fB\-\-max\-read\fR \fIN\fR] [\fB\-\-fail\-on\fR \fBnever\fR|\fBexploited\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
@@ -313,12 +313,12 @@ Print no progress.
 Windows and macOS are not covered. A hostile process can hide from any tool that runs as the same user it runs as; this is a first look, not a replacement for monitoring.
 .SH STARTING WITHOUT A CVE ID
 .SS recent
-Reads two lists published at namiq.io, one of CVEs CISA lists as exploited and one of CVEs scored critical and not known to be exploited, for a period: \fBdaily\fR (added or published in the last day or two), \fBweekly\fR (the last seven days, which includes daily; the default) or \fBopen\fR (exploited entries CISA added before the weekly window but within the last 30 days, overdue first, where overdue means that CISA's due date has passed and says nothing about any machine; it has no critical part).
+Reads two lists published at namiq.io, one of CVEs CISA lists as exploited and one of CVEs scored critical and not known to be exploited, for a period: \fBall\fR (everything in the list: the weekly and the open parts; the default), \fBdaily\fR (added or published in the last day or two), \fBweekly\fR (the last seven days, which includes daily) or \fBopen\fR (exploited entries CISA added before the weekly window but within the last 30 days, overdue first, where overdue means that CISA's due date has passed and says nothing about any machine; it has no critical part).
 The list's schema is lattice\-recent/N. This tool reads version 2 and later, so a list that only adds fields keeps working; \fBopen\fR needs version 3.
 The request carries no id and nothing about this host. Each exploited entry is then compared with this host's inventory, locally, by product name. Only the entries that may match are read from Lattice, by exact id, and shown like a host check.
 The others are listed as \fBunmatch\fR and are not sent to Lattice. A critical entry that may match is shown as \fBWATCH\fR: it is not known to be exploited, so Lattice is not asked about it.
 When nothing matches, nothing is sent to Lattice. That is not the same as safe: the lists hold only what was recently added; to check a CVE you know of, use \fB\-\-cve\fR.
-\fB\-\-max\-read\fR limits how many exploited entries are considered (default 40); \fB\-\-no\-critical\fR leaves out the critical list.
+\fB\-\-max\-read\fR limits how many exploited entries are considered (default 200, the whole list); \fB\-\-no\-critical\fR leaves out the critical list.
 .SS enrich
 Takes CVE ids from \fB\-\-cve\fR (any text containing ids), from \fB\-\-file\fR, or from standard input when neither is given (an audit report, an advisory, a ticket), reads each once from Lattice by exact id, and prints for each: whether CISA lists it as exploited, since when, the patch due date, the CVSS score and whether CISA records ransomware use.
 It does not compare with this host and writes no records. Without a key it reads at most 20 ids a run (\fB\-\-max\-read\fR changes this); ids not read are listed and the exit status is 3. \fB\-\-fail\-on exploited\fR exits 1 when any id is exploited.

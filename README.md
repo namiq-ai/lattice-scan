@@ -56,7 +56,7 @@ lattice-scan list | impact CVE-... | resolve CVE-... --status fixed --proof "...
 
 ```bash
 lattice-scan                                               # no arguments: the same as `recent --daily`
-lattice-scan recent                                        # namiq.io's weekly list of recent exploited/critical CVEs; only likely matches go to Lattice (--daily: last day or two; --open: older ones, overdue first)
+lattice-scan recent                                        # every CVE in namiq.io's recent list (weekly + open: exploited and critical); only likely matches go to Lattice (--daily: last day or two; --weekly; --open: only the older ones)
 printf '...' | lattice-scan enrich                         # ids from an audit or advisory: exploited? since when? patch due? ransomware? (no key: 20 ids a run)
 ```
 
