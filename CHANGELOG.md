@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A key about to end says so. When the key you use has 14 days or fewer left, the tool prints one line a day on stderr (not with `--quiet`, and never in csv or json output): the days left, and that a renewal link was mailed to the address the key was issued for. The tool never opens or follows the link.
 - A repeat run asks Lattice nothing it was just told. Answers to a lookup of one CVE id and to a detail read are kept in your cache folder for 6 hours (`LATTICE_SCAN_READ_CACHE`, `LATTICE_SCAN_READ_CACHE_HOURS`); `--again` and `--refresh` ask again. They hold public graph data only, nothing about this host.
 - Keyless pacing follows the server. The per-minute limit Lattice reports in each answer (`access.limits.calls_per_minute`) is remembered for a week, so a limit the operator raises shortens your scans without a new release. Until told otherwise it stays 5 a minute.
 - `recent` reads the most urgent ids first (ransomware use recorded, patch date passed, then CISA priority and EPSS), and says before the first call how many calls that will be, how many are already cached and how long pacing makes it. A run that is stopped has read what mattered most.

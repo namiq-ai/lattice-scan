@@ -265,6 +265,34 @@ def pace_learn(access: object) -> None:
         pass
 
 
+KEY_NOTICE_DAYS = 14
+
+
+def key_days_notice(value: str | None, today: str | None = None) -> bool:
+    """A keyed answer says how many days the key has left (`X-Lattice-Key-Days-Left`). When it is 14 or fewer, say so once a day on stderr (the progress line,
+    so --quiet and the csv/json outputs are untouched). The renewal link is mailed to the address the key was issued for; the tool never opens or follows it.
+    True when a line was printed."""
+    try:
+        n = int(str(value).strip())
+    except (TypeError, ValueError):
+        return False
+    if not 0 <= n <= KEY_NOTICE_DAYS:
+        return False
+    day = today or dt.date.today().isoformat()
+    f = cache_dir() / "key-notice.json" if not (PACE_FILE or env("PACE_FILE")) else pace_path().with_name(pace_path().name + ".key-notice.json")
+    try:
+        if json.loads(f.read_text()).get("day") == day:
+            return False
+    except (OSError, ValueError, AttributeError):
+        pass
+    try:
+        write_cache_file(f, json.dumps({"day": day}))
+    except OSError:
+        pass   # no folder to remember in: the line may repeat, which is harmless
+    progress(f"Your Lattice key ends in {n} day{'s' if n != 1 else ''}. A renewal link was mailed to the address it was issued for; to get a new key: https://namiq.io/lattice")
+    return True
+
+
 def read_cache_path() -> Path:
     if CACHE_FILE:
         return CACHE_FILE
@@ -398,6 +426,8 @@ class Lattice:
             try:
                 with _OPENER.open(req, timeout=30) as r:
                     self.session = r.headers.get("Mcp-Session-Id", self.session)
+                    if KEY:
+                        key_days_notice(r.headers.get("X-Lattice-Key-Days-Left"))
                     raw = r.read(MAX_REPLY + 1).decode(errors="replace")
                     if len(raw) > MAX_REPLY:
                         raise LatticeError("reply from Lattice is larger than 8 MB: refusing it")
