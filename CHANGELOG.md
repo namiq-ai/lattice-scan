@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.7 — 2026-11-07
 
 - A key about to end says so. When the key you use has 14 days or fewer left, the tool prints one line a day on stderr (not with `--quiet`, and never in csv or json output): the days left, and that a renewal link was mailed to the address the key was issued for. The tool never opens or follows the link.
 - A repeat run asks Lattice nothing it was just told. Answers to a lookup of one CVE id and to a detail read are kept in your cache folder for 6 hours (`LATTICE_SCAN_READ_CACHE`, `LATTICE_SCAN_READ_CACHE_HOURS`); `--again` and `--refresh` ask again. They hold public graph data only, nothing about this host.
