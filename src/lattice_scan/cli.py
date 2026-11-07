@@ -1619,6 +1619,7 @@ def cmd_run(a) -> int:
                     ctx = context(lat, lat.last_unlisted)
                     if ctx:
                         unlisted_ctx.append((cve, ctx))
+                        rows[-1][-2:] = unlisted_summary(ctx, inv)   # the table row says what the detail below found, not only "unlisted"
                 elif cve in named:
                     bare.append(cve)   # Lattice holds no NVD record for it: say that, and fall back on namiq.io's list
                 continue
@@ -2381,6 +2382,27 @@ def installed_leads(text: str, inv: dict) -> dict:
     opened = sorted((inv.get("imageDetails") or {}))
     both = [r for r in opened if leads and all(r in images.get(w, []) for w in leads)]
     return {"words": leads, "host": host, "images": images, "allIn": both, "opened": len(opened)}
+
+
+def unlisted_summary(ctx: dict, inv: dict) -> list[str]:
+    """The Result and Matched / compared cells of a named CVE that CISA does not list. 'lead' when the description names something installed
+    (a lead for a person, not a match); otherwise 'unlisted' with the usual sentence."""
+    plain = ["unlisted", "not in CISA's list in this snapshot (not the same as safe)"]
+    text = ctx.get("description") or ""
+    lead = installed_leads(text, inv) if text else {"words": []}
+    if not lead["words"]:
+        return plain
+    bits = []
+    for w in lead["words"]:
+        h, im = lead["host"].get(w, []), lead["images"].get(w, [])
+        where = ([f"on the host ({h[0]})"] if h else []) + ([f"in {len(im)} opened image{'s' if len(im) > 1 else ''}"] if im else [])
+        bits.append(f"{w} " + " and ".join(where))
+    if len(lead["words"]) > 1:
+        bits.append(f"{len(lead['allIn'])} opened image(s) have all of {', '.join(lead['words'])}" if lead["allIn"] else f"no opened image has all of {', '.join(lead['words'])}")
+    m = re.search(r"\bbefore ([0-9][\w.]*)", text)
+    if m:
+        bits.append(f"description says before {m.group(1)}")
+    return ["lead", "not CISA-listed (not the same as safe); description names: " + "; ".join(bits) + ". A lead, not a match: read the detail below"]
 
 
 def print_leads(text: str, inv: dict) -> None:

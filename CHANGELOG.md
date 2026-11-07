@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The RESULT BY CVE row of a CVE you name that CISA does not list now says what the detail below it found. When the description names something installed, the row reads `lead` (not `unlisted`) and its last column names it: for example `openssh on the host (...)`, `musl in 9 opened images`, whether any opened image has all of them, and the "before X" version the description gives. It is a lead for a person to read, not a match. A CVE whose description names nothing installed keeps the plain `unlisted` row.
+
 ## 0.4.4 — 2026-11-06
 
 - The package page on PyPI (the README) now has an overview table of what each command reads and what leaves the machine, and its Use section is grouped by purpose and lists `--deep`, `--refresh --inventory`, `--list` and `posture`. PyPI shows it from the next release.

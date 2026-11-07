@@ -156,5 +156,21 @@ class Unlisted(Base):
         self.assertNotIn("what Lattice holds on it", out); self.assertIn("not 'safe'", out)
 
 
+class UnlistedSummary(unittest.TestCase):
+    """The table row of a named, unlisted CVE says what the detail found: 'lead' when the description names installed software."""
+    INV = {"packages": {"examplesshd": "1:1.2p1-3"}, "snaps": {}, "imageDetails": {}}
+
+    def test_a_description_that_names_installed_software_makes_a_lead_row(self):
+        res, text = cli.unlisted_summary({"description": "examplesshd before 1.3p2 lacks a check"}, self.INV)
+        self.assertEqual(res, "lead")
+        self.assertIn("examplesshd on the host (examplesshd 1:1.2p1-3)", text); self.assertIn("description says before 1.3p2", text)
+        self.assertIn("not the same as safe", text); self.assertIn("not a match", text)
+
+    def test_no_installed_name_or_no_description_keeps_the_plain_row(self):
+        plain = ["unlisted", "not in CISA's list in this snapshot (not the same as safe)"]
+        self.assertEqual(cli.unlisted_summary({"description": "Elsewhere software before 9.9 lacks a check"}, self.INV), plain)
+        self.assertEqual(cli.unlisted_summary({}, self.INV), plain)
+
+
 if __name__ == "__main__":
     unittest.main()
