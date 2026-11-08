@@ -1827,6 +1827,16 @@ def print_table(rows: list[list[str]], title: str = "RESULT BY CVE") -> None:
     print()
 
 
+def fail_on_exit(mode: str, imps: list[dict]) -> int:
+    """Exit 1 when --fail-on asks for it: `candidate` for any candidate the run found (or still has open), `in-range` only when the version check puts the installed
+    version inside an affected range. The default `never` keeps the old behaviour: a person reads the result."""
+    if mode == "candidate" and imps:
+        return 1
+    if mode == "in-range" and any(((i.get("versionCheck") or {}).get("verdict") == "in-range") for i in imps):
+        return 1
+    return 0
+
+
 def cmd_run(a) -> int:
     private_dir()
     seen_f = OUT / "seen.json"
@@ -1939,7 +1949,7 @@ def cmd_run(a) -> int:
         write_private(seen_f, json.dumps(sorted(seen)))
         scanlog(f"STOPPED after {read} read, {len(hits)} candidates: {err}")
         print(f"stopped: {err}", file=sys.stderr)
-        return 1
+        return 3   # stopped part-way is 3 in every command; 1 is kept for a --fail-on match
     write_private(seen_f, json.dumps(sorted(seen)))
     append("runs.jsonl", {"on": TODAY, "read": read, "candidates": len(hits), "inventory": inv["hash"], "restartRequired": inv["restartRequired"]})
     scanlog(f"ok key={'yes' if KEY else 'no'} inventory={inv['hash']} read={read} candidates={len(hits)} already-recorded={len(again_hits)}"
@@ -1974,7 +1984,7 @@ def cmd_run(a) -> int:
     if inv["restartRequired"]:
         print("restart required: an installed update is waiting for a reboot")
     detail_files(inv)
-    return 0
+    return fail_on_exit(getattr(a, "fail_on", "never"), [imp for _, _, imp in hits + again_hits])
 
 
 PROJECT_EPILOG = """\
@@ -2606,7 +2616,7 @@ def cmd_recent(a) -> int:
         feed = read_feed(a.period)
     except LatticeError as err:
         print(f"stopped: {err}", file=sys.stderr)
-        return 1
+        return 3
     inv = inventory()
     if getattr(a, "refresh", False):   # --refresh: collect again, show it, log it, then run the scan on it
         refresh_inventory(inv, full=getattr(a, "list", False))
@@ -2984,6 +2994,7 @@ def main() -> int:
     p.add_argument("--list", action="store_true", help="with --refresh or when the inventory is shown: print every package, snap and image instead of totals")
     p.add_argument("--deep", action="store_true", help="deep inventory: open every local image, not only running ones, and list the Python/Node/Java/Ruby packages inside them (minutes). Default is quick")
     p.add_argument("--refresh", action="store_true", help="collect the inventory again now and print all of it; with ids, also re-read them. Alone it makes no Lattice call")
+    p.add_argument("--fail-on", choices=["never", "in-range", "candidate"], default="never", help="exit 1 when a candidate (or an in-range one) is found; default never: a person reads it")
     p.add_argument("--again", action="store_true", help="re-read ids already read before")
     p.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print what is being checked, step by step, on stderr (the default; see --quiet)")
     p.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
@@ -3025,6 +3036,7 @@ def main() -> int:
     rc.add_argument("--weekly", dest="period", action="store_const", const="weekly", help="same as --period weekly")
     rc.add_argument("--all", dest="period", action="store_const", const="all", help="same as --period all (the default)")
     rc.add_argument("--max-read", type=int, default=200, help="most exploited ids to consider from the list (default 200: the whole list)")
+    rc.add_argument("--fail-on", choices=["never", "in-range", "candidate"], default=argparse.SUPPRESS, help="exit 1 when a candidate (or an in-range one) is found; default never")
     rc.add_argument("--no-critical", action="store_true", help="leave out the critical (not known exploited) ids")
     rc.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each step on stderr (the default)")
     rc.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")

@@ -13,7 +13,7 @@ lattice-scan \- check this host, or a project's declared dependencies, against t
 [\fB\-\-color\fR \fBauto\fR|\fBalways\fR|\fBnever\fR] [\fB\-\-width\fR \fIN\fR] [\fB\-\-fail\-on\fR \fBnever\fR|\fBin\-range\fR|\fBcandidate\fR]
 .br
 .B lattice-scan recent
-[\fB\-\-period\fR \fBall\fR|\fBdaily\fR|\fBweekly\fR|\fBopen\fR] [\fB\-\-all\fR|\fB\-\-daily\fR|\fB\-\-weekly\fR|\fB\-\-open\fR] [\fB\-\-max\-read\fR \fIN\fR] [\fB\-\-no\-critical\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
+[\fB\-\-period\fR \fBall\fR|\fBdaily\fR|\fBweekly\fR|\fBopen\fR] [\fB\-\-all\fR|\fB\-\-daily\fR|\fB\-\-weekly\fR|\fB\-\-open\fR] [\fB\-\-max\-read\fR \fIN\fR] [\fB\-\-fail\-on\fR \fBnever\fR|\fBin\-range\fR|\fBcandidate\fR] [\fB\-\-no\-critical\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
 .br
 .B lattice-scan enrich
 [\fB\-\-cve\fR \fITEXT\fR]... [\fB\-\-file\fR \fIFILE\fR]... [\fB\-\-max\-read\fR \fIN\fR] [\fB\-\-fail\-on\fR \fBnever\fR|\fBexploited\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
@@ -343,7 +343,7 @@ The terms version is read from the key service's own published description and s
 The run finished. (Without \fB\-\-fail\-on\fR this does not mean nothing was found.)
 .TP
 .B 1
-\fB\-\-fail\-on\fR matched.
+\fB\-\-fail\-on\fR matched (the host scan, \fBrecent\fR, \fBproject\fR and \fBenrich\fR have it). In earlier versions a host check returned 1 when Lattice stopped it; that is now 3.
 .TP
 .B 2
 Bad usage, or an input could not be read (a folder, a catalogue, an id file), or the catalogue was asked for without a key, or with a key whose email is not confirmed.

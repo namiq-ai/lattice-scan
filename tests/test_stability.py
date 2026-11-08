@@ -38,14 +38,14 @@ class Stability(EntryBase):
     def test_a_429_gives_up_after_two_retries_and_says_what_lattice_said(self):
         Entry.rate_left = 9
         rc, _, err = self.run_cli("--cve", "CVE-2099-0001")
-        self.assertEqual(rc, 1); self.assertEqual(Entry.rate_seen, 3)     # the first try and two retries, no more
+        self.assertEqual(rc, 3); self.assertEqual(Entry.rate_seen, 3)     # the first try and two retries, no more
         self.assertIn("HTTP 429", err); self.assertIn("Too many keyless requests", err)
 
     def test_a_429_that_asks_for_a_long_wait_stops_at_once(self):
         Entry.rate_left = 9
         Entry.rate_body = '{"jsonrpc": "2.0", "id": 1, "error": {"code": -32002, "message": "Too many keyless requests. Retry after 2400 seconds, or get a key"}}'
         rc, _, err = self.run_cli("--cve", "CVE-2099-0001")
-        self.assertEqual(rc, 1); self.assertEqual(Entry.rate_seen, 1)
+        self.assertEqual(rc, 3); self.assertEqual(Entry.rate_seen, 1)
         self.assertFalse([s for s in self.sleeps if s > 70], self.sleeps); self.assertIn("2400", err)
 
     def test_retry_after_reads_a_header_a_message_or_nothing(self):

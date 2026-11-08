@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Changed: a host check or `recent` that Lattice stops part-way (limit reached, unreachable, refused) now exits 3, as `project` and `enrich` already do. Exit 1 is kept for a `--fail-on` match. A script that tested for exit 1 after a stopped run must test for 3.
+- New: `--fail-on never|in-range|candidate` on the host scan and on `recent`: exit 1 when a candidate (or one whose version check says in-range) is found. The default stays `never`.
+- Fixed: the skill text said the host check takes `--format csv|json`; it does not (that is `project` and `posture`).
 - New: `lattice-scan project . --discover` checks a project against namiq.io's list of recent exploited CVEs with no CVE ids and no key. The window is monthly by default; `--daily`, `--weekly`, `--monthly` and `--open` choose another. The list request carries nothing from the project, and only the ids whose product a declared dependency matches are read from Lattice. Without ids, the "nothing to check" message now names `--discover` first.
 
 ## 0.4.8 — 2026-11-08

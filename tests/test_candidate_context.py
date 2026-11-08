@@ -47,6 +47,23 @@ class Context(Base):
     def reads(self, name):
         return [1 for m, _, _ in Stub.seen if m == "tools/call"]
 
+    def test_fail_on_is_off_by_default_and_exit_1_means_a_match_not_a_stop(self):
+        rc, _, _ = self.run_cli("--cve", "CVE-2099-0001")
+        self.assertEqual(rc, 0)                                                     # a candidate alone never fails a run
+        rc, _, _ = self.run_cli("--fail-on", "candidate", "--again", "--cve", "CVE-2099-0001")
+        self.assertEqual(rc, 1)                                                     # asked to fail on a candidate, and there is one
+        verdict = next(e for e in cli.events() if e["event"] == "found")["impact"]["versionCheck"]["verdict"]
+        rc, _, _ = self.run_cli("--fail-on", "in-range", "--again", "--cve", "CVE-2099-0001")
+        self.assertEqual(rc, 1 if verdict == "in-range" else 0)
+
+    def test_fail_on_exit_decides_from_the_version_check(self):
+        inr, out = {"versionCheck": {"verdict": "in-range"}}, {"versionCheck": {"verdict": "outside-range"}}
+        self.assertEqual(cli.fail_on_exit("never", [inr]), 0)
+        self.assertEqual(cli.fail_on_exit("candidate", [out]), 1)
+        self.assertEqual(cli.fail_on_exit("candidate", []), 0)
+        self.assertEqual(cli.fail_on_exit("in-range", [out]), 0)
+        self.assertEqual(cli.fail_on_exit("in-range", [out, inr]), 1)
+
     def test_candidate_carries_context_and_priority(self):
         rc, out, _ = self.run_cli("--cve", "CVE-2099-0001")
         self.assertEqual(rc, 0)

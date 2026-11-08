@@ -174,14 +174,14 @@ class AgentEntry(EntryBase):
     def test_recent_refuses_the_first_version_of_the_list(self):
         Entry.feed = {"schema": "lattice-recent/1", "exploited": [], "critical": []}
         rc, _, err = self.run_cli("recent")
-        self.assertEqual(rc, 1); self.assertIn("lattice-recent/2 and later", err)
+        self.assertEqual(rc, 3); self.assertIn("lattice-recent/2 and later", err)
 
     def test_recent_refuses_a_list_that_is_not_one(self):
         for bad in ("something-else/3", "lattice-recent/x", None):
             with self.subTest(bad):
                 Entry.feed = feed(schema=bad)
                 rc, _, err = self.run_cli("recent")
-                self.assertEqual(rc, 1); self.assertIn("Upgrade lattice-scan", err)
+                self.assertEqual(rc, 3); self.assertIn("Upgrade lattice-scan", err)
 
     def test_recent_reads_version_2_and_3_and_a_later_version_that_only_adds_fields(self):
         for schema in ("lattice-recent/2", "lattice-recent/3", "lattice-recent/7"):
@@ -214,12 +214,12 @@ class AgentEntry(EntryBase):
     def test_recent_open_on_a_list_without_it_says_to_upgrade_or_use_daily_or_weekly(self):
         Entry.feed = feed([exp("CVE-2099-0001")], schema="lattice-recent/2")     # version 2 has no open list
         rc, _, err = self.run_cli("recent", "--open")
-        self.assertEqual(rc, 1); self.assertIn("has no open list", err); self.assertIn("daily or weekly", err)
+        self.assertEqual(rc, 3); self.assertIn("has no open list", err); self.assertIn("daily or weekly", err)
 
     def test_recent_refuses_a_plain_http_list_from_elsewhere(self):
         cli.FEED_URL = "http://example.invalid/recent.json"
         rc, _, err = self.run_cli("recent")
-        self.assertEqual(rc, 1); self.assertIn("not https", err)
+        self.assertEqual(rc, 3); self.assertIn("not https", err)
 
     def test_recent_treats_feed_text_as_data(self):
         Entry.feed = feed([exp("CVE-2099-0005", vendor="Evil\x1b[31mco", product="Otherthing")])
