@@ -92,6 +92,13 @@ class ProductIdentity(unittest.TestCase):
         self.assertNotEqual(lv.pid("examplelib", "pypi"), lv.pid("examplelib", "npm"))
 
 
+class CrossLanguage(unittest.TestCase):
+    def test_the_shared_pid_table_matches_this_module(self):
+        """tests/golden/pid_cases.json is copied into the website repository, whose TypeScript port of pid() must reproduce every row."""
+        for name, eco, want in json.loads((GOLDEN / "pid_cases.json").read_text())["cases"]:
+            self.assertEqual(lv.pid(name, eco), want, (name, eco))
+
+
 class Windows(unittest.TestCase):
     def test_windows_are_utc_calendar_days_on_the_anchor_whatever_the_process_time_zone(self):
         saved = os.environ.get("TZ")

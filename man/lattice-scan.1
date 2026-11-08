@@ -339,6 +339,8 @@ Asks for a Lattice key for a real person. Without \fB\-\-accept\-terms\fR nothin
 The terms version is read from the key service's own published description and sent exactly. The key is stored in the records folder as the file \fBkey\fR (mode 0600), never printed, and used automatically by later runs while the file stays private to the user. If a key is already stored it asks for nothing more unless \fB\-\-force\fR is given.
 .SH RESULT AS DATA
 \fB\-\-format json\fR or \fB\-\-format csv\fR on the host check, \fBrecent\fR and \fBenrich\fR prints the RESULT BY CVE table as one JSON document (schema \fBlattice\-scan\-result/1\fR: tool, command, window, exit code, counts by result, rows, and the findings still open from earlier runs) or as CSV with a header row, and nothing else on standard output; progress and errors stay on standard error. \fB\-\-json FILE\fR writes the JSON to a file (mode 0600, because it names this host's software) and leaves the screen unchanged. A CSV cell that starts with = + \- or @ has a leading apostrophe so a spreadsheet does not run it. \fBproject\fR and \fBposture\fR have their own \fB\-\-format\fR and \fB\-\-json\fR.
+.SH THE SIGNED EXPLOITED INDEX
+\fBlattice\-scan index\fR [\fB\-\-refresh\fR] [\fB\-\-require\-fresh\fR] fetches, checks and shows the signed exploited index that namiq.io publishes: every CVE CISA lists as exploited, with the affected version ranges NVD gives for it. It is the data a later scan matches against this machine's own inventory, so the inventory never has to leave the machine. The request carries nothing from this machine. The file is checked on its exact bytes: its sha256 against the manifest, then its Ed25519 signature against a key pinned in this program; the generation, schema and as\-of date are read from the signed file, never from the manifest. A copy under a day old is used without a request; a newer generation is downloaded; a lower generation than one already accepted, a bad signature, a key this version does not know (upgrade lattice\-scan) or a damaged file is refused and the previous copy is kept. When namiq.io cannot be reached the cached copy is used while it is within 14 days of its as\-of date. \fB\-\-refresh\fR asks now; \fB\-\-require\-fresh\fR exits 2 if the index is older than 14 days. Exit status: 0 ok, 2 refused, 3 no usable copy.
 .SH EXIT STATUS
 .TP
 .B 0
@@ -410,6 +412,12 @@ Progress is on by default. Set to 0 to turn it off, like \fB\-\-quiet\fR.
 .TP
 .B LATTICE_SCAN_FEED
 Where \fBrecent\fR reads the lists (default https://namiq.io/lattice/recent.json).
+.TP
+.B LATTICE_SCAN_INDEX_URL
+Where \fBindex\fR reads the signed exploited index (default https://namiq.io/lattice/exploited-index.json). The signature is still checked against the pinned key, so another address cannot substitute its own data.
+.TP
+.B LATTICE_SCAN_INDEX_MANIFEST_URL
+Where \fBindex\fR reads the manifest beside it (default https://namiq.io/lattice/exploited-index.manifest.json).
 .TP
 .B LATTICE_SCAN_KEY_URL
 The key service \fBget\-key\fR asks (default https://namiq.io/api/v1/lattice/agent-keys).
