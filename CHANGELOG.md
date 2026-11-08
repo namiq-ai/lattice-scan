@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.9 — 2026-11-08
 
 - New: `--format json|csv` and `--json FILE` on the host check, `recent` and `enrich`: the RESULT BY CVE table as one JSON document (`lattice-scan-result/1`, with the exit code and counts) or CSV, nothing else on standard output. The file is written with mode 0600. The console output is unchanged.
 - New: a test fails when the README or the skill text shows a `lattice-scan` command with an option the program does not define.
