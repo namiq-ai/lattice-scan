@@ -400,6 +400,62 @@ class ProjectCommand(unittest.TestCase):
         self.assertEqual(len(reads), 2)                                    # one graph_meta (the tier check) and ONE id: CVE-2099-0002's product is not declared here
         self.assertIn("CVE-2099-0001", out)
 
+    def _feed(self, rows, seen):
+        def fake(period="weekly"):
+            seen.append(period)
+            return {"exploited": rows, "critical": [], "from": "", "to": "", "asOf": ""}
+        return fake
+
+    def test_discover_needs_no_ids_and_no_key_and_reads_only_the_matching_id(self):
+        write(self.root, "requirements.txt", "examplelib==2.14.0\n")
+        periods = []
+        saved = cli.read_feed
+        cli.read_feed = self._feed([{"id": "CVE-2099-0001", "vendor": "Exampleco", "product": "Examplelib"},
+                                    {"id": "CVE-2099-0002", "vendor": "Other", "product": "Nothingdeclared"}], periods)
+        try:
+            rc, out, err = self.run_cli("project", str(self.root), "--discover")
+        finally:
+            cli.read_feed = saved
+        self.assertEqual(periods, ["all"])                                  # monthly is the feed's whole list
+        self.assertEqual(cli.KEY, "")
+        self.assertIn("CVE-2099-0001", out)
+        self.assertNotIn("CVE-2099-0002", out)                              # a product nothing here declares is neither read nor reported
+        reads = [m for m, _, _ in Stub.seen if m == "tools/call"]
+        self.assertEqual(len(reads), 1)                                     # one id, no tier check: nothing from the project was sent
+
+    def test_a_window_flag_alone_turns_discover_on_and_is_passed_to_the_feed(self):
+        write(self.root, "requirements.txt", "examplelib==2.14.0\n")
+        periods = []
+        saved = cli.read_feed
+        cli.read_feed = self._feed([], periods)
+        try:
+            for flag, want in (("--weekly", "weekly"), ("--daily", "daily"), ("--open", "open"), ("--monthly", "all")):
+                rc, _, _ = self.run_cli("project", str(self.root), flag)
+                self.assertEqual(rc, 0, flag)
+        finally:
+            cli.read_feed = saved
+        self.assertEqual(periods, ["weekly", "daily", "open", "all"])
+
+    def test_discover_stops_with_exit_3_when_the_list_cannot_be_read(self):
+        write(self.root, "requirements.txt", "examplelib==2.14.0\n")
+        saved = cli.read_feed
+        def boom(period="weekly"):
+            raise cli.LatticeError("the recent-CVE list is unreachable")
+        cli.read_feed = boom
+        try:
+            rc, out, err = self.run_cli("project", str(self.root), "--discover")
+        finally:
+            cli.read_feed = saved
+        self.assertEqual(rc, 3)
+        self.assertIn("unreachable", err)
+        self.assertEqual(Stub.seen, [])
+
+    def test_with_nothing_to_check_the_error_names_the_keyless_route(self):
+        rc, out, err = self.run_cli("project", str(self.root))
+        self.assertEqual(rc, 2)
+        self.assertIn("--discover", err)
+        self.assertEqual(Stub.seen, [])
+
     def _catalogue(self):
         write(self.root, "requirements.txt", "examplelib==2.14.0\n")
         return write(Path(self.tmp.name), "kev.json", json.dumps({"vulnerabilities": [

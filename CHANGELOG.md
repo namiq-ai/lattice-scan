@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- New: `lattice-scan project . --discover` checks a project against namiq.io's list of recent exploited CVEs with no CVE ids and no key. The window is monthly by default; `--daily`, `--weekly`, `--monthly` and `--open` choose another. The list request carries nothing from the project, and only the ids whose product a declared dependency matches are read from Lattice. Without ids, the "nothing to check" message now names `--discover` first.
+
 ## 0.4.8 — 2026-11-08
 
 - New: `lattice-scan inventory --share` prints the host's important software as one block to copy and paste into My products in the Lattice Analyst. The block (`LATTICE INVENTORY v1`, at most 150 lines and 12 KB, format in `docs/INVENTORY-BLOCK.md`) holds the kernel, what listens (with the package that owns it), any installed item the tool's own matcher links to an entry of today's CISA list, the running container images, snaps and a curated list of server, edge and admin software, each with the reason it is listed, and the firewall and SSH settings. It names software and versions only: no host name, address, user name, serial or path. It reads namiq.io's public recent list once so that nothing the list could concern is left out; `--no-feed` skips that and the block says so. `--max-lines N` lowers the cap; `--all FILE` writes every package, snap and image to a private file. Nothing else leaves the machine.

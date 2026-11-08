@@ -1985,6 +1985,7 @@ who can do what:
 examples:
   lattice-scan project . --kev-catalogue known_exploited_vulnerabilities.json                  # needs a confirmed key
   lattice-scan project . --cve CVE-2026-46300,CVE-2021-44228                                    # works without a key
+  lattice-scan project . --discover                                                             # no ids, no key: recent exploited CVEs (monthly); --weekly, --daily, --open narrow it
   lattice-scan project api/ web/ --name API --name WEB --cve CVE-2026-46300 --csv findings.csv
   lattice-scan project . --kev-catalogue kev.json --format csv > findings.csv
   lattice-scan project . --kev-catalogue kev.json --fail-on in-range        # exit 1 when a declared version is inside an affected range
@@ -2142,8 +2143,10 @@ def cmd_project(a) -> int:
     if bad:
         print(f"not a CVE id: {', '.join(bad[:5])} (write them like CVE-2026-46300, separated by commas)", file=sys.stderr)
         return 2
-    if not ids and not a.kev_catalogue:
-        print("nothing to check: name CVEs with --cve CVE-A,CVE-B (or --cve-file), or give --kev-catalogue FILE (needs a key with a confirmed email)", file=sys.stderr)
+    discover = bool(a.discover or a.period)
+    if not ids and not a.kev_catalogue and not discover:
+        print("nothing to check: add --discover to check against the recent exploited list (no key needed), or name CVEs with --cve CVE-A,CVE-B (or --cve-file), "
+              "or give --kev-catalogue FILE (needs a key with a confirmed email)", file=sys.stderr)
         return 2
     if a.kev_catalogue and not KEY:
         print(f"no key: {NEEDS_KEY}", file=sys.stderr)
@@ -2167,6 +2170,17 @@ def cmd_project(a) -> int:
             print(f"this key's tier is '{tier}': the email behind it is not confirmed yet. Confirm it from the message Lattice sent to the key's owner, then run again. "
                   "Until then, name the CVEs with --cve CVE-A,CVE-B.", file=sys.stderr)
             return 2
+    if discover:
+        window = a.period or "monthly"
+        progress(f"[project] --discover: reading the {window} list of recent exploited CVEs from {FEED_URL} (a plain request: nothing from your project is sent) ...")
+        try:
+            feed = read_feed("all" if window == "monthly" else window)   # the feed's whole list is the last thirty days, which is the monthly window
+        except LatticeError as err:
+            print(f"stopped: {err}", file=sys.stderr)
+            return 3
+        known = {e["cve"] for e in catalogue}
+        catalogue += [{"cve": r["id"], "vendor": r.get("vendor", ""), "product": r.get("product", ""), "title": ""} for r in feed["exploited"] if r["id"] not in known]
+        progress(f"[project] --discover: {len(feed['exploited'])} exploited CVE(s) in the {window} list; only those whose product a dependency here matches are read from Lattice")
     entries: dict[str, dict | None] = {}   # one read per id for the whole run, however many folders match it: the keyless day is 60 reads
     for root_s in a.paths:
         root = Path(root_s).resolve()
@@ -2985,6 +2999,11 @@ def main() -> int:
     pj.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
     pj.add_argument("--cve", action="append", help="CVE ids, comma separated (CVE-A,CVE-B); repeatable"); pj.add_argument("--cve-file", help="file of ids, one or several per line, # comments")
     pj.add_argument("--kev-catalogue", help="CISA's known_exploited_vulnerabilities.json; chooses which ids to read. Needs a key whose email is confirmed. Nothing from the file is sent")
+    pj.add_argument("--discover", action="store_true", help="no CVE ids needed, no key needed: read namiq.io's list of recent exploited CVEs, keep those whose product a dependency here matches, and read only those from Lattice (default window: monthly)")
+    pj.add_argument("--daily", dest="period", action="store_const", const="daily", help="with --discover: CVEs added or published in the last day or two")
+    pj.add_argument("--weekly", dest="period", action="store_const", const="weekly", help="with --discover: the last seven days")
+    pj.add_argument("--monthly", dest="period", action="store_const", const="monthly", help="with --discover: the last thirty days (the default)")
+    pj.add_argument("--open", dest="period", action="store_const", const="open", help="with --discover: exploited CVEs older than a week but within thirty days, overdue first")
     pj.add_argument("--max-read", type=int, default=None, help="most ids to read from Lattice per run (default 200 with a key, 40 without: the keyless day is 60)")
     pj.add_argument("--format", choices=["console", "csv", "json"], default="console", help="what to print (default console: a report for a person)")
     pj.add_argument("--csv", help="also write the findings as CSV to this file")
