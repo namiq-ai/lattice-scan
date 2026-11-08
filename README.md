@@ -95,6 +95,8 @@ Not sure whether you want this command line, the Claude skill or the Lattice MCP
 confirmed yet (tier `trial`) is refused with a message to confirm it; no id is read. **Without a key you name the CVEs yourself**, comma separated:
 `lattice-scan project . --cve CVE-2026-46300,CVE-2021-44228` (at most 40 a run, inside the keyless daily allowance).
 
+**No ids and no key:** `lattice-scan project . --discover` reads namiq.io's list of recent exploited CVEs (the last thirty days; `--weekly`, `--daily` and `--open` change the window), keeps the ones whose product a dependency in your project matches, and reads only those from Lattice. The list request carries nothing from your project.
+
 ```bash
 lattice-scan project . --cve CVE-2026-46300,CVE-2021-44228                       # no key needed: only the CVEs you name
 LATTICE_API_KEY=... lattice-scan project .  --kev-catalogue known_exploited_vulnerabilities.json   # confirmed key: CISA's file chooses the ids

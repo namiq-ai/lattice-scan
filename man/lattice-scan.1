@@ -453,6 +453,12 @@ Check a project for two named CVEs, no key needed:
 lattice-scan project . --cve CVE-2026-46300,CVE-2021-44228
 .fi
 .PP
+With no ids and no key, check against the recent exploited list (monthly by default; \fB\-\-daily\fR, \fB\-\-weekly\fR, \fB\-\-monthly\fR and \fB\-\-open\fR narrow or change the window). The list is a plain request that carries nothing from your project; only the ids whose product a dependency matches are read from Lattice:
+.PP
+.nf
+lattice-scan project . \-\-discover
+.fi
+.PP
 With a key whose email is confirmed, let CISA's catalogue choose the ids:
 .PP
 .nf
