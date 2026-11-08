@@ -16,6 +16,21 @@ class Manual(unittest.TestCase):
         opts = set(re.findall(r'"(--[a-z][a-z-]+)"', SOURCE)) - {"--version", "--help", "--qf"}
         self.assertEqual(sorted(o for o in opts if o not in MAN), [])
 
+    def test_the_docs_name_only_options_the_parser_defines(self):
+        """The reverse of the test above: a skill or README line that shows a lattice-scan command must not promise a flag it lacks (the skill once named --format for the host check)."""
+        defined = set(re.findall(r'"(--[a-z][a-z-]+)"', SOURCE)) | {"--version", "--help"}
+        defined |= {f"--{f}" for f in ("name", "position", "company", "email", "purpose")}     # get-key builds these in a loop
+        defined |= {"--show-keys", "--marketplace"}                                             # gpg's and Claude Code's, shown beside our commands
+        bad = []
+        for name in ("README.md", "skills/lattice-scan/SKILL.md"):
+            for n, line in enumerate((ROOT / name).read_text().splitlines(), 1):
+                if "lattice-scan" not in line and ".pyz" not in line:
+                    continue
+                for opt in re.findall(r"(?<![\w-])(--[a-z][a-z-]+)", line):
+                    if opt not in defined:
+                        bad.append(f"{name}:{n} {opt}")
+        self.assertEqual(bad, [])
+
     def test_every_subcommand_is_in_the_manual(self):
         for name in re.findall(r'sub\.add_parser\("([a-z]+)"', SOURCE):
             self.assertRegex(MAN, rf"\b{name}\b", name)

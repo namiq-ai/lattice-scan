@@ -5,7 +5,7 @@
 lattice-scan \- check this host, or a project's declared dependencies, against the CVEs CISA lists as exploited, through Lattice
 .SH SYNOPSIS
 .B lattice-scan
-[\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-discover\fR] [\fB\-\-refresh\fR [\fB\-\-inventory\fR]] [\fB\-\-list\fR] [\fB\-\-deep\fR] [\fB\-\-again\fR] [\fB\-\-keep\fR] [\fB\-\-debug\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
+[\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-discover\fR] [\fB\-\-format\fR \fBconsole\fR|\fBjson\fR|\fBcsv\fR] [\fB\-\-json\fR \fIFILE\fR] [\fB\-\-refresh\fR [\fB\-\-inventory\fR]] [\fB\-\-list\fR] [\fB\-\-deep\fR] [\fB\-\-again\fR] [\fB\-\-keep\fR] [\fB\-\-debug\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
 .br
 .B lattice-scan project
 [\fIPATH\fR...] [\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-kev\-catalogue\fR \fIFILE\fR] [\fB\-\-max\-read\fR \fIN\fR]
@@ -13,10 +13,10 @@ lattice-scan \- check this host, or a project's declared dependencies, against t
 [\fB\-\-color\fR \fBauto\fR|\fBalways\fR|\fBnever\fR] [\fB\-\-width\fR \fIN\fR] [\fB\-\-fail\-on\fR \fBnever\fR|\fBin\-range\fR|\fBcandidate\fR]
 .br
 .B lattice-scan recent
-[\fB\-\-period\fR \fBall\fR|\fBdaily\fR|\fBweekly\fR|\fBopen\fR] [\fB\-\-all\fR|\fB\-\-daily\fR|\fB\-\-weekly\fR|\fB\-\-open\fR] [\fB\-\-max\-read\fR \fIN\fR] [\fB\-\-fail\-on\fR \fBnever\fR|\fBin\-range\fR|\fBcandidate\fR] [\fB\-\-no\-critical\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
+[\fB\-\-period\fR \fBall\fR|\fBdaily\fR|\fBweekly\fR|\fBopen\fR] [\fB\-\-all\fR|\fB\-\-daily\fR|\fB\-\-weekly\fR|\fB\-\-open\fR] [\fB\-\-max\-read\fR \fIN\fR] [\fB\-\-format\fR \fBconsole\fR|\fBjson\fR|\fBcsv\fR] [\fB\-\-json\fR \fIFILE\fR] [\fB\-\-fail\-on\fR \fBnever\fR|\fBin\-range\fR|\fBcandidate\fR] [\fB\-\-no\-critical\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
 .br
 .B lattice-scan enrich
-[\fB\-\-cve\fR \fITEXT\fR]... [\fB\-\-file\fR \fIFILE\fR]... [\fB\-\-max\-read\fR \fIN\fR] [\fB\-\-fail\-on\fR \fBnever\fR|\fBexploited\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
+[\fB\-\-cve\fR \fITEXT\fR]... [\fB\-\-file\fR \fIFILE\fR]... [\fB\-\-max\-read\fR \fIN\fR] [\fB\-\-format\fR \fBconsole\fR|\fBjson\fR|\fBcsv\fR] [\fB\-\-json\fR \fIFILE\fR] [\fB\-\-fail\-on\fR \fBnever\fR|\fBexploited\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
 .br
 .B lattice-scan posture
 [\fB\-\-deep\fR] [\fB\-\-format\fR console|json] [\fB\-\-json\fR \fIFILE\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
@@ -337,6 +337,8 @@ It does not compare with this host and writes no records. Without a key it reads
 .SS get\-key
 Asks for a Lattice key for a real person. Without \fB\-\-accept\-terms\fR nothing is sent: it prints who the key would be for, where the beta terms are, and stops with status 2. The person must have read the terms and agreed, and must read the mailbox given: the key and a confirmation email are sent there, and a click on "not me" withdraws the key.
 The terms version is read from the key service's own published description and sent exactly. The key is stored in the records folder as the file \fBkey\fR (mode 0600), never printed, and used automatically by later runs while the file stays private to the user. If a key is already stored it asks for nothing more unless \fB\-\-force\fR is given.
+.SH RESULT AS DATA
+\fB\-\-format json\fR or \fB\-\-format csv\fR on the host check, \fBrecent\fR and \fBenrich\fR prints the RESULT BY CVE table as one JSON document (schema \fBlattice\-scan\-result/1\fR: tool, command, window, exit code, counts by result, rows, and the findings still open from earlier runs) or as CSV with a header row, and nothing else on standard output; progress and errors stay on standard error. \fB\-\-json FILE\fR writes the JSON to a file (mode 0600, because it names this host's software) and leaves the screen unchanged. A CSV cell that starts with = + \- or @ has a leading apostrophe so a spreadsheet does not run it. \fBproject\fR and \fBposture\fR have their own \fB\-\-format\fR and \fB\-\-json\fR.
 .SH EXIT STATUS
 .TP
 .B 0

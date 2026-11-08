@@ -56,6 +56,38 @@ class Context(Base):
         rc, _, _ = self.run_cli("--fail-on", "in-range", "--again", "--cve", "CVE-2099-0001")
         self.assertEqual(rc, 1 if verdict == "in-range" else 0)
 
+    def test_format_json_gives_the_result_table_alone_and_the_exit_code(self):
+        rc, out, _ = self.run_cli("--format", "json", "--cve", "CVE-2099-0001")
+        doc = json.loads(out)                                                       # stdout is one JSON document: no table, no prose around it
+        self.assertEqual(rc, 0)
+        self.assertEqual(doc["schema"], "lattice-scan-result/1"); self.assertEqual(doc["exitCode"], 0)
+        row = next(r for r in doc["rows"] if r["cve"] == "CVE-2099-0001")
+        self.assertEqual(row["result"], "CANDIDATE"); self.assertEqual(doc["counts"]["CANDIDATE"], 1)
+        self.assertEqual(set(row), set(cli.RESULT_KEYS))
+        self.assertNotIn("RESULT BY CVE", out)
+
+    def test_json_file_is_private_and_the_console_is_unchanged(self):
+        import os, stat, tempfile
+        f = Path(tempfile.mkdtemp()) / "r.json"
+        rc, out, _ = self.run_cli("--json", str(f), "--cve", "CVE-2099-0001")
+        self.assertIn("RESULT BY CVE", out)                                         # --json FILE adds a file; it does not change the screen
+        self.assertEqual(json.loads(f.read_text())["rows"][0]["cve"], "CVE-2099-0001")
+        self.assertEqual(stat.S_IMODE(os.stat(f).st_mode), 0o600)                   # it names this host's software
+
+    def test_format_csv_has_a_header_and_defuses_spreadsheet_formulas(self):
+        Stub.answers = {"CVE-2099-0001": with_links()}
+        rc, out, _ = self.run_cli("--format", "csv", "--cve", "CVE-2099-0001")
+        lines = out.strip().splitlines()
+        self.assertEqual(lines[0], ",".join(cli.RESULT_KEYS))
+        self.assertTrue(lines[1].startswith("CVE-2099-0001,"))
+        self.assertEqual(cli.report._cell("=HYPERLINK(1)"), "'=HYPERLINK(1)")
+
+    def test_enrich_gives_the_same_json_shape(self):
+        rc, out, _ = self.run_cli("enrich", "--format", "json", "--cve", "CVE-2099-0001")
+        doc = json.loads(out)
+        self.assertEqual(doc["command"], "enrich")
+        self.assertEqual(doc["rows"][0]["cve"], "CVE-2099-0001")
+
     def test_fail_on_exit_decides_from_the_version_check(self):
         inr, out = {"versionCheck": {"verdict": "in-range"}}, {"versionCheck": {"verdict": "outside-range"}}
         self.assertEqual(cli.fail_on_exit("never", [inr]), 0)
