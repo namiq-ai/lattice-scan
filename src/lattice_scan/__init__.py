@@ -1,3 +1,3 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 NamiQ LLC
-__version__ = "0.4.9"
+__version__ = "0.4.10"
