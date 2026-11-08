@@ -569,6 +569,7 @@ class Lattice:
 
 
 from lattice_scan import report  # noqa: E402
+from lattice_scan import lattice_version as lv  # noqa: E402   # the one implementation of versions, ranges, product ids and the verdict ladder
 
 
 def run(cmd: list[str]) -> str:
@@ -1363,33 +1364,16 @@ def upstream(v: str) -> tuple[int, ...] | None:
     '1:2.17.1-1' -> (2,17,1); '7.0.0-41-cix' -> (7,0,0); 'v22.22.1' -> (22,22,1). Distro revisions (-1ubuntu3), epochs and +suffixes are dropped, so a
     distro that backports a fix under the same upstream number looks unfixed here: the changelog check below exists for exactly that.
     """
-    v = re.sub(r"^\d+:", "", v.strip().lstrip("v"))
-    m = re.match(r"\d+(\.\d+)*", v)
-    return tuple(int(x) for x in m.group(0).split(".")) if m else None
+    return lv.generic_key(v)
 
 
 def cmp(a: tuple[int, ...], b: tuple[int, ...]) -> int:
-    n = max(len(a), len(b))
-    a, b = a + (0,) * (n - len(a)), b + (0,) * (n - len(b))
-    return (a > b) - (a < b)
+    return lv._cmp_padded(a, b)
 
 
 def in_range(ver: tuple[int, ...], r: dict) -> bool | None:
-    """Is ver inside one NVD range? None when a bound is not a plain dotted number (a date, a build id): that range cannot be judged."""
-    bounds = {k: r[k] for k in ("start_including", "start_excluding", "end_including", "end_excluding") if r.get(k)}
-    if not bounds:
-        return None
-    parsed = {}
-    for k, v in bounds.items():
-        if not re.fullmatch(r"\d+(\.\d+)*", str(v)):
-            return None
-        parsed[k] = tuple(int(x) for x in str(v).split("."))
-    ok = True
-    if "start_including" in parsed: ok &= cmp(ver, parsed["start_including"]) >= 0
-    if "start_excluding" in parsed: ok &= cmp(ver, parsed["start_excluding"]) > 0
-    if "end_including" in parsed: ok &= cmp(ver, parsed["end_including"]) <= 0
-    if "end_excluding" in parsed: ok &= cmp(ver, parsed["end_excluding"]) < 0
-    return ok
+    """Is ver inside one NVD range? None when a bound is not a plain dotted number (a date, a build id): that range cannot be judged. See lattice_version."""
+    return lv.in_range(".".join(map(str, ver)), "generic", r)
 
 
 def fmt_range(r: dict) -> str:
@@ -2061,6 +2045,9 @@ def split_ids(values) -> list[str]:
     return out
 
 
+_PID_ECO = {"pypi": "pypi", "npm": "npm", "maven": "maven", "cargo": "cargo", "image": "docker", "apt": "deb"}   # manifests' names to lattice_version's
+
+
 def project_inventory(comps) -> tuple[dict, dict[str, list]]:
     """An inventory in the shape the host matcher reads, built from declared components, and where each name was declared.
 
@@ -2303,10 +2290,9 @@ def cmd_project(a) -> int:
                 verdicts.append(vc_one)
                 for c in where.get(key, []):
                     declared.append({"name": c.name, "spec": c.spec, "version": c.version, "file": c.file, "line": c.line, "ecosystem": c.ecosystem,
-                                     "verdict": vc_one["verdict"], "why": vc_one["why"]})
+                                     "verdict": vc_one["verdict"], "why": vc_one["why"], "pid": lv.pid(c.name, _PID_ECO.get(c.ecosystem, "generic"))})
             # The finding's own verdict is the most pressing of its components': a lead (undetermined) must never hide a pinned version that is outside, or the other way round.
-            order = {"in-range": 0, "undetermined": 1, "outside-range": 2, "lead": 3}     # a lead ranks below every real comparison
-            vc = min(verdicts, key=lambda v: order[v["verdict"]])
+            vc = min(verdicts, key=lambda v: lv.VERDICT_RANK[v["verdict"]])     # a lead ranks below every real comparison (lattice_version.VERDICTS)
             hits.append({"cve": cve, "title": e["title"], "why": why, "listed": e["added"], "due": e["due"], "action": e["action"][:400], "versionCheck": vc, "declared": declared})
             checked.append({"cve": cve, "listed": "yes", "product": prod, "result": vc["verdict"].upper().replace("-", " "),
                             "matched": "; ".join(dict.fromkeys(f"{d['name']} {d['version'] or d['spec'] or '(no version)'} ({d['file']})" for d in declared))})

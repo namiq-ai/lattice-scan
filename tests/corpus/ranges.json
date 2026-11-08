@@ -1,0 +1,4 @@
+{"CVE-2099-0101": {"vendor": "Exampleco", "product": "Examplelib", "ranges": [{"product": "exampleco/examplelib", "start_including": "2.0.1", "end_excluding": "2.15.0"}]},
+ "CVE-2099-0102": {"vendor": "Acme", "product": "Widgets", "ranges": [{"product": "acme/widgets", "end_excluding": "1.5.0"}]},
+ "CVE-2099-0103": {"vendor": "Globex", "product": "Webserver", "ranges": [{"product": "globex/webserver", "start_including": "1.16.0", "end_excluding": "1.20.0"}]},
+ "CVE-2099-0104": {"vendor": "Nothing", "product": "Declared", "ranges": [{"product": "nothing/declared", "end_excluding": "9.0"}]}}

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: the bundled script (`lattice-scan.pyz`, which the Claude skill and the plugin zip also carry) did not contain `share.py`, so `lattice-scan inventory --share` stopped with an ImportError there (it worked from a pip or apt install). The bundle now takes every module of the package, and a test runs the bundled script through `inventory --share`.
+- New: `lattice_version`, one module for version comparison (semver, pep440, dpkg, apk, rpm, maven, generic), NVD range bounds, product ids and the verdict order, with golden tables of at least 200 cases per scheme and a stored corpus of expected matches. The scan's behaviour is unchanged; a finding in the project JSON now carries its `pid`. See docs/LATTICE-VERSION.md.
 - Fixed: `project` no longer reads dependency files inside a `.build` folder (a build output folder; one project kept a third-party checkout there and its dependencies were counted as the project's own).
 
 ## 0.4.9 — 2026-11-08

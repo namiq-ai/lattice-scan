@@ -1,0 +1,4 @@
+examplelib==2.14.0
+examplelib2==1.0.0
+examplelib-client==2.14.0
+requests==2.31.0

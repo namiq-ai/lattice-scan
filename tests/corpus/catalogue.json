@@ -1,0 +1,6 @@
+{"vulnerabilities": [
+ {"cveID": "CVE-2099-0101", "vendorProject": "Exampleco", "product": "Examplelib", "vulnerabilityName": "Exampleco Examplelib RCE"},
+ {"cveID": "CVE-2099-0102", "vendorProject": "Acme", "product": "Widgets", "vulnerabilityName": "Acme Widgets XSS"},
+ {"cveID": "CVE-2099-0103", "vendorProject": "Globex", "product": "Webserver", "vulnerabilityName": "Globex Webserver overflow"},
+ {"cveID": "CVE-2099-0104", "vendorProject": "Nothing", "product": "Declared", "vulnerabilityName": "Nothing Declared here"}
+]}

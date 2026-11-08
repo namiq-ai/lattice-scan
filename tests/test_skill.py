@@ -1,6 +1,6 @@
 """The Claude plugin and skill are published copy that makes Claude run code on someone's machine. These tests keep the bundle honest:
 the bundled script is the current source, the versions agree, and the wording cannot drift into a claim or a price."""
-import json, re, sys, unittest, zipfile
+import json, os, re, sys, tempfile, unittest, zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -25,9 +25,20 @@ class Bundle(unittest.TestCase):
 
     def test_bundled_script_is_the_current_source(self):
         with zipfile.ZipFile(PYZ) as z:
-            for m in ("cli.py", "manifests.py", "posture.py", "report.py", "__init__.py", "__main__.py"):
+            mods = sorted(f.name for f in (ROOT / "src/lattice_scan").glob("*.py"))
+            self.assertIn("lattice_version.py", mods)
+            self.assertEqual(sorted(n.split("/")[-1] for n in z.namelist() if n.startswith("lattice_scan/") and n.endswith(".py")), mods,
+                             "the bundled .pyz must hold every module of the package (it once lacked share.py)")
+            for m in mods:
                 self.assertEqual(z.read(f"lattice_scan/{m}"), (ROOT / "src/lattice_scan" / m).read_bytes(),
                                  f"{m} in the bundled .pyz is stale: run packaging/build.py")
+
+    def test_the_bundled_script_imports_and_runs_its_lazy_modules(self):
+        import subprocess
+        for argv in (["--version"], ["inventory", "--share", "--no-feed", "--max-lines", "10"]):
+            r = subprocess.run([sys.executable, str(PYZ), *argv], capture_output=True, text=True, timeout=120, env={**os.environ, "LATTICE_SCAN_DIR": tempfile.mkdtemp()})
+            self.assertNotIn("ImportError", r.stderr, f"{argv}: {r.stderr[-300:]}")
+            self.assertEqual(r.returncode, 0, f"{argv}: {r.stderr[-300:]}")
 
     def test_versions_agree(self):
         plugin = json.loads((ROOT / ".claude-plugin/plugin.json").read_text())

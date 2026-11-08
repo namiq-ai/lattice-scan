@@ -15,7 +15,7 @@ sys.path.insert(0, str(HERE / "src"))
 from lattice_scan import __version__ as VERSION  # noqa: E402
 
 MAINTAINER = "NamiQ LLC <contact@namiq.io>"  # the contact Lattice itself gives in its answers
-MODULES = ("__init__.py", "__main__.py", "cli.py", "manifests.py", "posture.py", "report.py")
+MODULES = tuple(sorted(f.name for f in SRC.glob("*.py")))   # every module: a hand-kept list once left share.py out of the bundled script (inventory --share crashed)
 
 
 def wheel() -> None:
