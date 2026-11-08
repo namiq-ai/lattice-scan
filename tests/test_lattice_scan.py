@@ -223,16 +223,16 @@ class Client(unittest.TestCase):
         self.assertIn("1 exploited entries read", out)
         self.assertGreater(len(Stub.seen), n)
 
-    def test_quota_error_stops_with_the_servers_message_and_exit_1(self):
+    def test_quota_error_stops_with_the_servers_message_and_exit_3(self):
         Stub.mode = "quota"
         rc, _, err = self.run_cli("--cve", "CVE-2099-0001")
-        self.assertEqual(rc, 1); self.assertIn("daily limit reached", err)
+        self.assertEqual(rc, 3); self.assertIn("daily limit reached", err)
         self.assertIn("STOPPED", (cli.OUT / "scan.log").read_text())
 
     def test_server_error_is_reported_not_raised(self):
         Stub.mode = "http500"
         rc, _, err = self.run_cli("--cve", "CVE-2099-0001")
-        self.assertEqual(rc, 1); self.assertIn("HTTP 500", err)
+        self.assertEqual(rc, 3); self.assertIn("HTTP 500", err)
 
     def _flaky(self, fails, exc):
         """Make the first `fails` network opens raise `exc`, then behave normally."""
@@ -255,7 +255,7 @@ class Client(unittest.TestCase):
         patch, calls = self._flaky(99, urllib.error.URLError("handshake timed out"))
         with patch:
             rc, _, err = self.run_cli("--cve", "CVE-2099-0001")
-        self.assertEqual(rc, 1); self.assertEqual(len(calls), 3)
+        self.assertEqual(rc, 3); self.assertEqual(len(calls), 3)
         self.assertIn("cannot reach Lattice after 3 tries", err)
 
     def test_a_rate_limit_or_client_error_is_not_retried(self):
@@ -263,12 +263,12 @@ class Client(unittest.TestCase):
         patch, calls = self._flaky(0, None)
         with patch:
             rc, _, err = self.run_cli("--cve", "CVE-2099-0001")
-        self.assertEqual(rc, 1); self.assertIn("HTTP 500", err); self.assertEqual(len(calls), 1)
+        self.assertEqual(rc, 3); self.assertIn("HTTP 500", err); self.assertEqual(len(calls), 1)
 
     def test_unreachable_server(self):
         cli.URL = "http://127.0.0.1:1/mcp"
         rc, _, err = self.run_cli("--cve", "CVE-2099-0001")
-        self.assertEqual(rc, 1); self.assertIn("cannot reach Lattice", err)
+        self.assertEqual(rc, 3); self.assertIn("cannot reach Lattice", err)
 
     def test_key_is_sent_only_when_set_and_never_logged(self):
         cli.KEY = "secret-key-value"
@@ -307,7 +307,7 @@ class Hardening(Client):
     def test_key_not_sent_to_cleartext_remote(self):
         cli.KEY = "k"; cli.URL = "http://lattice.example.invalid/mcp"
         rc, _, err = self.run_cli("--cve", "CVE-2099-0001")
-        self.assertEqual(rc, 1); self.assertIn("refusing to use", err)
+        self.assertEqual(rc, 3); self.assertIn("refusing to use", err)
 
     def test_redirect_is_not_followed_so_the_key_goes_nowhere_else(self):
         other = HTTPServer(("127.0.0.1", 0), Stub)
@@ -318,7 +318,7 @@ class Hardening(Client):
             rc, _, err = self.run_cli("--cve", "CVE-2099-0001")
         finally:
             other.shutdown(); other.server_close()
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 3)
         self.assertEqual(len(Stub.seen), 1)           # only the first server was ever asked
 
     def test_control_characters_from_the_server_are_neutralised(self):

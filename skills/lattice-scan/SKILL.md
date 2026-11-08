@@ -156,7 +156,7 @@ table as printed, then say what it means. Do not rebuild it from memory.
 | `MATCHED / COMPARED` | What matched, or what was compared. This is the column to quote. |
 
 - On a narrow terminal the tool hides `LISTED`, `PRODUCT` and `CVSS` (it says so under the table) so the last column keeps room. Output captured by this skill is not a terminal, so you get every column.
-- Progress lines (which part of the host or which file is being read, `[n/N %] image ...` while images are opened, then `[n/N] CVE-...`) go to stderr and are on by default. Use `--quiet` (`-q`) when only the result is wanted. Standard output, `--format csv|json` and exit codes do not change.
+- Progress lines (which part of the host or which file is being read, `[n/N %] image ...` while images are opened, then `[n/N] CVE-...`) go to stderr and are on by default. Use `--quiet` (`-q`) when only the result is wanted. Standard output and exit codes do not change.
 - A finding from an earlier run that is still open is part of the same table, so there is no separate "not yet fixed" line to look for.
 
 Offer to help the user read the vendor advisory against the installed version. Do not run `resolve`. Closing a finding needs the user's own proof (a changelog
@@ -208,5 +208,5 @@ A key lifts the allowance. Offer one only when a run stopped at the limit or the
 
 ## 6. If it fails
 
-For a host check, exit 1 is a failure to reach or use Lattice (the message says which) and exit 2 is a usage problem. For `project`, exit 1 means `--fail-on` matched, exit 2 is a usage problem or an unreadable input, and exit 3 means it stopped part-way: read the NOT READ list. Report the message as printed and stop; do not retry in a
+Exit codes mean the same in every command: 0 done, 1 `--fail-on` matched (host scan, `recent`, `project`, `enrich`), 2 a usage problem or an unreadable input, and 3 it stopped part-way (Lattice's allowance ran out or it could not be reached; the message says which): read the NOT READ list. In earlier versions a host check returned 1 for a stop. Report the message as printed and stop; do not retry in a
 loop, because keyless access has a small daily allowance.
