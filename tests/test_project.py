@@ -83,6 +83,7 @@ class Manifests(unittest.TestCase):
     def test_vendored_and_agent_trees_are_skipped_and_a_cut_is_reported(self):
         write(self.root, "node_modules/x/package.json", json.dumps({"dependencies": {"nope": "1.0.0"}}))
         write(self.root, ".claude/worktrees/w/requirements.txt", "nope==1\n")
+        write(self.root, "deploy/.build/some_clone/requirements.txt", "nope==1\n")      # a build folder holding a third-party checkout is not this project's declaration
         write(self.root, "requirements.txt", "yes==1\n")
         comps, files, cut = manifests.read_project(self.root)
         self.assertEqual([c.name for c in comps], ["yes"])

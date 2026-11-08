@@ -20,7 +20,7 @@ try:  # Python 3.11+
 except ImportError:  # 3.9 / 3.10
     tomllib = None  # type: ignore[assignment]
 
-SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "env", "__pycache__", ".tox", ".mypy_cache", ".next", "dist", "build", "site-packages", ".impl-worktrees", ".claude", "runtime", "workspace", "target", ".gradle", "cmake-build-debug", "cmake-build-release"}
+SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "env", "__pycache__", ".tox", ".mypy_cache", ".next", "dist", "build", ".build", "site-packages", ".impl-worktrees", ".claude", "runtime", "workspace", "target", ".gradle", "cmake-build-debug", "cmake-build-release"}
 MAX_FILES = 400
 MAX_BYTES = 5 * 1024 * 1024   # a manifest larger than this is not read: a hostile folder must not exhaust memory
 SKIPPED: list[str] = []       # files not read for being too large or for declaring entities, so the report can name them
