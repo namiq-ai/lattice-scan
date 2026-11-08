@@ -157,6 +157,8 @@ lattice-scan project . --cve CVE-2026-46300,CVE-2021-44228 --format csv | \
   python3 -c 'import csv,sys; [print(r["cve"], r["component"]) for r in csv.DictReader(sys.stdin) if r["verdict"]=="in-range"]'
 ```
 
+The signed exploited index: `lattice-scan index` fetches (at most once a day), checks and shows the Ed25519-signed list of every CISA-exploited CVE with NVD's version ranges that namiq.io publishes, so a later scan can match this machine's own inventory on this machine. Nothing from the machine is sent; a bad signature, an unknown key or a rolled-back generation is refused and the previous copy kept.
+
 Machine output: `--format json|csv` (or `--json FILE`, written with mode 0600) on the host check, `recent` and `enrich` gives the RESULT BY CVE table as one JSON document or CSV and nothing else on standard output.
 
 Exit status: `0` done, `1` `--fail-on` matched (the host scan, `recent`, `project` and `enrich`), `2` bad usage or an unreadable input, `3` stopped part-way (Lattice's allowance ran out or it could not be reached; the ids not read are listed).

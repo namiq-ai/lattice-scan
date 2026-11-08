@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- New: `lattice-scan index` fetches, checks and caches the signed exploited index (every CISA-exploited CVE with NVD's version ranges) from namiq.io: sha256 against the manifest, then an Ed25519 signature against a pinned key, with generation, schema and as-of date taken from the signed file. It refuses a bad signature, an unknown key (upgrade), a lower generation and a damaged copy, keeps the previous copy, uses the cache for a day, and uses it offline while it is within 14 days of its as-of date. Nothing from the machine is sent. Nothing else uses it yet.
 - New, internal: `ed25519`, a verify-only Ed25519 implementation in pure Python (RFC 8032 reference), so the tool can check a signed exploited index with only the standard library. Checked against the RFC test vector and OpenSSL signatures, and it refuses malformed or non-canonical input with False. Nothing uses it yet.
 
 ## 0.4.10 — 2026-11-08

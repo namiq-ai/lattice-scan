@@ -569,7 +569,7 @@ class Lattice:
 
 
 from lattice_scan import report  # noqa: E402
-from lattice_scan import lattice_version as lv  # noqa: E402   # the one implementation of versions, ranges, product ids and the verdict ladder
+from lattice_scan import exploited, lattice_version as lv  # noqa: E402   # the one implementation of versions, ranges, product ids and the verdict ladder
 
 
 def run(cmd: list[str]) -> str:
@@ -2325,6 +2325,44 @@ def cmd_project(a) -> int:
 CVE_ID = re.compile(r"\bCVE-\d{4}-\d{4,}\b", re.I)
 
 
+def fetch_bytes(url: str, limit: int) -> bytes:
+    """GET a public file as raw bytes (the signed exploited index is checked on its exact bytes): https only (http only for this machine), no redirect, size-capped.
+    Raises OSError, which exploited.load turns into 'unreachable'. The request carries nothing from this machine."""
+    from urllib.parse import urlparse
+    u = urlparse(url)
+    if not (u.scheme == "https" or (u.scheme == "http" and u.hostname in ("127.0.0.1", "localhost", "::1"))):
+        raise OSError(f"refusing {url}: not https")
+    req = urllib.request.Request(url, headers={"User-Agent": f"lattice-scan/{__version__}"})
+    with _OPENER.open(req, timeout=30) as r:
+        raw = r.read(limit + 1)
+    if len(raw) > limit:
+        raise OSError(f"{url} is larger than {limit} bytes")
+    return raw
+
+
+def cmd_index(a) -> int:
+    """`lattice-scan index`: fetch (at most once a day), check and report the signed exploited index. Exit 0 ok, 2 refused (bad signature, unknown key, lower
+    generation, or stale with --require-fresh), 3 unavailable. A stale index that is still the newest we could get is a warning, not a failure."""
+    exploited.INDEX_URL = env("INDEX_URL", exploited.INDEX_URL)
+    exploited.MANIFEST_URL = env("INDEX_MANIFEST_URL", exploited.MANIFEST_URL)
+    try:
+        r = exploited.load(cache_dir() / "exploited", fetch_bytes, force=a.refresh, require_fresh=a.require_fresh)
+    except exploited.IndexRefused as err:
+        print(f"refused: {err}", file=sys.stderr)
+        return 2
+    except exploited.IndexUnavailable as err:
+        print(f"stopped: {err}", file=sys.stderr)
+        return 3
+    wr = sum(1 for x in r["rows"] if x.get("rangeStatus") == "ranges")
+    print(f"exploited index: generation {r['generation']}, as of {r['exploitedAsOf']} ({r['ageDays']} day(s) old), {len(r['rows'])} CVEs "
+          f"({wr} with version ranges), from {r['source']}; signature checked.")
+    if r["note"]:
+        print(f"note: {r['note']}", file=sys.stderr)
+    if r["stale"]:
+        print(f"warning: older than {exploited.MAX_AGE_DAYS} days. `--all` and `--report` will refuse it; windowed runs do not use it.", file=sys.stderr)
+    return 0
+
+
 def fetch_json(url: str, what: str, limit: int = 1024 * 1024) -> dict:
     """GET a small JSON document: https only (http only for this machine), no redirect, size-capped, the same three tries as a Lattice request."""
     from urllib.parse import urlparse
@@ -3078,6 +3116,9 @@ def main() -> int:
     en.add_argument("--fail-on", choices=["never", "exploited"], default="never", help="exit 1 when any id is exploited (default never)")
     en.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each step on stderr (the default)")
     en.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
+    ix = sub.add_parser("index", help="fetch, check and show the signed exploited index (every CISA-listed CVE with NVD's version ranges) that lets a scan match this machine on this machine")
+    ix.add_argument("--refresh", action="store_true", help="ask namiq.io now, even if the copy is under a day old")
+    ix.add_argument("--require-fresh", action="store_true", help="exit 2 if the index is older than 14 days")
     gk = sub.add_parser("get-key", help="request a Lattice key for a real person who has read the terms and gave these details; the key is stored, never printed")
     for flag in ("name", "position", "company", "email", "purpose"):
         gk.add_argument(f"--{flag}", required=True, help=f"the person's {flag}" if flag != "purpose" else "what the key will be used for, one or two sentences (at least 20 characters)")
@@ -3116,6 +3157,7 @@ def main() -> int:
     if a.c == "posture": return cmd_posture(a)
     if a.c == "enrich": return structured(a, cmd_enrich)
     if a.c == "get-key": return cmd_get_key(a)
+    if a.c == "index": return cmd_index(a)
     if a.c == "impact": return cmd_impact(a)
     if a.c == "resolve": return cmd_resolve(a)
     if a.c == "add": return cmd_add(a)
