@@ -45,6 +45,7 @@ npm audit --json | python3 scripts/lattice-scan.pyz enrich          # ids found 
 python3 scripts/lattice-scan.pyz --refresh --inventory                # inventory only, no network call; prints totals (about 30 lines), the full lists are in inventory.json
 python3 scripts/lattice-scan.pyz --refresh --inventory --list > /dev/null   # every package, snap and image (thousands of lines: do not show that to the user)
 python3 scripts/lattice-scan.pyz --refresh                            # the inventory, then the same scan as with no argument (the daily list)
+python3 scripts/lattice-scan.pyz inventory --share                      # the important software as one block the user can paste into My products in the Lattice Analyst; show the block as it is
 python3 scripts/lattice-scan.pyz list                               # findings recorded so far
 python3 scripts/lattice-scan.pyz impact CVE-2026-1234               # the evidence for one finding
 ```
