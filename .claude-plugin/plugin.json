@@ -1,7 +1,7 @@
 {
   "name": "lattice-scan",
   "description": "Check the machine Claude is running on against CISA-exploited CVEs, looked up through Lattice. Prints evidence for a person to read.",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "author": {
     "name": "NamiQ LLC",
     "email": "contact@namiq.io"
