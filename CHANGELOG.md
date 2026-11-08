@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- New, internal: `ed25519`, a verify-only Ed25519 implementation in pure Python (RFC 8032 reference), so the tool can check a signed exploited index with only the standard library. Checked against the RFC test vector and OpenSSL signatures, and it refuses malformed or non-canonical input with False. Nothing uses it yet.
+
 ## 0.4.10 — 2026-11-08
 
 - Fixed: the bundled script (`lattice-scan.pyz`, which the Claude skill and the plugin zip also carry) did not contain `share.py`, so `lattice-scan inventory --share` stopped with an ImportError there (it worked from a pip or apt install). The bundle now takes every module of the package, and a test runs the bundled script through `inventory --share`.
