@@ -156,7 +156,7 @@ table as printed, then say what it means. Do not rebuild it from memory.
 | `MATCHED / COMPARED` | What matched, or what was compared. This is the column to quote. |
 
 - On a narrow terminal the tool hides `LISTED`, `PRODUCT` and `CVSS` (it says so under the table) so the last column keeps room. Output captured by this skill is not a terminal, so you get every column.
-- Progress lines (which part of the host or which file is being read, `[n/N %] image ...` while images are opened, then `[n/N] CVE-...`) go to stderr and are on by default. Use `--quiet` (`-q`) when only the result is wanted. Standard output and exit codes do not change.
+- Progress lines (which part of the host or which file is being read, `[n/N %] image ...` while images are opened, then `[n/N] CVE-...`) go to stderr and are on by default. Use `--quiet` (`-q`) when only the result is wanted. Standard output and exit codes do not change. When a program, not a person, reads the result, add `--format json` (host check, `recent`, `enrich`, `project`): one JSON document on standard output and nothing else.
 - A finding from an earlier run that is still open is part of the same table, so there is no separate "not yet fixed" line to look for.
 
 Offer to help the user read the vendor advisory against the installed version. Do not run `resolve`. Closing a finding needs the user's own proof (a changelog

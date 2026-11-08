@@ -1814,10 +1814,15 @@ def detail_files(inv: dict) -> None:
           "  lattice-scan resolve CVE-... --status fixed --proof \"...\"   record the outcome")
 
 
+RESULT: dict[str, list[list[str]]] = {}
+RESULT_KEYS = ["cve", "exploit", "cvss", "listed", "patchDue", "ransomware", "product", "result", "matched"]   # the nine columns of the console table
+
+
 def print_table(rows: list[list[str]], title: str = "RESULT BY CVE") -> None:
     """The RESULT BY CVE table of the host check, `recent` and `enrich` (nine columns, see cells())."""
     if not rows:
         return
+    RESULT.setdefault(title, []).extend(rows)   # --format json|csv|--json read the same rows the console table shows
     print("\n" + title)
     lines, hidden = report.table(["CVE", "Exploit", "CVSS", "Listed", "Patch due", "Ransom", "Product", "Result", "Matched / compared"], rows,
                                  report.width_for(None), fit=sys.stdout.isatty(), drop=("Listed", "Product", "CVSS"), min_last=45)
@@ -1825,6 +1830,40 @@ def print_table(rows: list[list[str]], title: str = "RESULT BY CVE") -> None:
     if hidden:
         print(f"(narrow terminal: hidden {', '.join(h.upper() for h in hidden)}; pipe the output, for example `| cat`, to see every column)")
     print()
+
+
+def structured(a, fn) -> int:
+    """Run a command whose result is the RESULT BY CVE table (host check, `recent`, `enrich`) and give that table as `--format json` or `csv`, or write it to `--json FILE`.
+    The human text of the run is not mixed in: progress and errors stay on stderr, and the exit code is in the document. Console output is unchanged."""
+    import contextlib, csv, io
+    fmt, jfile = getattr(a, "format", "console"), getattr(a, "json", None)
+    if fmt == "console" and not jfile:
+        return fn(a)
+    RESULT.clear()
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = fn(a)
+    rows = [dict(zip(RESULT_KEYS, r)) for r in RESULT.get("RESULT BY CVE", [])]
+    earlier = [dict(zip(RESULT_KEYS, r)) for r in RESULT.get(EARLIER_TITLE, [])]
+    counts: dict[str, int] = {}
+    for r in rows:
+        counts[r["result"]] = counts.get(r["result"], 0) + 1
+    doc = {"schema": "lattice-scan-result/1", "tool": f"lattice-scan {__version__}", "command": a.c or "scan", "on": TODAY,
+           "window": getattr(a, "period", None), "exitCode": rc, "counts": counts, "rows": rows, "earlier": earlier}
+    if jfile:
+        write_private(Path(jfile), json.dumps(doc, indent=1))   # names this host's software: mode 0600
+    if fmt == "json":
+        print(json.dumps(doc, indent=1))
+    elif fmt == "csv":
+        out = io.StringIO()
+        w = csv.writer(out, lineterminator="\n")
+        w.writerow(RESULT_KEYS)
+        for r in rows + earlier:
+            w.writerow([report._cell(r[k]) for k in RESULT_KEYS])
+        sys.stdout.write(out.getvalue())
+    else:
+        sys.stdout.write(buf.getvalue())
+    return rc
 
 
 def fail_on_exit(mode: str, imps: list[dict]) -> int:
@@ -2994,6 +3033,8 @@ def main() -> int:
     p.add_argument("--list", action="store_true", help="with --refresh or when the inventory is shown: print every package, snap and image instead of totals")
     p.add_argument("--deep", action="store_true", help="deep inventory: open every local image, not only running ones, and list the Python/Node/Java/Ruby packages inside them (minutes). Default is quick")
     p.add_argument("--refresh", action="store_true", help="collect the inventory again now and print all of it; with ids, also re-read them. Alone it makes no Lattice call")
+    p.add_argument("--format", choices=["console", "json", "csv"], default=argparse.SUPPRESS, help="what to print: console (default), json or csv. The result table only; progress stays on stderr")
+    p.add_argument("--json", metavar="FILE", default=argparse.SUPPRESS, help="also write the result as JSON to FILE (mode 0600: it names this host's software)")
     p.add_argument("--fail-on", choices=["never", "in-range", "candidate"], default="never", help="exit 1 when a candidate (or an in-range one) is found; default never: a person reads it")
     p.add_argument("--again", action="store_true", help="re-read ids already read before")
     p.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print what is being checked, step by step, on stderr (the default; see --quiet)")
@@ -3036,6 +3077,8 @@ def main() -> int:
     rc.add_argument("--weekly", dest="period", action="store_const", const="weekly", help="same as --period weekly")
     rc.add_argument("--all", dest="period", action="store_const", const="all", help="same as --period all (the default)")
     rc.add_argument("--max-read", type=int, default=200, help="most exploited ids to consider from the list (default 200: the whole list)")
+    rc.add_argument("--format", choices=["console", "json", "csv"], default=argparse.SUPPRESS, help="what to print: console (default), json or csv")
+    rc.add_argument("--json", metavar="FILE", default=argparse.SUPPRESS, help="also write the result as JSON to FILE (mode 0600)")
     rc.add_argument("--fail-on", choices=["never", "in-range", "candidate"], default=argparse.SUPPRESS, help="exit 1 when a candidate (or an in-range one) is found; default never")
     rc.add_argument("--no-critical", action="store_true", help="leave out the critical (not known exploited) ids")
     rc.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each step on stderr (the default)")
@@ -3044,6 +3087,8 @@ def main() -> int:
     en.add_argument("--cve", action="append", help="CVE ids or any text containing them (repeatable)")
     en.add_argument("--file", action="append", help="a file to find CVE ids in; - or a pipe on stdin works too")
     en.add_argument("--max-read", type=int, default=None, help="most ids to read from Lattice (default 200 with a key, 20 without)")
+    en.add_argument("--format", choices=["console", "json", "csv"], default=argparse.SUPPRESS, help="what to print: console (default), json or csv")
+    en.add_argument("--json", metavar="FILE", default=argparse.SUPPRESS, help="also write the result as JSON to FILE (mode 0600)")
     en.add_argument("--fail-on", choices=["never", "exploited"], default="never", help="exit 1 when any id is exploited (default never)")
     en.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each step on stderr (the default)")
     en.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
@@ -3079,11 +3124,11 @@ def main() -> int:
         # long, and a keyless run that has to look many entries up reaches Lattice's limit (about 20 reads an hour).
         a.c, a.period, a.max_read, a.no_critical = "recent", "daily", 40, False
         progress("[recent] no command and no CVE id given: running the daily list (lattice-scan recent --daily)")
-        return cmd_recent(a)
+        return structured(a, cmd_recent)
     if a.c == "project": return cmd_project(a)
-    if a.c == "recent": return cmd_recent(a)
+    if a.c == "recent": return structured(a, cmd_recent)
     if a.c == "posture": return cmd_posture(a)
-    if a.c == "enrich": return cmd_enrich(a)
+    if a.c == "enrich": return structured(a, cmd_enrich)
     if a.c == "get-key": return cmd_get_key(a)
     if a.c == "impact": return cmd_impact(a)
     if a.c == "resolve": return cmd_resolve(a)
@@ -3103,7 +3148,7 @@ def main() -> int:
         for f in sorted(state().values(), key=lambda x: x.get("found", "")):
             print(f"{f['ref']:<18} {f['status']:<15} listed {f.get('listed','-')} found {f.get('found','-')} closed {f.get('closed','-')}  {f.get('title','')[:50]}")
         return 0
-    return cmd_run(a)
+    return structured(a, cmd_run)
 
 
 if __name__ == "__main__":

@@ -157,6 +157,8 @@ lattice-scan project . --cve CVE-2026-46300,CVE-2021-44228 --format csv | \
   python3 -c 'import csv,sys; [print(r["cve"], r["component"]) for r in csv.DictReader(sys.stdin) if r["verdict"]=="in-range"]'
 ```
 
+Machine output: `--format json|csv` (or `--json FILE`, written with mode 0600) on the host check, `recent` and `enrich` gives the RESULT BY CVE table as one JSON document or CSV and nothing else on standard output.
+
 Exit status: `0` done, `1` `--fail-on` matched (the host scan, `recent`, `project` and `enrich`), `2` bad usage or an unreadable input, `3` stopped part-way (Lattice's allowance ran out or it could not be reached; the ids not read are listed).
 
 The full manual is `man lattice-scan` (installed by the `.deb`; `man -l man/lattice-scan.1` from a checkout), and `lattice-scan project --help` has examples and the CSV columns.

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- New: `--format json|csv` and `--json FILE` on the host check, `recent` and `enrich`: the RESULT BY CVE table as one JSON document (`lattice-scan-result/1`, with the exit code and counts) or CSV, nothing else on standard output. The file is written with mode 0600. The console output is unchanged.
+- New: a test fails when the README or the skill text shows a `lattice-scan` command with an option the program does not define.
 - Changed: a host check or `recent` that Lattice stops part-way (limit reached, unreachable, refused) now exits 3, as `project` and `enrich` already do. Exit 1 is kept for a `--fail-on` match. A script that tested for exit 1 after a stopped run must test for 3.
 - New: `--fail-on never|in-range|candidate` on the host scan and on `recent`: exit 1 when a candidate (or one whose version check says in-range) is found. The default stays `never`.
 - Fixed: the skill text said the host check takes `--format csv|json`; it does not (that is `project` and `posture`).
