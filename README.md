@@ -34,6 +34,7 @@ Or take the single-file `lattice-scan.pyz` or the `.deb` from the [releases page
 |---|---|---|---|
 | Check a CVE you know of | `lattice-scan --cve CVE-...` | this host's inventory, locally | the CVE id |
 | Start with nothing (an agent, a morning check) | `lattice-scan` or `lattice-scan recent` | namiq.io's list of recent CVEs, then this host | nothing for the list; only the ids that may match |
+| Give the Lattice Analyst what you run, to check it against today's exploited list | `lattice-scan inventory --share` | names and versions of the important software, copied by you | nothing (reads namiq.io's public list once) |
 | See what this host has installed, quickly | `lattice-scan --refresh --inventory` | packages, snaps, hardware, the images containers run | nothing |
 | Look through every container image | `lattice-scan --deep` | every local image (OS and packages) and the Python, Node, Java and Ruby packages in them; minutes | nothing |
 | See what this host exposes and runs | `lattice-scan posture` (`--deep`) | listening ports, firewall, SSH settings, services; deep: processes no package owns | nothing |
@@ -64,6 +65,7 @@ printf '...' | lattice-scan enrich                         # ids from an audit o
 
 ```bash
 lattice-scan --refresh                                     # collect the inventory again, show its totals, then run the daily scan
+lattice-scan inventory --share                              # the important software as one block (150 lines at most) to paste into My products in the Lattice Analyst
 lattice-scan --refresh --inventory                         # only the inventory: totals, no scan, no network call (--list prints every package)
 lattice-scan --deep                                        # deep inventory: every local image and the packages inside them (about 6 minutes for 24 images)
 ```
@@ -172,6 +174,15 @@ Codex reads the same `SKILL.md` format. The repository carries it where Codex lo
 To use it everywhere, copy `skills/lattice-scan` to `~/.agents/skills/lattice-scan`, or ask Codex's skill installer for it from `namiq-ai/lattice-scan`, path `skills/lattice-scan`.
 Each release also attaches `lattice-scan-openai-plugin-<version>.zip`, the package for OpenAI's plugin directory. In ChatGPT the skill stops at its first step, because
 ChatGPT runs it in a hosted sandbox and it checks the machine it runs on; Codex on your own computer is where it does its work.
+
+## Share your inventory with the Lattice Analyst
+
+`lattice-scan inventory --share` prints a block that starts `LATTICE INVENTORY v1` and ends `end`. Copy it and paste it into **My products** at <https://lattice.namiq.io/chat>:
+the Analyst reads it, says which of today's, this week's and still-open CISA-exploited CVEs may concern what you run (a candidate is a lead for you to check, never a verdict), and
+explains the posture lines. The block holds the kernel, what listens, any installed item that the CISA list may concern, the running container images, snaps and server software,
+each with the reason it is listed, plus your firewall and SSH settings. It holds no host name, address, user name, serial or path. `--no-feed` leaves out the one request for
+namiq.io's public list (the block then says so and can miss items); `--all FILE` writes every package to a private file for you; the block is the definition the Analyst reads
+(the format is in `docs/INVENTORY-BLOCK.md`).
 
 ## What the host inventory collects: quick and deep
 

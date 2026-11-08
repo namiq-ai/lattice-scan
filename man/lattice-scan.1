@@ -1,6 +1,6 @@
 .\" SPDX-License-Identifier: Apache-2.0
 .\" Copyright 2026 NamiQ LLC
-.TH LATTICE-SCAN 1 "November 2026" "lattice-scan 0.4.7" "User Commands"
+.TH LATTICE-SCAN 1 "November 2026" "lattice-scan 0.4.8" "User Commands"
 .SH NAME
 lattice-scan \- check this host, or a project's declared dependencies, against the CVEs CISA lists as exploited, through Lattice
 .SH SYNOPSIS
@@ -74,6 +74,18 @@ Collect the inventory again now and show it (totals; \fB\-\-list\fR for everythi
 .TP
 .B \-\-inventory
 With \fB\-\-refresh\fR, only collect and show the inventory. Makes no network call.
+.TP
+.B \-\-share
+With the \fBinventory\fR command: print the host's important software as one block to copy (\fBLATTICE INVENTORY v1\fR, at most 150 lines and 12 KB) and paste into My products in the Lattice Analyst. It holds the kernel, what listens, whatever today's CISA list may concern, the running container images, snaps and server software, each with the reason it is listed, and the firewall and SSH settings. No host name, address, user name, serial or path. It reads namiq.io's public recent list once, so that nothing the list could concern is left out.
+.TP
+.B \-\-max\-lines " N"
+With \fB\-\-share\fR, at most N lines (default and limit 150).
+.TP
+.B \-\-no\-feed
+With \fB\-\-share\fR, do not read namiq.io's recent list. The block then says so and may miss items the list would have kept.
+.TP
+.B \-\-all " FILE"
+With \fB\-\-share\fR, also write every package, snap and image to FILE (mode 0600). It is never printed.
 .TP
 .B \-\-list
 With \fB\-\-refresh\fR, print every installed package, snap and image. Without it the inventory shows totals, the hardware and a summary of the images (by base OS, packages inside them), and the path of inventory.json, which always holds the full lists.

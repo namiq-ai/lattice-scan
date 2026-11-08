@@ -2545,6 +2545,44 @@ def estimate_line(tag: str, ids: list[str]) -> str:
             f"The most urgent are read first; the server's own limit is reported in each answer.")
 
 
+def cmd_share(a) -> int:
+    """`inventory --share`: the host's important software as one copyable block (see share.py for the format and the rule). Nothing leaves the machine except, unless
+    --no-feed, one request for namiq.io's public list, which carries no host data. The block goes to stdout alone; the guidance goes to stderr."""
+    from . import posture, share
+    private_dir()
+    inv = inventory()
+    ports: list[dict] = []
+    post: dict | None = None
+    try:
+        post = posture.collect()
+        ports = [p for p in (post.get("ports") or []) if isinstance(p, dict)]
+    except Exception as err:  # noqa: BLE001 - a host that cannot be read for ports still has an inventory
+        dbg(f"share: posture not read: {err}")
+    matches, state = {}, "not read (--no-feed)"
+    if not a.no_feed:
+        try:
+            feed = read_feed("all")
+            entries = list(feed["exploited"]) + list(feed["critical"])
+            matches = share.feed_matches(inv, entries, candidate)
+            state = f"read {TODAY} ({len(entries)} entries)"
+        except LatticeError as err:
+            state = f"not read ({clean(str(err))[:60]}); matches with today's list may be missing"
+    block = share.build(inv, ports, post, matches, state, TODAY, __version__, max(10, min(int(a.max_lines), share.MAX_LINES)))
+    print(block, end="")
+    if a.all:
+        out = Path(a.all)
+        lines = [f"pkg {n} {v}" for n, v in sorted(inv["packages"].items())] + [f"snap {n} {v}" for n, v in sorted(inv["snaps"].items())] + [f"image {i}" for i in sorted(inv["images"])]
+        fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write("\n".join(lines) + "\n")
+        print(f"[share] every package, snap and image written to {out} (mode 0600); it is not part of the block", file=sys.stderr)
+    print("[share] copy everything above, from LATTICE INVENTORY v1 to end, and paste it into My products in the Lattice Analyst (https://lattice.namiq.io/chat). "
+          "It names software and versions only: no host name, address, user name or path.", file=sys.stderr)
+    if state.startswith("not read"):
+        print(f"[share] the CISA list was {state}.", file=sys.stderr)
+    return 0
+
+
 def cmd_recent(a) -> int:
     """Start here when you have no CVE id: read namiq.io's recent exploited and critical ids, rule out locally what this host cannot have, and read only
     the rest from Lattice by exact id. The host's inventory never leaves the machine; the feed request carries no id and no host data."""
@@ -2984,7 +3022,12 @@ def main() -> int:
     gk.add_argument("--accept-terms", action="store_true", help="the person has read the beta terms and agreed, and reads that mailbox (without this nothing is sent)")
     gk.add_argument("--force", action="store_true", help="ask even though a key is already stored")
     sub.add_parser("list"); sub.add_parser("stats")
-    il = sub.add_parser("inventory", help="show inventory.log: counts and changes per run"); il.add_argument("-n", type=int, default=20)
+    il = sub.add_parser("inventory", help="show inventory.log: counts and changes per run; --share prints the important software as one block to paste into the Lattice Analyst")
+    il.add_argument("-n", type=int, default=20)
+    il.add_argument("--share", action="store_true", help="print a LATTICE INVENTORY v1 block (at most 150 lines): the kernel, what listens, what today's CISA list may concern, images, snaps and server software")
+    il.add_argument("--max-lines", type=int, default=150, help="with --share: at most this many lines (default 150, at most 150)")
+    il.add_argument("--no-feed", action="store_true", help="with --share: do not read namiq.io's recent list (the block then may miss items the list would have kept)")
+    il.add_argument("--all", metavar="FILE", help="with --share: also write every package, snap and image to FILE (private, 0600; never printed)")
     lg = sub.add_parser("log"); lg.add_argument("-n", type=int, default=20, help="last N lines (default 20)")
     a = p.parse_args()
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # a stopped run still cleans up (atexit); only SIGKILL cannot, and the next run sweeps what it left
@@ -3014,6 +3057,8 @@ def main() -> int:
     if a.c == "impact": return cmd_impact(a)
     if a.c == "resolve": return cmd_resolve(a)
     if a.c == "add": return cmd_add(a)
+    if a.c == "inventory" and a.share:
+        return cmd_share(a)
     if a.c == "inventory":
         f = OUT / "inventory.log"
         print("".join(f.read_text().splitlines(True)[-a.n:]) if f.exists() else "no inventory logged yet", end="")

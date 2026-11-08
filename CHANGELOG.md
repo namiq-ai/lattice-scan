@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.8 — 2026-11-08
+
+- New: `lattice-scan inventory --share` prints the host's important software as one block to copy and paste into My products in the Lattice Analyst. The block (`LATTICE INVENTORY v1`, at most 150 lines and 12 KB, format in `docs/INVENTORY-BLOCK.md`) holds the kernel, what listens (with the package that owns it), any installed item the tool's own matcher links to an entry of today's CISA list, the running container images, snaps and a curated list of server, edge and admin software, each with the reason it is listed, and the firewall and SSH settings. It names software and versions only: no host name, address, user name, serial or path. It reads namiq.io's public recent list once so that nothing the list could concern is left out; `--no-feed` skips that and the block says so. `--max-lines N` lowers the cap; `--all FILE` writes every package, snap and image to a private file. Nothing else leaves the machine.
+
 ## 0.4.7 — 2026-11-07
 
 - A key about to end says so. When the key you use has 14 days or fewer left, the tool prints one line a day on stderr (not with `--quiet`, and never in csv or json output): the days left, and that a renewal link was mailed to the address the key was issued for. The tool never opens or follows the link.
