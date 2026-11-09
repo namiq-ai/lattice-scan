@@ -22,7 +22,7 @@ Start here. You do not need a CVE id in hand.
 | A host question and a CVE you can name from the task | `--cve` | Never invent an id |
 | "Is this server exposed?", "what ports are open?", "is SSH locked down?", "is anything strange running?" | `posture` (then `posture --deep` if the person agrees) | Listening ports, firewall, SSH settings, services; deep adds processes no package owns. Read only, nothing is sent (section 2b) |
 
-`recent` is the right first move for a general question. Running the tool with no arguments at all does `--discover --weekly` (the same engine as `recent`, last seven days). Say that its answer covers what was recently added, and that an empty result is not "safe".
+`recent` is the right first move for a general question. Running the tool with no arguments at all does `--discover --weekly` (the same engine as `recent`, last seven days). For an old host, `--discover --all` matches the whole signed exploited index locally and prints counts only (by verdict and year, a count under 3 as `<3`); it names no CVE, so report the counts as counts and say a windowed scan lists the recent ones. Say that its answer covers what was recently added, and that an empty result is not "safe".
 
 ## 1. Before running anything: whose machine is this?
 

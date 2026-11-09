@@ -59,6 +59,12 @@ The inventory also records the machine itself (manufacturer, product model and v
 .BI \-\-cve " ID"
 A CVE id to check. Repeatable.
 .TP
+.B \-\-discover
+With no ids, no key: read namiq.io's list of recent exploited CVEs, keep those whose product is installed here, and read only those from Lattice (at most \fB\-\-max\-read\fR). The same engine as \fBrecent\fR. Windows, in UTC calendar days: \fB\-\-daily\fR, \fB\-\-weekly\fR (the default), \fB\-\-monthly\fR (thirty days), \fB\-\-open\fR (older than a week, within thirty days, overdue first).
+.TP
+.B \-\-discover \-\-all
+Match every CISA-listed CVE in the signed exploited index (see \fBlattice\-scan index\fR) against this host, locally, for software that is old. Nothing is read from Lattice. The output is statistics only, in every format: counts by verdict and by the year CISA added them, a count under 3 as <3, and no CVE id or product name. The index must be verified and at most 14 days old: exit 2 if it is refused or stale, 3 if unreachable. \fBrecent \-\-all\fR is unchanged (the thirty-day list).
+.TP
 .BI \-\-cve\-file " FILE"
 A file of CVE ids, one per line. Text after # is a comment.
 .TP

@@ -11,6 +11,7 @@ What leaves the machine: CVE ids, and the key if you have one. The inventory (pa
 Records live in ~/.lattice-scan (or LATTICE_SCAN_DIR), mode 0700, because they name the host's packages. Never commit or publish them.
 
   lattice-scan --cve CVE-2026-1234 --cve-file ids.txt   check these ids (works keyless; ~1 lookup per id)
+  lattice-scan --discover --all                         the whole signed exploited index matched here: counts only (see `index`); never reads Lattice
   lattice-scan --discover [--daily|--weekly|--monthly|--open]   no key: exploited CVEs added in the window (default weekly), checked against this host; same as `recent`
   lattice-scan --debug --cve CVE-...                detailed execution log: every request, response, timing and match decision (stderr + debug.log; never the key)
   lattice-scan inventory [-n 20]                    inventory.log: what was found on each run and what changed since the last one
@@ -1827,13 +1828,16 @@ def structured(a, fn) -> int:
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         rc = fn(a)
+    stats = RESULT.get("statistics")
     rows = [dict(zip(RESULT_KEYS, r)) for r in RESULT.get("RESULT BY CVE", [])]
     earlier = [dict(zip(RESULT_KEYS, r)) for r in RESULT.get(EARLIER_TITLE, [])]
     counts: dict[str, int] = {}
     for r in rows:
         counts[r["result"]] = counts.get(r["result"], 0) + 1
     doc = {"schema": "lattice-scan-result/1", "tool": f"lattice-scan {__version__}", "command": a.c or "scan", "on": TODAY,
-           "window": getattr(a, "period", None), "exitCode": rc, "counts": counts, "rows": rows, "earlier": earlier}
+           "window": "all" if stats else getattr(a, "period", None), "exitCode": rc, "counts": counts, "rows": rows, "earlier": earlier}
+    if stats:
+        doc["statistics"] = stats
     if jfile:
         write_private(Path(jfile), json.dumps(doc, indent=1))   # names this host's software: mode 0600
     if fmt == "json":
@@ -1841,6 +1845,14 @@ def structured(a, fn) -> int:
     elif fmt == "csv":
         out = io.StringIO()
         w = csv.writer(out, lineterminator="\n")
+        if stats:   # statistics only: verdict, year, count (a year of "-" is the total for the verdict)
+            w.writerow(["verdict", "year", "count"])
+            for k, v in stats["byVerdict"].items():
+                w.writerow([k, "-", v])
+            for y, d in stats["byYear"].items():
+                for k, v in d.items():
+                    w.writerow([k, y, v])
+            sys.stdout.write(out.getvalue()); return rc
         w.writerow(RESULT_KEYS)
         for r in rows + earlier:
             w.writerow([report._cell(r[k]) for k in RESULT_KEYS])
@@ -2673,6 +2685,78 @@ def cmd_share(a) -> int:
     return 0
 
 
+def index_verdict(row: dict, inv: dict) -> tuple[str, str]:
+    """(verdict, installed) for one row of the signed exploited index against the host's inventory, computed here from the index alone (no Lattice call):
+    unmatch (nothing installed matches), in-range, outside-range, or undetermined (a match with no usable range). `installed` is only for the caller's own use; it is
+    never printed by the free `--all`."""
+    entry = {"cve": row["id"], "vendor": str(row.get("vendor") or ""), "product": str(row.get("product") or "")}
+    m = candidate(entry, inv)
+    if not m:
+        return "unmatch", ""
+    if row.get("rangeStatus") != "ranges" or not row.get("ranges"):
+        return "undetermined", m[0]
+    entry["ranges"] = row["ranges"]
+    v = version_check(entry, m[2])["verdict"]
+    return (v if v in ("in-range", "outside-range", "undetermined") else "undetermined"), m[0]
+
+
+def index_stats(rows: list[dict], inv: dict) -> dict:
+    """Counts by verdict and by the year CISA added the CVE. A cell under 3 is `<3` (a count of one or two could single out a CVE). No id, no product name."""
+    by_verdict: dict[str, int] = {}
+    by_year: dict[str, dict[str, int]] = {}
+    for r in rows:
+        if not (isinstance(r, dict) and isinstance(r.get("id"), str)):
+            continue
+        v, _ = index_verdict(r, inv)
+        by_verdict[v] = by_verdict.get(v, 0) + 1
+        if v != "unmatch":
+            y = str(r.get("added") or "")[:4] or "unknown"
+            by_year.setdefault(y, {}); by_year[y][v] = by_year[y].get(v, 0) + 1
+
+    def cell(n: int) -> str:
+        return "<3" if 0 < n < 3 else str(n)
+    return {"considered": len(rows), "counts": {k: by_verdict.get(k, 0) for k in ("in-range", "undetermined", "outside-range", "unmatch")},
+            "shown": {k: cell(by_verdict.get(k, 0)) for k in ("in-range", "undetermined", "outside-range")},
+            "byYear": {y: {k: cell(n) for k, n in sorted(d.items())} for y, d in sorted(by_year.items())}}
+
+
+def cmd_all(a) -> int:
+    """`--discover --all`: the whole signed exploited index matched against this host, locally. It is never a crawl: nothing is read from Lattice, and the free
+    output is statistics only (counts by verdict and year), in every format. A person who wants the CVEs reads a windowed scan; the detailed report is a later, paid step."""
+    exploited.INDEX_URL = env("INDEX_URL", exploited.INDEX_URL)
+    exploited.MANIFEST_URL = env("INDEX_MANIFEST_URL", exploited.MANIFEST_URL)
+    private_dir()
+    try:
+        progress("[all] reading the signed exploited index from namiq.io (a plain request: nothing from this host is sent) ...")
+        idx = exploited.load(cache_dir() / "exploited", fetch_bytes, require_fresh=True)
+    except exploited.IndexRefused as err:
+        print(f"refused: {err}", file=sys.stderr)
+        return 2
+    except exploited.IndexUnavailable as err:
+        print(f"stopped: {err}", file=sys.stderr)
+        return 3
+    inv = inventory()
+    progress(f"[all] matching {len(idx['rows'])} exploited CVEs against {len(inv['packages'])} packages here; nothing is read from Lattice ...")
+    st = index_stats(idx["rows"], inv)
+    c = st["counts"]
+    RESULT["statistics"] = {"index": {"generation": idx["generation"], "exploitedAsOf": idx["exploitedAsOf"], "ageDays": idx["ageDays"], "cves": st["considered"]},
+                            "byVerdict": st["shown"], "byYear": st["byYear"]}
+    print(f"all {TODAY}: signed exploited index generation {idx['generation']}, as of {idx['exploitedAsOf']} ({idx['ageDays']} day(s) old), {st['considered']} CISA-listed CVEs "
+          f"matched against this host locally.")
+    print(f"cost: 0 reads from Lattice, 0 units: {c['in-range'] + c['undetermined']} candidates are counted here, not read. Free output is statistics only.")
+    print("\nBY VERDICT (a count under 3 shows as <3)")
+    for k, v in st["shown"].items():
+        print(f"  {k:<14}{v:>6}")
+    if st["byYear"]:
+        print("\nBY YEAR CISA ADDED THEM")
+        for y, d in st["byYear"].items():
+            print(f"  {y}  " + "  ".join(f"{k} {v}" for k, v in d.items()))
+    print("\nThis is a count, not a finding list: it names no CVE and no product. To read the CVEs added recently, run lattice-scan --discover --monthly; "
+          "a candidate is a lead for a person to check, never a verdict that the host is vulnerable.")
+    mode = getattr(a, "fail_on", "never")
+    return 1 if (mode == "candidate" and c["in-range"] + c["undetermined"]) or (mode == "in-range" and c["in-range"]) else 0
+
+
 def cmd_recent(a) -> int:
     """Start here when you have no CVE id: read namiq.io's recent exploited and critical ids, rule out locally what this host cannot have, and read only
     the rest from Lattice by exact id. The host's inventory never leaves the machine; the feed request carries no id and no host data."""
@@ -3063,6 +3147,7 @@ def main() -> int:
     p.add_argument("--weekly", dest="period", action="store_const", const="weekly", help="with --discover: the last seven days (the default)")
     p.add_argument("--monthly", dest="period", action="store_const", const="monthly", help="with --discover: the last thirty days")
     p.add_argument("--open", dest="period", action="store_const", const="open", help="with --discover: exploited CVEs older than a week but within thirty days, overdue first")
+    p.add_argument("--all", dest="all_index", action="store_true", help="with --discover: the whole signed exploited index (every CISA-listed CVE) matched against this host locally; free output is statistics only. Needs the index to be recent (14 days)")
     p.add_argument("--max-read", type=int, default=None, help="with --discover: most ids to read from Lattice per run (default 20 without a key, 200 with one)")
     p.add_argument("--debug", action="store_true", help="detailed execution log to stderr and debug.log (also LATTICE_SCAN_DEBUG=1)")
     p.add_argument("--keep", action="store_true", help="keep this run's records in the default folder even with no terminal (also LATTICE_SCAN_KEEP=1); without it a terminal-less run with no folder yet uses a temporary one")
@@ -3166,6 +3251,9 @@ def main() -> int:
         a.c, a.period, a.no_critical = "recent", WINDOW_TO_PERIOD.get(a.period or "weekly", "weekly"), False
         progress("[discover] no command and no CVE id given: running lattice-scan --discover --weekly")
         return structured(a, cmd_recent)
+    if a.c is None and a.discover and getattr(a, "all_index", False) and not (a.cve or a.cve_file):
+        a.c = "all"
+        return structured(a, cmd_all)
     if a.c is None and a.discover and not (a.cve or a.cve_file):
         # --discover on the host is the same engine as `recent`: it needs no key (the list is a plain request) and takes the same windows.
         a.window_name = a.period or "weekly"
