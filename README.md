@@ -160,7 +160,7 @@ lattice-scan project . --cve CVE-2026-46300,CVE-2021-44228 --format csv | \
   python3 -c 'import csv,sys; [print(r["cve"], r["component"]) for r in csv.DictReader(sys.stdin) if r["verdict"]=="in-range"]'
 ```
 
-The exploited index and `lattice-scan index` are not available in 0.6.1: that dataset is no longer published. Checking old software one item at a time on the server is planned and not built yet.
+`lattice-scan index` and `project --discover --all` are not available: the exploited dataset is not published, and dependency names of a project can be private. Old software on the host is checked one item at a time with `--discover --all` (levels: no key, key, paid report).
 
 Machine output: `--format json|csv` (or `--json FILE`, written with mode 0600) on the host check, `recent` and `enrich` gives the RESULT BY CVE table as one JSON document or CSV and nothing else on standard output.
 
