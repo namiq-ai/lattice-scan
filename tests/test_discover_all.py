@@ -168,6 +168,18 @@ class AllItems(EntryBase):
         self.assertEqual(Items.sent, []); self.assertIn("signal=ssh.password-auth", err)
 
 
+class Labels(unittest.TestCase):
+    def test_the_hardware_item_survives_a_maker_name_that_does_not_fit_and_each_line_has_its_own_reason(self):
+        from lattice_scan import items
+        inv = dict(INV2, host={"manufacturer": "Example Corp (HK) Ltd", "model": "Box 9", "biosVersion": "F.12"},
+                   imageDetails={"a:1": {"os": "alpine", "osVersion": "3.12", "packages": {}}})
+        sel = items.select(inv, None, level="quick")
+        hw = [i for i in sel["items"] if i.get("kind") == "hardware"]
+        self.assertEqual(hw, [{"product": "Box-9", "version": "F.12", "kind": "hardware"}])
+        self.assertEqual(sel["why"][items.describe(sel["items"][0])], "this machine's operating system")
+        self.assertEqual(sel["why"][items.describe(next(i for i in sel["items"] if i["product"] == "alpine"))], "the operating system of a container image")
+
+
 class Withdrawn(EntryBase):
     def test_project_discover_all_stays_off_and_sends_nothing(self):
         rc, out, err = self.run_cli("project", ".", "--discover", "--all")
