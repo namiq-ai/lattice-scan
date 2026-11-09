@@ -218,6 +218,9 @@ Ids to read, as in host mode. Several may be given in one argument, separated by
 .BI \-\-kev\-catalogue " FILE"
 CISA's catalogue, used locally to choose ids. Needs a key whose email is confirmed (see \fBWho can scan what\fR).
 .TP
+.B \-\-all
+With \fB\-\-discover\fR: the whole signed exploited index matched against the dependencies the folders declare. Counts by verdict and year only, no CVE id or product name; nothing is read from Lattice. Same index rules as the host form.
+.TP
 .BI \-\-max\-read " N"
 Most ids to read from Lattice per run (default 200 with a key, 20 without). Ids over the limit are listed as not read.
 .TP

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- New: `lattice-scan project . --discover --all` gives the same statistics for the dependencies the folders declare (all folders together): counts by verdict and year, no CVE or product named, nothing read from Lattice. A match only through a scope or a client library counts as undetermined. `--all` without `--discover` is a usage error (exit 2).
+- New: a test runs the same list at UTC+13 and UTC-11 and requires the same rows: the windows are the list's own UTC days, not the local clock.
 - New: `lattice-scan --discover --all` matches every CISA-listed CVE in the signed exploited index against this host, locally. Nothing is read from Lattice and nothing is sent. The free output is statistics only, in the console, `--format json|csv` and `--json FILE`: counts by verdict (in-range, undetermined, outside-range) and by the year CISA added them, a count under 3 as `<3`, and no CVE id or product name. It needs a verified index no older than 14 days (exit 2 if refused or stale, 3 if unreachable). `recent --all` is unchanged (the thirty-day list).
 - New: `lattice-scan --discover` on the host needs no key. It is the same engine as `recent`, with the windows `--daily`, `--weekly` (the default), `--monthly` and `--open`; `recent` accepts `--monthly` too (the whole thirty-day list, what `recent --all` has always read).
 - Changed: running `lattice-scan` with no arguments is now `--discover --weekly` (it was `recent --daily`). The weekly window misses less; the read cap below keeps it inside the keyless allowance.

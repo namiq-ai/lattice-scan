@@ -65,3 +65,25 @@ class DiscoverEngine(EntryBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WindowsDoNotDependOnTheLocalClock(EntryBase):
+    """The windows are the list's own UTC days; the same list gives the same rows whatever time zone the process runs in (UTC+13 and UTC-11 are the extremes)."""
+
+    def rows_in(self, tz):
+        import os, time, shutil
+        old = os.environ.get("TZ")
+        os.environ["TZ"] = tz; time.tzset()
+        try:
+            shutil.rmtree(cli.OUT, ignore_errors=True)
+            _, out, _ = self.run_cli("--discover", "--daily")
+            return [l for l in out.splitlines() if l.startswith("CVE-")]
+        finally:
+            if old is None: os.environ.pop("TZ", None)
+            else: os.environ["TZ"] = old
+            time.tzset()
+
+    def test_same_rows_at_utc_plus_13_and_utc_minus_11(self):
+        Entry.feed = feed([exp("CVE-2099-0001")], daily=([exp("CVE-2099-0005", vendor="Exampleco", product="Examplelib")], []))
+        east, west, utc = self.rows_in("Pacific/Auckland"), self.rows_in("Etc/GMT+11"), self.rows_in("UTC")
+        self.assertTrue(utc); self.assertEqual(east, utc); self.assertEqual(west, utc)

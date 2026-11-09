@@ -50,6 +50,7 @@ A person reads what it prints and decides. It also ships as a Claude Code and Op
 ```bash
 lattice-scan --cve CVE-2021-44228 --cve CVE-2026-46300     # compared with this host; prints the evidence, priority, EPSS, SSVC, weakness, ATT&CK
 lattice-scan --discover --weekly                           # no key: what CISA added in the last week, checked against this host (--daily, --monthly, --open)
+lattice-scan project . --discover --all                    # the same for the dependencies a project declares (counts only)
 lattice-scan --discover --all                              # old software: every CISA-listed CVE matched here against the signed index; counts by verdict and year, no CVE named, nothing read from Lattice
 lattice-scan list | impact CVE-... | resolve CVE-... --status fixed --proof "..."    # the findings recorded so far, one in detail, and closing one
 ```

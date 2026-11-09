@@ -2685,14 +2685,16 @@ def cmd_share(a) -> int:
     return 0
 
 
-def index_verdict(row: dict, inv: dict) -> tuple[str, str]:
+def index_verdict(row: dict, inv: dict, match=None) -> tuple[str, str]:
     """(verdict, installed) for one row of the signed exploited index against the host's inventory, computed here from the index alone (no Lattice call):
     unmatch (nothing installed matches), in-range, outside-range, or undetermined (a match with no usable range). `installed` is only for the caller's own use; it is
     never printed by the free `--all`."""
     entry = {"cve": row["id"], "vendor": str(row.get("vendor") or ""), "product": str(row.get("product") or "")}
-    m = candidate(entry, inv)
+    m = (match or candidate)(entry, inv)
     if not m:
         return "unmatch", ""
+    if len(m) > 3 and not m[3]:
+        return "undetermined", m[0]       # a project match only through a scope or a client library: no range is compared
     if row.get("rangeStatus") != "ranges" or not row.get("ranges"):
         return "undetermined", m[0]
     entry["ranges"] = row["ranges"]
@@ -2700,14 +2702,14 @@ def index_verdict(row: dict, inv: dict) -> tuple[str, str]:
     return (v if v in ("in-range", "outside-range", "undetermined") else "undetermined"), m[0]
 
 
-def index_stats(rows: list[dict], inv: dict) -> dict:
+def index_stats(rows: list[dict], inv: dict, match=None) -> dict:
     """Counts by verdict and by the year CISA added the CVE. A cell under 3 is `<3` (a count of one or two could single out a CVE). No id, no product name."""
     by_verdict: dict[str, int] = {}
     by_year: dict[str, dict[str, int]] = {}
     for r in rows:
         if not (isinstance(r, dict) and isinstance(r.get("id"), str)):
             continue
-        v, _ = index_verdict(r, inv)
+        v, _ = index_verdict(r, inv, match)
         by_verdict[v] = by_verdict.get(v, 0) + 1
         if v != "unmatch":
             y = str(r.get("added") or "")[:4] or "unknown"
@@ -2737,12 +2739,45 @@ def cmd_all(a) -> int:
         return 3
     inv = inventory()
     progress(f"[all] matching {len(idx['rows'])} exploited CVEs against {len(inv['packages'])} packages here; nothing is read from Lattice ...")
-    st = index_stats(idx["rows"], inv)
+    return finish_all(a, idx, index_stats(idx["rows"], inv), "this host")
+
+
+def cmd_project_all(a) -> int:
+    """`project --discover --all`: the same statistics for the dependencies the folders declare (all folders together)."""
+    from lattice_scan import manifests
+    exploited.INDEX_URL = env("INDEX_URL", exploited.INDEX_URL)
+    exploited.MANIFEST_URL = env("INDEX_MANIFEST_URL", exploited.MANIFEST_URL)
+    try:
+        progress("[all] reading the signed exploited index from namiq.io (a plain request: nothing from your project is sent) ...")
+        idx = exploited.load(cache_dir() / "exploited", fetch_bytes, require_fresh=True)
+    except exploited.IndexRefused as err:
+        print(f"refused: {err}", file=sys.stderr)
+        return 2
+    except exploited.IndexUnavailable as err:
+        print(f"stopped: {err}", file=sys.stderr)
+        return 3
+    comps_all = []
+    for root_s in a.paths:
+        root = Path(root_s).resolve()
+        if not root.is_dir():
+            print(f"not a folder: {root_s}", file=sys.stderr)
+            return 2
+        progress(f"[project] {root.name or root}: looking for dependency files under {root}")
+        manifests.SKIPPED.clear()
+        comps, files, cut = manifests.read_project(root, on_file=_file_progress)
+        progress(f"[project] {root.name or root}: {len(files)} file(s) read, {len(comps)} declared component(s)")
+        comps_all += list(comps)
+    inv, _ = project_inventory(comps_all)
+    progress(f"[all] matching {len(idx['rows'])} exploited CVEs against {len(inv['packages'])} declared components; nothing is read from Lattice ...")
+    return finish_all(a, idx, index_stats(idx["rows"], inv, project_candidate), "these projects", "component")
+
+
+def finish_all(a, idx: dict, st: dict, where: str, unit: str = "package") -> int:
     c = st["counts"]
     RESULT["statistics"] = {"index": {"generation": idx["generation"], "exploitedAsOf": idx["exploitedAsOf"], "ageDays": idx["ageDays"], "cves": st["considered"]},
                             "byVerdict": st["shown"], "byYear": st["byYear"]}
     print(f"all {TODAY}: signed exploited index generation {idx['generation']}, as of {idx['exploitedAsOf']} ({idx['ageDays']} day(s) old), {st['considered']} CISA-listed CVEs "
-          f"matched against this host locally.")
+          f"matched against {where} locally.")
     print(f"cost: 0 reads from Lattice, 0 units: {c['in-range'] + c['undetermined']} candidates are counted here, not read. Free output is statistics only.")
     print("\nBY VERDICT (a count under 3 shows as <3)")
     for k, v in st["shown"].items():
@@ -3178,6 +3213,7 @@ def main() -> int:
     pj.add_argument("--weekly", dest="period", action="store_const", const="weekly", help="with --discover: the last seven days")
     pj.add_argument("--monthly", dest="period", action="store_const", const="monthly", help="with --discover: the last thirty days (the default)")
     pj.add_argument("--open", dest="period", action="store_const", const="open", help="with --discover: exploited CVEs older than a week but within thirty days, overdue first")
+    pj.add_argument("--all", dest="all_index", action="store_true", help="with --discover: the whole signed exploited index matched against the dependencies declared here; counts by verdict and year only, nothing read from Lattice")
     pj.add_argument("--max-read", type=int, default=None, help="most ids to read from Lattice per run (default 200 with a key, 20 without)")
     pj.add_argument("--format", choices=["console", "csv", "json"], default="console", help="what to print (default console: a report for a person)")
     pj.add_argument("--csv", help="also write the findings as CSV to this file")
@@ -3259,6 +3295,11 @@ def main() -> int:
         a.window_name = a.period or "weekly"
         a.c, a.period, a.no_critical = "recent", WINDOW_TO_PERIOD.get(a.window_name, "weekly"), False
         return structured(a, cmd_recent)
+    if a.c == "project" and getattr(a, "all_index", False):
+        if not a.discover:
+            print("--all goes with --discover: lattice-scan project . --discover --all", file=sys.stderr)
+            return 2
+        return structured(a, cmd_project_all)
     if a.c == "project": return cmd_project(a)
     if a.c == "recent": return structured(a, cmd_recent)
     if a.c == "posture": return cmd_posture(a)
