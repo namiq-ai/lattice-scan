@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- New: every host candidate prints an `exposure:` line, a fact read from this machine's listeners and services: listens on all interfaces (address, port, owning package), loopback only, service running with no listener, installed with no service found, or inside an image. It never says "reachable from the internet" (NAT, upstream firewalls and cloud rules are unknown); without root it says the firewall rules were not read. Candidates of the same priority are listed with the more exposed first. Nothing is sent: the listeners are read locally.
+- New: `--exposed` lists only candidates whose package owns a listener or runs as a service; the others are counted and still recorded. `--fail-on exposed` exits 1 only for an in-range candidate that listens on all interfaces.
+
 ## 0.5.0 — 2026-11-09
 
 - New: `lattice-scan project . --discover --all` gives the same statistics for the dependencies the folders declare (all folders together): counts by verdict and year, no CVE or product named, nothing read from Lattice. A match only through a scope or a client library counts as undetermined. `--all` without `--discover` is a usage error (exit 2).

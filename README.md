@@ -104,6 +104,7 @@ lattice-scan project . --cve CVE-2026-46300,CVE-2021-44228                      
 LATTICE_API_KEY=... lattice-scan project .  --kev-catalogue known_exploited_vulnerabilities.json   # confirmed key: CISA's file chooses the ids
 lattice-scan project app/ api/ --name APP --name API --cve CVE-2026-46300         # explicit ids; several folders at once, labelled
 lattice-scan project . --cve CVE-2026-46300 --csv findings.csv                    # the report on screen, a CSV alongside
+lattice-scan --discover --exposed                                                     # only software that listens or runs as a service here; each candidate shows an exposure line
 lattice-scan project . --cve CVE-2026-46300 --fail-on in-range                    # exit 1 when a declared version is inside an affected range
 ```
 

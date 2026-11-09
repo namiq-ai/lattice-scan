@@ -1450,6 +1450,35 @@ def changelog_mentions(cve: str, installed: list[str], inv: dict) -> list[str]:
     return sorted(set(out))
 
 
+_POSTURE: list = []
+
+
+def posture_data() -> dict | None:
+    """The running layer (listeners, services), read once per run and only when a candidate needs it. LATTICE_SCAN_POSTURE names a fixed JSON file (tests, like
+    LATTICE_SCAN_INVENTORY). None when it cannot be collected: the label then says so instead of guessing."""
+    if _POSTURE:
+        return _POSTURE[0]
+    data = None
+    try:
+        fixed = env("POSTURE")
+        if fixed:
+            data = json.loads(Path(fixed).read_text())
+        else:
+            from . import posture
+            progress("[posture] reading listeners and services for the exposure labels (read only, nothing is sent)")
+            data = posture.collect()
+    except Exception as err:  # noqa: BLE001 - a label must never stop a scan
+        dbg(f"posture not read: {type(err).__name__}: {err}")
+    _POSTURE.append(data)
+    return data
+
+
+def with_exposure(imp: dict, installed: list[str], inv: dict) -> dict:
+    from . import exposure
+    imp["exposure"] = exposure.label(installed, inv["packages"], posture_data() if any(not s.startswith("container image ") for s in installed) else None)
+    return imp
+
+
 def impact(entry: dict, inv: dict, installed: list[str], vers: list[str]) -> dict:
     """What a person needs to judge this match, from what Lattice returned plus the inventory. It decides nothing.
 
@@ -1869,6 +1898,8 @@ def fail_on_exit(mode: str, imps: list[dict]) -> int:
         return 1
     if mode == "in-range" and any(((i.get("versionCheck") or {}).get("verdict") == "in-range") for i in imps):
         return 1
+    if mode == "exposed" and any(((i.get("versionCheck") or {}).get("verdict") == "in-range") and (i.get("exposure") or {}).get("class") == "all" for i in imps):
+        return 1
     return 0
 
 
@@ -1965,14 +1996,14 @@ def cmd_run(a) -> int:
             rows.append([cve, *cells(e), ("RECORDED" if cve in known else "CANDIDATE") if m else "unmatch",
                          m[0] if m else "no package, snap, image or kernel matches"])
             if m and cve in known:
-                imp = impact(e, inv, m[1], m[2])
+                imp = with_exposure(impact(e, inv, m[1], m[2]), m[1], inv)
                 add_context(lat, e, imp, None if a.refresh else state()[cve].get("impact"))
                 if a.refresh or not state()[cve].get("impact"):
                     append("findings.jsonl", {"event": "impact", "ref": cve, "on": TODAY, "impact": imp})
                 again_hits.append((e, m[0], imp))
             if m and cve not in known:
                 why, installed, vers = m
-                imp = impact(e, inv, installed, vers)
+                imp = with_exposure(impact(e, inv, installed, vers), installed, inv)
                 add_context(lat, e, imp)
                 dbg(f"{cve}: IMPACT {json.dumps(imp)}")
                 if append_found_once({"event": "found", "ref": cve, "on": TODAY, "listed": e["added"], "due": e["due"], "title": e["title"], "why": why, "kind": "kev", "vendor": e["vendor"], "product": e["product"], "ransomware": e["ransomware"], "cvss": e["cvss"], "impact": imp}):
@@ -1997,7 +2028,14 @@ def cmd_run(a) -> int:
     print_table(rows)
     print_table(earlier_rows, EARLIER_TITLE)
     print_withdrawn(withdrawn)
-    hits.sort(key=lambda h: PRIORITY_RANK.get((h[2].get("priority") or {}).get("level", "read"), 2))   # fix first, then fix soon, then read; ties keep the id order
+    from . import exposure as _exp
+    if getattr(a, "exposed", False):
+        keep = [h for h in hits if (h[2].get("exposure") or {}).get("class") in _exp.EXPOSED]
+        keep_again = [h for h in again_hits if (h[2].get("exposure") or {}).get("class") in _exp.EXPOSED]
+        dropped = len(hits) - len(keep) + len(again_hits) - len(keep_again)
+        hits, again_hits = keep, keep_again
+        print(f"--exposed: {dropped} candidate(s) not listed because their package owns no listener and runs no service here (they are still recorded)")
+    hits.sort(key=lambda h: (PRIORITY_RANK.get((h[2].get("priority") or {}).get("level", "read"), 2), _exp.sort_key(h[2].get("exposure"))))   # fix first, then fix soon, then read; then the more exposed; ties keep the id order
     for e, why, imp in hits:
         print(f"  {e['cve']}  {e['title'][:70]}\n      because: {why}")
         print_impact(imp)
@@ -3015,6 +3053,8 @@ def age_text(listed: str, due: str) -> str:
 
 def print_impact(imp: dict) -> None:
     print(f"      installed: {'; '.join(imp['installed'])}")
+    if imp.get("exposure"):
+        print(f"      exposure: {imp['exposure']['text']}")
     print(f"      listed {imp.get('listed') or '-'}" + age_text(imp.get("listed") or "", imp.get("due") or ""))
     if imp.get("nvdAlsoNames"):
         print(f"      NVD also lists names found here: {', '.join(imp['nvdAlsoNames'])}")
@@ -3192,7 +3232,8 @@ def main() -> int:
     p.add_argument("--refresh", action="store_true", help="collect the inventory again now and print all of it; with ids, also re-read them. Alone it makes no Lattice call")
     p.add_argument("--format", choices=["console", "json", "csv"], default=argparse.SUPPRESS, help="what to print: console (default), json or csv. The result table only; progress stays on stderr")
     p.add_argument("--json", metavar="FILE", default=argparse.SUPPRESS, help="also write the result as JSON to FILE (mode 0600: it names this host's software)")
-    p.add_argument("--fail-on", choices=["never", "in-range", "candidate"], default="never", help="exit 1 when a candidate (or an in-range one) is found; default never: a person reads it")
+    p.add_argument("--fail-on", choices=["never", "in-range", "candidate", "exposed"], default="never", help="exit 1 when a candidate or an in-range one is found; exposed: in-range and listening on all interfaces; default never: a person reads it")
+    p.add_argument("--exposed", action="store_true", default=argparse.SUPPRESS, help="list only candidates whose package owns a listener or runs as a service; the others are counted, not listed")
     p.add_argument("--again", action="store_true", help="re-read ids already read before")
     p.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print what is being checked, step by step, on stderr (the default; see --quiet)")
     p.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
@@ -3238,7 +3279,8 @@ def main() -> int:
     rc.add_argument("--max-read", type=int, default=None, help="most ids to read from Lattice per run (default 20 without a key, 200 with one). Every id is still checked against this host locally")
     rc.add_argument("--format", choices=["console", "json", "csv"], default=argparse.SUPPRESS, help="what to print: console (default), json or csv")
     rc.add_argument("--json", metavar="FILE", default=argparse.SUPPRESS, help="also write the result as JSON to FILE (mode 0600)")
-    rc.add_argument("--fail-on", choices=["never", "in-range", "candidate"], default=argparse.SUPPRESS, help="exit 1 when a candidate (or an in-range one) is found; default never")
+    rc.add_argument("--fail-on", choices=["never", "in-range", "candidate", "exposed"], default=argparse.SUPPRESS, help="exit 1 when a candidate (or an in-range one) is found; default never")
+    rc.add_argument("--exposed", action="store_true", default=argparse.SUPPRESS, help="list only candidates whose package owns a listener or runs as a service")
     rc.add_argument("--no-critical", action="store_true", help="leave out the critical (not known exploited) ids")
     rc.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each step on stderr (the default)")
     rc.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")

@@ -55,6 +55,10 @@ python3 scripts/lattice-scan.pyz impact CVE-2026-1234               # the eviden
 Use only CVE ids the user gave you, that appear in the task or the text they pasted, or that `recent` listed. Do not invent ids. `--discover` (list what CISA added this week, read from
 Lattice itself) needs a Lattice key; `recent` does not.
 
+### Exposure line
+
+Each host candidate has an `exposure:` line: what this machine shows locally about the matched software (listens on all interfaces, loopback only, service running, installed with nothing running, inside an image). Quote it as printed. It is not "reachable from the internet" and never write that; without root the tool says the firewall rules were not read. `--exposed` lists only software that listens or runs. Ask the person before using it to decide what to ignore: the others are counted, not shown.
+
 ### Quick and deep: which to run, and how to keep the person informed
 
 A host scan has two levels. **Quick** (the default) reads the hardware, the installed packages and snaps, and the images that containers are running (their OS and package list); it takes seconds. **Deep** (`--deep`) also opens every other local image and lists the Python, Node, Java and Ruby packages inside every image; it takes minutes (about 6 for 24 images) and reads a lot of disk.
