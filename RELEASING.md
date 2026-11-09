@@ -41,3 +41,7 @@ and `man lattice-scan` shows the old manual (a pip or uv install has no manual p
    `python3 packaging/build_apt_repo.py --key C473615441158A3E775C2EC27E6115F40A41061D --dist FOLDER --out repo/` (the fingerprint, without spaces, is also published at namiq.io/lattice/docs).
 3. Copy `repo/` over `namiq-web/public/apt/` in a pull request there, check `gpg --verify public/apt/dists/stable/InRelease`, merge, then deploy namiq-web (`npm run build`, restart the service).
 4. Check from a clean machine or container: `apt update && apt policy lattice-scan` shows the new version, and `man lattice-scan` is the new manual.
+
+## After the release is public: apt repository and plugin pin
+
+Run `deploy/release-lattice-scan.sh X.Y.Z` in the namiq-web checkout (`--pin-only` for the plugin pin without the signing key). It checks that the GitHub release is public and its `.deb` matches `SHA256SUMS`, adds the package to the signed apt repository (gpg asks for the key passphrase on that machine; the key is never given to CI), moves the Claude Code plugin pin in `.claude-plugin/marketplace.json` to the commit of the tag, and opens one pull request in namiq-web. Merge it, then run `deploy/redeploy.sh` there to publish. The OpenAI plugin zip is still uploaded by a person in OpenAI's portal.
