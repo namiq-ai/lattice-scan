@@ -6,9 +6,14 @@ An item is a product name, a version, and optionally an ecosystem and the operat
 MAC address, user name or password, and not the package list as a whole. The server refuses anything outside the same patterns, and this module applies them first so
 that a name that does not fit is dropped here, not sent.
 
-What is selected (the owner-approved proposal): the software that listens or runs as a service on this machine (the posture layer, tens of items), a short list of
-well-known server software that is installed, and the running kernel. Packages that are merely installed are sent only when the person asks (`--all-installed`); the
-machine's hardware only with `--with-hardware`. Pure functions: nothing here reads the host or sends anything.
+Three levels (owner decision 2026-11-09):
+  1. quick, no key: the machine itself (operating system, kernel, maker/model/firmware), the operating system of each image, and the posture layer (software that
+     listens or runs as a service).
+  2. with a key: the quick items, then the foundational packages (C library, TLS, SSH, systemd, sudo ...), then well-known server software, then every other package
+     in name order, until the key's allowance ends. What was not sent is only counted: the packages left on the host and the packages inside images (only an image's
+     operating system is sent).
+  3. everything, in depth: the paid report. Not on sale yet.
+Pure functions: nothing here reads the host or sends anything.
 """
 from __future__ import annotations
 
@@ -89,63 +94,88 @@ def listening_packages(post: dict | None) -> tuple[list[str], list[str]]:
     return sorted(listen), sorted(svc - listen)
 
 
-def select(inv: dict, post: dict | None, *, all_installed: bool = False, with_hardware: bool = False, also: tuple[str, ...] = (), limit: int = 60) -> dict:
-    """{'items': [...], 'skipped': n, 'why': {...}, 'cut': n}. Order (most useful first): what listens, what runs as a service, well-known server software, the kernel,
-    then (only when asked) every other package and the hardware. The same product is never listed twice. `cut` counts items left out by `limit`."""
+FOUNDATIONAL = ("libc6", "glibc", "libc-bin", "musl", "libssl3", "libssl1.1", "libssl-dev", "openssl", "openssh-server", "openssh-client", "openssh", "systemd", "udev", "dbus",
+                "sudo", "bash", "zlib1g", "zlib", "libcurl4", "curl", "coreutils", "util-linux", "apt", "dpkg", "rpm", "libxml2", "libgnutls30", "gnutls", "gnupg", "gpg",
+                "polkitd", "policykit-1", "polkit", "pkexec", "libgcrypt20", "libsqlite3-0", "sqlite", "python3", "perl", "glib2", "libglib2.0-0", "shadow", "login", "passwd",
+                "busybox", "ncurses-base", "libpam0g", "pam", "grub-common", "grub2", "linux-base")
+
+
+def _item_os(pretty: str) -> dict | None:
+    """The operating system itself as an item: 'ubuntu' 26.04 (name lowercase, number only). Used for the host and for the base of an image."""
+    lbl = os_label(pretty)
+    if not lbl:
+        return None
+    fam, _, num = lbl.rpartition(" ")
+    return make(fam.split()[0].lower(), num, "", lbl)
+
+
+def select(inv: dict, post: dict | None, *, level: str = "quick", also: tuple[str, ...] = (), limit: int = 60) -> dict:
+    """{'items': [...], 'why': {...}, 'skipped': n, 'cut': n, 'unscanned': {'host': n, 'images': n}}.
+
+    level 'quick' (no key): operating system, kernel, hardware, image operating systems, then what listens or runs as a service.
+    level 'key': those, then foundational packages, well-known server software, `also`, then every other package in name order. `limit` cuts the list; whatever is
+    not in it is counted in `unscanned`, never sent. The same product is never listed twice."""
     pk = {clean_name(n): v for n, v in (inv.get("packages") or {}).items() if clean_name(n)}
     snaps = inv.get("snaps") or {}
     eco = ECOSYSTEM_OF_MANAGER.get(inv.get("manager") or "", "")
     osn = os_label(inv.get("os") or "")
     listen, svc = listening_packages(post)
-    plan: list[tuple[str, str, str]] = []     # (name, version, reason)
-    for n in listen:
-        plan.append((n, "", "listens on this machine"))
-    for n in svc:
-        plan.append((n, "", "runs as a service"))
-    for n in sorted(pk):
-        if n in CURATED or n in also:
-            plan.append((n, "", "well-known server software"))
-    if all_installed:
-        for n in sorted(pk):
-            plan.append((n, "", "installed"))
     items: list[dict] = []
     why: dict[str, str] = {}
     seen: set[str] = set()
     skipped = 0
-    for name, _v, reason in plan:
+
+    def add(it: dict | None, reason: str) -> None:
+        nonlocal skipped
+        if it is None:
+            skipped += 1
+            return
+        key = it["product"] + "|" + it.get("kind", "") + "|" + it.get("version", "")
+        if key in seen:
+            return
+        seen.add(key)
+        items.append(it)
+        why[it["product"] + (":" + it["kind"] if it.get("kind") else "")] = reason
+
+    add(_item_os(inv.get("os") or ""), "this machine's operating system") if inv.get("os") else None
+    k = inv.get("kernel") or ""
+    if k:
+        add(make("linux", k, "", osn, "kernel"), "the running kernel")
+    h = inv.get("host") or {}
+    model, maker = str(h.get("model") or ""), str(h.get("manufacturer") or "")
+    if model and maker:
+        add(make(model.replace(" ", "-"), str(h.get("biosVersion") or h.get("version") or ""), "", "", "hardware", maker), "this machine's maker and model")
+    for ref, d in sorted((inv.get("imageDetails") or {}).items()):
+        if isinstance(d, dict) and d.get("os"):
+            add(_item_os(f"{d.get('os')} {d.get('osVersion') or ''}"), "the operating system of a container image")
+
+    def pkg(name: str, reason: str) -> None:
         if name.startswith("snap "):
             n, ver, e = clean_name(name[5:]), snaps.get(name[5:], ""), ""
         else:
             n, ver, e = clean_name(name), pk.get(clean_name(name), ""), eco
-        if not n or n in seen:
-            continue
-        seen.add(n)
-        it = make(n, ver, e, osn)
-        if it is None:
-            skipped += 1
-            continue
-        items.append(it)
-        why[n] = reason
-    k = inv.get("kernel") or ""
-    if k and "linux" not in seen:
-        it = make("linux", k, "", osn, "kernel")
-        if it:
-            items.append(it)
-            why["linux"] = "the running kernel"
-        else:
-            skipped += 1
-    if with_hardware:
-        h = inv.get("host") or {}
-        model, maker = str(h.get("model") or ""), str(h.get("manufacturer") or "")
-        if model and maker:
-            it = make(model.replace(" ", "-"), str(h.get("biosVersion") or h.get("version") or ""), "", "", "hardware", maker)
-            if it:
-                items.append(it)
-                why[it["product"]] = "this machine's model"
-            else:
-                skipped += 1
+        if n:
+            add(make(n, ver, e, osn), reason)
+
+    for n in listen:
+        pkg(n, "listens on this machine")
+    for n in svc:
+        pkg(n, "runs as a service")
+    if level == "key":
+        for n in FOUNDATIONAL:
+            if n in pk:
+                pkg(n, "foundational package")
+        for n in sorted(pk):
+            if n in CURATED or n in also:
+                pkg(n, "well-known server software")
+        for n in sorted(pk):
+            pkg(n, "installed")
     cut = max(0, len(items) - limit)
-    return {"items": items[:limit], "skipped": skipped, "why": why, "cut": cut}
+    sent = items[:limit]
+    sent_pk = {it["product"] for it in sent if "kind" not in it}
+    unscanned_host = sum(1 for n in pk if n not in sent_pk) + sum(1 for n in snaps if clean_name(n) not in sent_pk)
+    unscanned_images = sum(len((d or {}).get("packages") or {}) for d in (inv.get("imageDetails") or {}).values() if isinstance(d, dict))
+    return {"items": sent, "skipped": skipped, "why": why, "cut": cut, "unscanned": {"host": unscanned_host, "images": unscanned_images}}
 
 
 def describe(it: dict) -> str:

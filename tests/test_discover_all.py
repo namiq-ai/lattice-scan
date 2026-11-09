@@ -23,6 +23,11 @@ class Items(Entry):
         body = json.loads(raw)
         p = body.get("params") or {}
         if body.get("method") == "tools/call" and p.get("name") in ("graph_affects", "graph_exposure"):
+            if Entry.rate_left > 0:
+                Entry.rate_left -= 1
+                self.send_response(429); self.send_header("Content-Type", "application/json")
+                if Entry.rate_header: self.send_header("Retry-After", Entry.rate_header)
+                self.end_headers(); self.wfile.write(Entry.rate_body.encode()); return
             a = p["arguments"]; Items.sent.append((p["name"], a))
             if Items.fail_after is not None and len(Items.sent) > Items.fail_after:
                 data = {"error": "quota_exceeded", "message": "daily limit reached"}
@@ -43,7 +48,7 @@ POST = {"scope": "root", "ports": [{"proto": "tcp", "port": 8443, "addr": "0.0.0
                                                                                               {"code": "process.stale-binary", "level": "note", "topic": "p", "text": "y"}]}
 HOST = {"manufacturer": "Examplecorp", "model": "Box 9", "biosVersion": "F.12"}
 INV2 = dict(INV, os="Example Linux 12.4 (bookworm)", manager="dpkg", host=HOST,
-            packages={"examplelib-server": "2.4.1-1", "otherd": "1.0-2", "nginx": "1.24.0-1", "libsmall:amd64": "1.1", "rarething": "9.9", "bad name": "1"})
+            packages={"examplelib-server": "2.4.1-1", "otherd": "1.0-2", "nginx": "1.24.0-1", "openssl": "3.0.2-1", "libsmall:amd64": "1.1", "rarething": "9.9", "bad name": "1"})
 
 
 class AllItems(EntryBase):
@@ -57,6 +62,7 @@ class AllItems(EntryBase):
         super().setUp()
         cli.inventory = lambda: json.loads(json.dumps(INV2))
         Items.sent, Items.fail_after = [], None
+        self.key0 = cli.KEY; self.addCleanup(lambda: setattr(cli, 'KEY', self.key0))
         Items.answers = {"examplelib-server": [ROW]}
         self.post = mock.patch.object(cli, "posture_data", lambda: POST); self.post.start(); self.addCleanup(self.post.stop)
 
@@ -69,33 +75,60 @@ class AllItems(EntryBase):
         rc, out, err = self.run_cli("--discover", "--all")
         self.assertEqual((rc, Items.sent), (2, [])); self.assertIn("Add --yes", err)
 
-    def test_the_selected_items_are_what_listens_runs_is_well_known_and_the_kernel(self):
+    def test_level_1_without_a_key_is_the_machine_the_image_os_and_the_posture_layer(self):
         rc, out, err = self.run_cli("--discover", "--all", "--yes")
         self.assertEqual(rc, 0, err)
-        names = [a["product"] for t, a in Items.sent]
-        self.assertEqual(names, ["examplelib-server", "otherd", "nginx", "linux"])      # listener, service, curated, kernel
-        self.assertNotIn("rarething", names)                                              # merely installed: only with --all-installed
-        self.assertEqual({t for t, _ in Items.sent}, {"graph_affects"})
-        first = Items.sent[0][1]
-        self.assertEqual(first, {"product": "examplelib-server", "version": "2.4.1-1", "ecosystem": "deb", "os": "Example Linux 12.4"})
-        self.assertEqual(Items.sent[-1][1], {"product": "linux", "version": "6.1.0-99-example", "os": "Example Linux 12.4", "kind": "kernel"})
+        names = [a["product"] + ("/" + a["kind"] if "kind" in a else "") for t, a in Items.sent]
+        self.assertEqual(names, ["example", "linux/kernel", "Box-9/hardware", "examplelib-server", "otherd"])   # OS, kernel, hardware, then listener and service
+        self.assertNotIn("nginx", names); self.assertNotIn("rarething", names)                                    # packages beyond the posture layer are level 2
+        self.assertEqual(Items.sent[0][1], {"product": "example", "version": "12.4", "os": "Example Linux 12.4"})
+        self.assertEqual(Items.sent[3][1], {"product": "examplelib-server", "version": "2.4.1-1", "ecosystem": "deb", "os": "Example Linux 12.4"})
+        self.assertIn("Not scanned:", out); self.assertIn("paid report", out)
+
+    def test_level_2_with_a_key_adds_foundational_then_server_software_then_the_rest(self):
+        cli.KEY = "lat_test_0000000000000000"
+        rc, out, err = self.run_cli("--discover", "--all", "--yes")
+        names = [a["product"] for _t, a in Items.sent]
+        self.assertEqual(names[:5], ["example", "linux", "Box-9", "examplelib-server", "otherd"])
+        self.assertLess(names.index("openssl"), names.index("nginx"))          # foundational before well-known server software
+        self.assertLess(names.index("nginx"), names.index("rarething"))        # then everything else, in name order
+        self.assertIn("level 2", err)
+
+    def test_quick_forces_level_1_even_with_a_key(self):
+        cli.KEY = "lat_test_0000000000000000"
+        self.run_cli("--discover", "--all", "--yes", "--quick")
+        self.assertNotIn("nginx", [a["product"] for _t, a in Items.sent])
+
+    def test_the_limit_cuts_the_list_and_the_rest_is_only_counted(self):
+        cli.KEY = "lat_test_0000000000000000"
+        rc, out, err = self.run_cli("--discover", "--all", "--yes", "--max-items", "6")
+        self.assertEqual(len(Items.sent), 6); self.assertIn("left out by the limit of 6", err)
+        self.assertNotIn("rarething", json.dumps(Items.sent))
+        self.assertRegex(out, r"Not scanned: \d+ package")
+
+    def test_image_packages_are_never_sent_only_the_image_os_and_a_count(self):
+        inv = json.loads(json.dumps(INV2)); inv["imageDetails"] = {"web:1": {"os": "alpine", "osVersion": "3.12", "packages": {"busybox": "1.0", "secretpkg": "9"}}}
+        cli.inventory = lambda: inv
+        rc, out, err = self.run_cli("--discover", "--all", "--yes")
+        blob = json.dumps(Items.sent)
+        self.assertIn('"product": "alpine"', blob); self.assertNotIn("secretpkg", blob); self.assertNotIn("web:1", blob)
+        self.assertIn("2 package(s) inside images", out)
 
     def test_nothing_that_names_the_machine_is_ever_sent(self):
-        self.run_cli("--discover", "--all", "--yes", "--all-installed", "--with-hardware")
+        cli.KEY = "lat_test_0000000000000000"
+        self.run_cli("--discover", "--all", "--yes")
         blob = json.dumps(Items.sent)
         for secret in ("bad name", "0.0.0.0", "8443", "127.0.0.1", "root", "bookworm"):
             self.assertNotIn(secret, blob)
         for _t, a in Items.sent:
             self.assertLessEqual(set(a), {"product", "version", "vendor", "ecosystem", "os", "kind"})
-        self.assertIn("libsmall", blob)                                                  # the architecture suffix is dropped, the name kept
-        self.assertNotIn(":amd64", blob)
+        self.assertIn("libsmall", blob); self.assertNotIn(":amd64", blob)
 
-    def test_all_installed_and_hardware_are_opt_in(self):
-        self.run_cli("--discover", "--all", "--yes", "--all-installed", "--with-hardware")
-        names = [a["product"] for _t, a in Items.sent]
-        self.assertIn("rarething", names); self.assertIn("Box-9", names)
-        hw = next(a for _t, a in Items.sent if a.get("kind") == "hardware")
-        self.assertEqual(hw, {"product": "Box-9", "version": "F.12", "vendor": "Examplecorp", "kind": "hardware"})
+    def test_the_minute_limit_is_waited_out_at_most_five_times_in_a_run(self):
+        Entry.rate_left = 99; Entry.rate_header = "1"
+        rc, out, err = self.run_cli("--discover", "--all", "--yes")
+        self.assertEqual(rc, 3)
+        self.assertEqual(err.count("waiting 1s as it asked"), 5)
 
     def test_the_result_joins_the_local_exposure_label(self):
         rc, out, err = self.run_cli("--discover", "--all", "--yes")
@@ -103,12 +136,8 @@ class AllItems(EntryBase):
         self.assertIn("in-range", row); self.assertIn("listens on all interfaces", row)
         self.assertNotIn("0.0.0.0:8443", "\n".join(Items.sent[0][1].values()))       # the address stays here; only the label is printed locally
 
-    def test_max_items_cuts_the_list_and_says_so(self):
-        rc, out, err = self.run_cli("--discover", "--all", "--yes", "--max-items", "2")
-        self.assertEqual(len(Items.sent), 2); self.assertIn("left out by --max-items", err)
-
     def test_a_limit_stops_the_run_with_a_partial_result_and_exit_3(self):
-        Items.fail_after = 1
+        Items.fail_after = 4
         rc, out, err = self.run_cli("--discover", "--all", "--yes")
         self.assertEqual(rc, 3); self.assertIn("were not sent", err); self.assertIn("CVE-2099-0001", out)
 

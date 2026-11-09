@@ -120,6 +120,7 @@ class LatticeError(Exception):
     pass
 
 
+QUICK_ITEMS, KEY_ITEMS, RATE_WAIT_BUDGET = 25, 200, 5   # items per level; waits for the minute limit in one --discover --all run
 RATE_RETRIES, MAX_RATE_WAIT = 2, 70.0   # a 429 that says 'retry after N seconds' is waited out (at most twice, and only if N is a minute or so)
 PACE_CALLS, PACE_WINDOW = 5, 60.5         # keyless: calls a minute until the server says otherwise, counted across runs; half a second of margin
 READ_CACHE_MAX = 400                      # entries kept in the read cache
@@ -405,6 +406,7 @@ class Lattice:
         self.batch_ok = True                     # turned off for the run when the server does not understand a batch lookup
         self.server_new = False                  # set once an answer carries the inline fields: only then is a batch tried (an older server is never asked)
         self.batches = 0
+        self.rate_budget: int | None = None      # waits left for the minute limit in this run; None: only the per-request limit applies
 
     @staticmethod
     def _wait_to_retry(attempt: int, why: str) -> None:
@@ -437,11 +439,13 @@ class Lattice:
             except urllib.error.HTTPError as e:
                 detail = e.read().decode()[:300]
                 dbg(f"<- HTTP {e.code} in {time.time() - t0:.2f}s body={detail}")
-                if e.code == 429 and rate_tries < RATE_RETRIES:
+                if e.code == 429 and (rate_tries < RATE_RETRIES if self.rate_budget is None else self.rate_budget > 0):
                     wait = retry_after(e.headers.get("Retry-After"), detail)
                     if wait is not None and wait <= MAX_RATE_WAIT:
                         rate_tries += 1
-                        progress(f"Lattice's keyless limit ({pace_calls()} calls a minute) was reached; waiting {wait:g}s as it asked, then trying again ({rate_tries} of {RATE_RETRIES})")
+                        if self.rate_budget is not None:
+                            self.rate_budget -= 1
+                        progress(f"Lattice's keyless limit ({pace_calls()} calls a minute) was reached; waiting {wait:g}s as it asked, then trying again (" + (f"{rate_tries} of {RATE_RETRIES}" if self.rate_budget is None else f"{self.rate_budget} wait(s) left in this run") + ")")
                         time.sleep(wait + 1)
                         continue
                 if e.code in (502, 503, 504) and attempt < len(RETRY_DELAYS):
@@ -2825,20 +2829,24 @@ def cmd_all(a) -> int:
     private_dir()
     inv = inventory()
     post = posture_data()
-    sel = items.select(inv, post, all_installed=getattr(a, "all_installed", False), with_hardware=getattr(a, "with_hardware", False),
-                       also=tuple(getattr(a, "also", None) or ()), limit=getattr(a, "max_items", 60))
+    level = "quick" if (not KEY or getattr(a, "quick", False)) else "key"
+    limit = getattr(a, "max_items", None) or (QUICK_ITEMS if level == "quick" else KEY_ITEMS)
+    sel = items.select(inv, post, level=level, also=tuple(getattr(a, "also", None) or ()), limit=limit)
     its = sel["items"]
     if not its:
-        print("Nothing to check: no listening or server software was found. Add --all-installed to check every installed package one by one.", file=sys.stderr)
+        print("Nothing to check: no operating system, kernel or listening software was found.", file=sys.stderr)
         return 0
-    lines = [f"{items.describe(it):<64} ({sel['why'].get(it['product'], '')})" for it in its]
+    lines = [f"{items.describe(it):<64} ({sel['why'].get(it['product'] + (':' + it['kind'] if it.get('kind') else ''), '')})" for it in its]
     if sel["cut"]:
-        lines.append(f"... {sel['cut']} more were left out by --max-items {getattr(a, 'max_items', 60)}")
-    note = (f"{len(its)} item(s), one request each, {len(its)} unit(s) of your allowance. Sent: only the fields shown. Never sent: host name, addresses, ports, paths, user names, "
+        lines.append(f"... {sel['cut']} more were left out by the limit of {limit} items")
+    who = ("level 1, quick (no key): this machine, its images' operating systems and what listens or runs here" if level == "quick" else
+           "level 2 (your key): the quick items, then foundational packages, well-known server software and the other packages, until your allowance ends")
+    note = (f"{who}. {len(its)} item(s), one request each, {len(its)} unit(s) of your allowance. Sent: only the fields shown. Never sent: host name, addresses, ports, paths, user names, "
             "or the package list as a whole. The server keeps no record of who asked and counts each item anonymously for statistics.")
     if not confirm_send(a, "[all] these items will be sent to lattice.namiq.io, one at a time:", lines, note):
         return 2
     lat = Lattice()
+    lat.rate_budget = RATE_WAIT_BUDGET          # a minute limit is waited out at most 5 times in a run: five times the limit in all
     rows: list[dict] = []
     nores = 0
     stopped = ""
@@ -2874,10 +2882,14 @@ def cmd_all(a) -> int:
         print(f"--exposed: {hidden} lead(s) for software with no listener or service were counted, not listed.")
     if sel["skipped"]:
         print(f"{sel['skipped']} name(s) did not fit the plain-name rule and were not sent.")
+    left_host = sel["unscanned"]["host"] + sum(1 for it in its[done:] if "kind" not in it)
+    print(f"Not scanned: {left_host} package(s) on this host and {sel['unscanned']['images']} package(s) inside images (an image's operating system is checked, its packages are not). "
+          + ("With a key the scan goes further: `lattice-scan get-key`. " if level == "quick" else "")
+          + "Checking every package in depth is the paid report, which is not on sale yet.")
     print("A lead is for a person to read: names are matched and versions compared as upstream numbers; a distribution can fix a CVE under an unchanged version number.")
     if stopped:
         left = len(its) - done
-        print(f"stopped: {stopped}\n{left} item(s) were not sent. Without a key the allowance is small; `lattice-scan get-key` gives a larger one.", file=sys.stderr)
+        print(f"stopped: {stopped}\n{left} item(s) were not sent. " + ("Without a key the allowance is small; `lattice-scan get-key` gives a larger one." if not KEY else "Your allowance for now is used up; the rest is not scanned."), file=sys.stderr)
         return 3
     imps = [{"versionCheck": {"verdict": x["verdict"]}, "exposure": x["exposure"]} for x in rows if x["verdict"] != "outside-range"]
     return fail_on_exit(getattr(a, "fail_on", "never"), imps)
@@ -3250,10 +3262,9 @@ def main() -> int:
     p.add_argument("--open", dest="period", action="store_const", const="open", help="with --discover: exploited CVEs older than a week but within thirty days, overdue first")
     p.add_argument("--all", dest="all_index", action="store_true", help="with --discover: check the older software on this machine. The items that matter (what listens or runs, well-known server software, the kernel) are shown, confirmed, and sent one at a time to Lattice")
     p.add_argument("--yes", action="store_true", help="send what --all or posture --attack shows without asking first (for scripts)")
-    p.add_argument("--all-installed", action="store_true", help="with --discover --all: also send every installed package, one request each (uses a lot of your allowance)")
-    p.add_argument("--with-hardware", action="store_true", help="with --discover --all: also send this machine's maker, model and firmware version as one item")
+    p.add_argument("--quick", action="store_true", help="with --discover --all: level 1 only (this machine, image operating systems, what listens or runs), even with a key")
     p.add_argument("--also", action="append", metavar="PACKAGE", help="with --discover --all: also send this installed package (repeatable)")
-    p.add_argument("--max-items", type=int, default=60, help="with --discover --all: most items to send (default 60)")
+    p.add_argument("--max-items", type=int, default=None, help="with --discover --all: most items to send (default 25 without a key, 200 with one)")
     p.add_argument("--max-read", type=int, default=None, help="with --discover: most ids to read from Lattice per run (default 20 without a key, 200 with one)")
     p.add_argument("--debug", action="store_true", help="detailed execution log to stderr and debug.log (also LATTICE_SCAN_DEBUG=1)")
     p.add_argument("--keep", action="store_true", help="keep this run's records in the default folder even with no terminal (also LATTICE_SCAN_KEEP=1); without it a terminal-less run with no folder yet uses a temporary one")
