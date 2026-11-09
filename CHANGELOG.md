@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — 2026-11-09
+
+This release also carries 0.4.10 and 0.5.0, which were prepared but never published.
 
 - New: a host scan ends with a COVERAGE line: what the running layer covered, and (after a deep posture read) how many running programs and persistence entries belong to no package and so cannot be matched by name. Blind spots are counted, never guessed.
 - New: `lattice-scan posture --attack` names the ATT&CK techniques each signal relates to. The observation-to-technique table is one file that namiq.io publishes and signs with the index key; the tool downloads it (sha256 and signature checked, a lower generation refused, the verified copy used offline) and carries no copy. Only that public file is fetched; nothing about the host is sent. A technique is a reason to read a signal, not a sign of attack. Every posture signal now has a stable code (for example `ssh.password-auth`), also in `--format json`.
