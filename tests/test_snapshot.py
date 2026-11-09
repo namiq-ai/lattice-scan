@@ -69,6 +69,7 @@ class TwoRuns(EntryBase):
         rc, out, err = self.run_with(post([port("all interfaces", "libexamplelib2", 8080)]), "--discover")
         self.assertEqual(rc, 0, err)
         self.assertIn("this is the first stored snapshot", out)
+        self.assertIn("COVERAGE: listeners and services were read", out)
         rc, out, err = self.run_with(post([port("all interfaces", "libexamplelib2", 9090)], units=[{"unit": "example.service", "package": "libexamplelib2"}]), "--discover")
         self.assertEqual(rc, 0, err)
         block = out.split("CHANGE SINCE THE LAST RUN", 1)[1]
