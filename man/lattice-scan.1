@@ -66,22 +66,19 @@ With no ids, no key: read namiq.io's list of recent exploited CVEs, keep those w
 Host scans only: list only the candidates whose package owns a listener on this machine or runs as a service here. The others are counted and still recorded. Each candidate prints an exposure label, a fact read from the local listeners and services: it listens on all interfaces, on loopback only, runs as a service with no listener, is installed with no service found, or sits inside an image. It never says the software is reachable from the internet: NAT, upstream firewalls and cloud rules are unknown here, and without root the firewall rules are not read. Candidates of equal priority are listed with the more exposed first. With \fB\-\-fail\-on exposed\fR the exit status is 1 only for a candidate whose version check is in\-range and that listens on all interfaces.
 .TP
 .B \-\-discover \-\-all
-Check the older software on this machine, which the recent list cannot cover. The items that matter (software that listens or runs as a service here, a short list of well\-known server software, and the running kernel) are printed exactly as they will be sent, you are asked to confirm, and then each is sent on its own to Lattice, which answers from its graph. An item is a product name, a version, and optionally the package ecosystem and the operating\-system family and number (for example "Ubuntu 26.04"). Never sent: the host name, addresses, ports, paths, user names or passwords, or the package list as a whole. The exposure label is joined here from this machine's own listeners. Each item costs one unit of your allowance (about 20 an hour without a key, 200 a day with one); when the allowance ends the run stops, prints what it has and exits 3. The server ties nothing to a key or an address and counts each item anonymously for statistics. With no terminal and no \fB\-\-yes\fR nothing is sent.
+Check the older software on this machine, which the recent list cannot cover, in levels. Level 1, no key: the machine (operating system, kernel, maker, model and firmware version), the operating system of each container image, and what listens or runs as a service. Level 2, with a key: those, then the foundational packages (C library, TLS, SSH, systemd, sudo and similar), then well\-known server software, then every other package in name order, until your allowance ends. Level 3, every package in depth, is the paid report, which is not on sale yet. Items are printed exactly as they will be sent, you are asked to confirm, and then each is sent on its own to Lattice, which answers from its graph. An item is a product name, a version, and optionally the package ecosystem and the operating\-system family and number (for example "Ubuntu 26.04"). Never sent: the host name, addresses, ports, paths, user names or passwords, the package list as a whole, or the packages inside images (only an image's operating system). What was not sent is counted and printed ("Not scanned: N packages"). The exposure label is joined here from this machine's own listeners. Each item costs one unit of your allowance. When the per\-minute limit is reached the run waits it out, at most 5 times in all; when the allowance ends the run stops, prints what it has and exits 3. The server ties nothing to a key or an address and counts each item anonymously for statistics. With no terminal and no \fB\-\-yes\fR nothing is sent.
+.TP
+.B \-\-quick
+With \fB\-\-discover \-\-all\fR: level 1 only, even with a key.
 .TP
 .B \-\-yes
 Send what \fB\-\-discover \-\-all\fR or \fBposture \-\-attack\fR shows without asking first (for scripts).
-.TP
-.B \-\-all\-installed
-With \fB\-\-discover \-\-all\fR: also send every installed package, one request each. Uses a lot of the allowance.
-.TP
-.B \-\-with\-hardware
-With \fB\-\-discover \-\-all\fR: also send this machine's maker, model and firmware version as one item.
 .TP
 .BI \-\-also " PACKAGE"
 With \fB\-\-discover \-\-all\fR: also send this installed package (repeatable).
 .TP
 .BI \-\-max\-items " N"
-With \fB\-\-discover \-\-all\fR: most items to send (default 60).
+With \fB\-\-discover \-\-all\fR: most items to send (default 25 without a key, 200 with one).
 .TP
 .BI \-\-cve\-file " FILE"
 A file of CVE ids, one per line. Text after # is a comment.
