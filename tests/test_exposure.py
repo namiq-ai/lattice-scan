@@ -101,3 +101,10 @@ class HostRun(EntryBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Coverage(unittest.TestCase):
+    def test_blind_spots_are_counted_not_guessed(self):
+        self.assertEqual(exposure.coverage(None), {"read": False})
+        c = exposure.coverage(post() | {"level": "deep", "processes": {"flagged": [{"package": None, "where": ""}, {"package": "x", "where": ""}]}, "persistence": {"cronFilesNoPackage": ["/etc/cron.d/x"]}})
+        self.assertEqual((c["unownedProcesses"], c["unownedPersistence"], c["deep"]), (1, 1, True))

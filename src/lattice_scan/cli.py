@@ -2083,6 +2083,15 @@ def cmd_run(a) -> int:
     if inv["restartRequired"]:
         print("restart required: an installed update is waiting for a reboot")
     detail_files(inv)
+    from . import exposure as _e2
+    cov = _e2.coverage(posture_data())
+    if not cov["read"]:
+        print("COVERAGE: the running layer (listeners, services) could not be read, so no exposure label was given.")
+    elif cov["deep"]:
+        print(f"COVERAGE: {cov['unownedProcesses']} running program(s) and {cov['unownedPersistence']} persistence entr(ies) belong to no package; they cannot be matched by name and are not checked here (see posture --deep).")
+    else:
+        print("COVERAGE: listeners and services were read; running programs and persistence entries that no package owns were not (they cannot be matched by name; posture --deep lists them)."
+              + ("" if cov["firewallRead"] else " Firewall rules were not read: needs root."))
     snapshot_report(posture_data(), inv["hash"])
     return fail_on_exit(getattr(a, "fail_on", "never"), [imp for _, _, imp in hits + again_hits])
 
