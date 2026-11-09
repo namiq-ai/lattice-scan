@@ -56,6 +56,7 @@ class Progress(unittest.TestCase):
         _, quiet_out, quiet_err = self.run_cli("--quiet", "--cve", "CVE-2099-0001")
         self.assertEqual(quiet_err, "")
         (cli.OUT / "findings.jsonl").unlink(); (cli.OUT / "seen.json").unlink()
+        import shutil; shutil.rmtree(cli.OUT / "snapshots")   # a second run would print a change block; compare two first runs
         _, loud_out, loud_err = self.run_cli("--cve", "CVE-2099-0001")   # no flag: progress is the default
         self.assertEqual(quiet_out, loud_out)
         self.assertIn("asking Lattice", loud_err)

@@ -59,6 +59,10 @@ Lattice itself) needs a Lattice key; `recent` does not.
 
 Each host candidate has an `exposure:` line: what this machine shows locally about the matched software (listens on all interfaces, loopback only, service running, installed with nothing running, inside an image). Quote it as printed. It is not "reachable from the internet" and never write that; without root the tool says the firewall rules were not read. `--exposed` lists only software that listens or runs. Ask the person before using it to decide what to ignore: the others are counted, not shown.
 
+### Change since the last run
+
+A host scan ends with a `CHANGE SINCE THE LAST RUN` block: what is new, changed or gone in the listeners, services, SSH settings and open findings since the previous stored run. Quote it as printed. A part marked "not compared" was read in only one of the two runs; it does not mean nothing changed. Snapshots stay on this machine.
+
 ### Quick and deep: which to run, and how to keep the person informed
 
 A host scan has two levels. **Quick** (the default) reads the hardware, the installed packages and snaps, and the images that containers are running (their OS and package list); it takes seconds. **Deep** (`--deep`) also opens every other local image and lists the Python, Node, Java and Ruby packages inside every image; it takes minutes (about 6 for 24 images) and reads a lot of disk.
