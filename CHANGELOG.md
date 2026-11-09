@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 — 2026-11-09
 
 - New: `lattice-scan --discover --all` checks the older software the recent list cannot cover, in levels. Level 1 (no key): this machine (operating system, kernel, maker, model and firmware), the operating system of each container image, and what listens or runs as a service. Level 2 (with a key): those, then the foundational packages (C library, TLS, SSH, systemd, sudo ...), well-known server software, then every other package in name order, until the allowance ends. What was not scanned is counted and printed (packages on the host, packages inside images; an image's packages are never sent). Level 3, every package in depth, is the paid report (not on sale yet). It prints exactly what it will send and asks (`--yes` for scripts; with no terminal and no `--yes` nothing is sent); items go one at a time. Never sent: host name, addresses, ports, paths, user names, or the package list as a whole. When the per-minute limit is reached the run waits it out, at most 5 times in all; when the allowance ends it stops and exits 3. `--quick` stays at level 1, `--also PACKAGE` adds a package, `--max-items N` cuts the list. The exposure label is joined on this machine.
 - New: `posture --attack` works again, the same way: the signal codes found are shown, confirmed and sent one at a time, and the ATT&CK techniques each may point to come back.

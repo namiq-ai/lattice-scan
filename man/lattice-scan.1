@@ -1,6 +1,6 @@
 .\" SPDX-License-Identifier: Apache-2.0
 .\" Copyright 2026 NamiQ LLC
-.TH LATTICE-SCAN 1 "November 2026" "lattice-scan 0.6.1" "User Commands"
+.TH LATTICE-SCAN 1 "November 2026" "lattice-scan 0.7.0" "User Commands"
 .SH NAME
 lattice-scan \- check this host, or a project's declared dependencies, against the CVEs CISA lists as exploited, through Lattice
 .SH SYNOPSIS
@@ -234,7 +234,7 @@ Ids to read, as in host mode. Several may be given in one argument, separated by
 CISA's catalogue, used locally to choose ids. Needs a key whose email is confirmed (see \fBWho can scan what\fR).
 .TP
 .B \-\-all
-Not available in 0.6.1 (exit 2, nothing fetched): see \fB\-\-discover \-\-all\fR.
+Not available (exit 2, nothing sent): see \fB\-\-discover \-\-all\fR.
 .TP
 .BI \-\-max\-read " N"
 Most ids to read from Lattice per run (default 200 with a key, 20 without). Ids over the limit are listed as not read.
