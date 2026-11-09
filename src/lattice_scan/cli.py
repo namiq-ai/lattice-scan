@@ -2426,6 +2426,7 @@ def fetch_bytes(url: str, limit: int) -> bytes:
     return raw
 
 
+# DORMANT since 0.6.1: nothing routes here. The exploited index is no longer published (ADR-LATTICE-SCAN-001 amendment 2026-11-09). Removed when item-by-item checking lands.
 def cmd_index(a) -> int:
     """`lattice-scan index`: fetch (at most once a day), check and report the signed exploited index. Exit 0 ok, 2 refused (bad signature, unknown key, lower
     generation, or stale with --require-fresh), 3 unavailable. A stale index that is still the newest we could get is a warning, not a failure."""
@@ -2938,9 +2939,24 @@ def cmd_recent(a) -> int:
     return 0
 
 
+WITHDRAWN_FEATURES = {
+    "all": "`--discover --all` (matching a downloaded index of every exploited CVE) is not available in this version. The project decided not to publish that dataset. "
+           "For the CVEs CISA added in the last 30 days use `lattice-scan --discover --monthly` (or `--open` for deadlines already passed). Checking old software one item at a time on the server is planned and not built yet.",
+    "index": "`lattice-scan index` is not available in this version: the exploited index is no longer published. Nothing was fetched.",
+    "attack": "`posture --attack` is not available in this version: the table that mapped signals to ATT&CK techniques is no longer published. The posture report itself is unchanged and still sends nothing. Nothing was fetched.",
+}
+
+
+def feature_withdrawn(which: str) -> int:
+    print(WITHDRAWN_FEATURES[which], file=sys.stderr)
+    return 2
+
+
 def cmd_posture(a) -> int:
     """What this host exposes and runs: listening ports, firewall, SSH settings, services and (--deep) processes no package owns. Read only; nothing is sent anywhere."""
     from lattice_scan import posture
+    if getattr(a, "attack", False):
+        return feature_withdrawn("attack")
     deep = getattr(a, "posture_deep", False) or getattr(a, "deep", False)
     who = "root" if os.geteuid() == 0 else f"a normal user (uid {os.geteuid()})"
     progress(f"[posture] {'deep' if deep else 'quick'} scan as {who}: ports, firewall, ssh, services" + (", processes, persistence points" if deep else "")
@@ -3387,24 +3403,20 @@ def main() -> int:
         progress("[discover] no command and no CVE id given: running lattice-scan --discover --weekly")
         return structured(a, cmd_recent)
     if a.c is None and a.discover and getattr(a, "all_index", False) and not (a.cve or a.cve_file):
-        a.c = "all"
-        return structured(a, cmd_all)
+        return feature_withdrawn("all")
     if a.c is None and a.discover and not (a.cve or a.cve_file):
         # --discover on the host is the same engine as `recent`: it needs no key (the list is a plain request) and takes the same windows.
         a.window_name = a.period or "weekly"
         a.c, a.period, a.no_critical = "recent", WINDOW_TO_PERIOD.get(a.window_name, "weekly"), False
         return structured(a, cmd_recent)
     if a.c == "project" and getattr(a, "all_index", False):
-        if not a.discover:
-            print("--all goes with --discover: lattice-scan project . --discover --all", file=sys.stderr)
-            return 2
-        return structured(a, cmd_project_all)
+        return feature_withdrawn("all")
     if a.c == "project": return cmd_project(a)
     if a.c == "recent": return structured(a, cmd_recent)
     if a.c == "posture": return cmd_posture(a)
     if a.c == "enrich": return structured(a, cmd_enrich)
     if a.c == "get-key": return cmd_get_key(a)
-    if a.c == "index": return cmd_index(a)
+    if a.c == "index": return feature_withdrawn("index")
     if a.c == "impact": return cmd_impact(a)
     if a.c == "resolve": return cmd_resolve(a)
     if a.c == "add": return cmd_add(a)

@@ -50,8 +50,6 @@ A person reads what it prints and decides. It also ships as a Claude Code and Op
 ```bash
 lattice-scan --cve CVE-2021-44228 --cve CVE-2026-46300     # compared with this host; prints the evidence, priority, EPSS, SSVC, weakness, ATT&CK
 lattice-scan --discover --weekly                           # no key: what CISA added in the last week, checked against this host (--daily, --monthly, --open)
-lattice-scan project . --discover --all                    # the same for the dependencies a project declares (counts only)
-lattice-scan --discover --all                              # old software: every CISA-listed CVE matched here against the signed index; counts by verdict and year, no CVE named, nothing read from Lattice
 lattice-scan list | impact CVE-... | resolve CVE-... --status fixed --proof "..."    # the findings recorded so far, one in detail, and closing one
 ```
 
@@ -76,7 +74,6 @@ lattice-scan --deep                                        # deep inventory: eve
 
 ```bash
 lattice-scan posture                                       # listening ports, firewall, SSH settings, services (seconds)
-lattice-scan posture --attack                              # also name the ATT&CK techniques each signal relates to (one download of a signed public table)
 lattice-scan posture --since last                          # what is new, changed or gone since the last stored run (every host scan prints this too)
 lattice-scan posture --deep                                # also processes no package owns, and persistence points (about a minute)
 sudo lattice-scan posture --deep                           # as root: firewall rules, effective SSH settings, every process
@@ -162,7 +159,7 @@ lattice-scan project . --cve CVE-2026-46300,CVE-2021-44228 --format csv | \
   python3 -c 'import csv,sys; [print(r["cve"], r["component"]) for r in csv.DictReader(sys.stdin) if r["verdict"]=="in-range"]'
 ```
 
-The signed exploited index: `lattice-scan index` fetches (at most once a day), checks and shows the Ed25519-signed list of every CISA-exploited CVE with NVD's version ranges that namiq.io publishes, so a later scan can match this machine's own inventory on this machine. Nothing from the machine is sent; a bad signature, an unknown key or a rolled-back generation is refused and the previous copy kept.
+The exploited index and `lattice-scan index` are not available in 0.6.1: that dataset is no longer published. Checking old software one item at a time on the server is planned and not built yet.
 
 Machine output: `--format json|csv` (or `--json FILE`, written with mode 0600) on the host check, `recent` and `enrich` gives the RESULT BY CVE table as one JSON document or CSV and nothing else on standard output.
 

@@ -59,9 +59,9 @@ Lattice itself) needs a Lattice key; `recent` does not.
 
 Each host candidate has an `exposure:` line: what this machine shows locally about the matched software (listens on all interfaces, loopback only, service running, installed with nothing running, inside an image). Quote it as printed. It is not "reachable from the internet" and never write that; without root the tool says the firewall rules were not read. `--exposed` lists only software that listens or runs. Ask the person before using it to decide what to ignore: the others are counted, not shown.
 
-### ATT&CK techniques for posture signals
+### Not available in this version
 
-`posture --attack` adds `ATT&CK, relates to: T1110 ...` under a signal, from the signed table namiq.io publishes. It downloads one public file and sends nothing about the host. Quote the ids as printed; say they are reasons to read the signal, never that an attack happened or that the host is compromised.
+`--discover --all`, `project --discover --all`, `lattice-scan index` and `posture --attack` print "not available in this version" and exit 2. They needed a published dataset, which is no longer published. Tell the person that, and use `--discover --monthly` or `--open` for named CVEs. Do not try to work around it.
 
 ### Change since the last run
 
