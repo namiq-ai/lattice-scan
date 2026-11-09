@@ -49,6 +49,7 @@ A person reads what it prints and decides. It also ships as a Claude Code and Op
 
 ```bash
 lattice-scan --cve CVE-2021-44228 --cve CVE-2026-46300     # compared with this host; prints the evidence, priority, EPSS, SSVC, weakness, ATT&CK
+lattice-scan --discover --all                              # older software: shows the items, asks, sends them one at a time (--yes in scripts)
 lattice-scan --discover --weekly                           # no key: what CISA added in the last week, checked against this host (--daily, --monthly, --open)
 lattice-scan list | impact CVE-... | resolve CVE-... --status fixed --proof "..."    # the findings recorded so far, one in detail, and closing one
 ```
@@ -257,7 +258,7 @@ Command line arguments are never recorded (they carry passwords). Programs in co
 
 ## What leaves the machine
 
-CVE ids, and the key if you set one. `posture` sends nothing at all. The inventory (hardware, package names and versions, and what is inside images) is never sent; matching happens locally.
+CVE ids, and the key if you set one. `posture` sends nothing at all, unless you add `--attack`: then the signal codes it found (fixed labels such as `ssh.password-auth`) are shown, confirmed and sent one at a time. `--discover --all` shows the items it will send (a product, a version, the package ecosystem and the OS family and number), asks, and sends them one at a time; never a host name, address, port or path. The inventory (hardware, package names and versions, and what is inside images) is not sent as a list; matching happens locally, except for the items you confirm with `--discover --all`.
 `recent` also downloads namiq.io's public list of recent CVE ids; that request carries no id and nothing about the host. `get-key` sends the name, position, company, email and purpose you give it, only after `--accept-terms`.
 
 ## What it writes

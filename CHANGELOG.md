@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- New: `lattice-scan --discover --all` checks the older software the recent list cannot cover. It prints exactly what it will send, asks (`--yes` for scripts; with no terminal and no `--yes` nothing is sent), and sends the items one at a time to Lattice: what listens or runs as a service here, a short list of well-known server software, and the running kernel. An item is a product name, a version, the package ecosystem and the OS family and number. Never sent: host name, addresses, ports, paths, user names, or the package list as a whole. Each item uses one unit of the allowance; when it ends the run stops with what it has and exits 3. `--all-installed`, `--with-hardware`, `--also PACKAGE` and `--max-items N` widen or cut the list. The exposure label is joined on this machine.
+- New: `posture --attack` works again, the same way: the signal codes found are shown, confirmed and sent one at a time, and the ATT&CK techniques each may point to come back.
+- Removed: the downloader code for the signed index and the ATT&CK table (`index` command, `exploited`, `observations`, `ed25519`). `project --discover --all` stays off: dependency names can be private.
+
 ## 0.6.1 — 2026-11-09
 
 - Removed from use: `--discover --all`, `project --discover --all`, `lattice-scan index` and `posture --attack`. They needed a downloaded dataset (the signed exploited index, the ATT&CK table), and that dataset is no longer published. Each prints "not available in this version" on stderr, exits 2 and fetches nothing. `--discover --monthly` and `--open` still list named CVEs, `recent --all` is unchanged, and the posture report is unchanged (it still sends nothing).

@@ -66,7 +66,22 @@ With no ids, no key: read namiq.io's list of recent exploited CVEs, keep those w
 Host scans only: list only the candidates whose package owns a listener on this machine or runs as a service here. The others are counted and still recorded. Each candidate prints an exposure label, a fact read from the local listeners and services: it listens on all interfaces, on loopback only, runs as a service with no listener, is installed with no service found, or sits inside an image. It never says the software is reachable from the internet: NAT, upstream firewalls and cloud rules are unknown here, and without root the firewall rules are not read. Candidates of equal priority are listed with the more exposed first. With \fB\-\-fail\-on exposed\fR the exit status is 1 only for a candidate whose version check is in\-range and that listens on all interfaces.
 .TP
 .B \-\-discover \-\-all
-Not available in 0.6.1 (exit 2, nothing fetched). It matched a downloaded index of every exploited CVE against this host, and that dataset is no longer published. Use \fB\-\-discover \-\-monthly\fR for the last 30 days. Checking old software one item at a time on the server is planned and not built yet.
+Check the older software on this machine, which the recent list cannot cover. The items that matter (software that listens or runs as a service here, a short list of well\-known server software, and the running kernel) are printed exactly as they will be sent, you are asked to confirm, and then each is sent on its own to Lattice, which answers from its graph. An item is a product name, a version, and optionally the package ecosystem and the operating\-system family and number (for example "Ubuntu 26.04"). Never sent: the host name, addresses, ports, paths, user names or passwords, or the package list as a whole. The exposure label is joined here from this machine's own listeners. Each item costs one unit of your allowance (about 20 an hour without a key, 200 a day with one); when the allowance ends the run stops, prints what it has and exits 3. The server ties nothing to a key or an address and counts each item anonymously for statistics. With no terminal and no \fB\-\-yes\fR nothing is sent.
+.TP
+.B \-\-yes
+Send what \fB\-\-discover \-\-all\fR or \fBposture \-\-attack\fR shows without asking first (for scripts).
+.TP
+.B \-\-all\-installed
+With \fB\-\-discover \-\-all\fR: also send every installed package, one request each. Uses a lot of the allowance.
+.TP
+.B \-\-with\-hardware
+With \fB\-\-discover \-\-all\fR: also send this machine's maker, model and firmware version as one item.
+.TP
+.BI \-\-also " PACKAGE"
+With \fB\-\-discover \-\-all\fR: also send this installed package (repeatable).
+.TP
+.BI \-\-max\-items " N"
+With \fB\-\-discover \-\-all\fR: most items to send (default 60).
 .TP
 .BI \-\-cve\-file " FILE"
 A file of CVE ids, one per line. Text after # is a comment.
@@ -326,7 +341,10 @@ also reads every process it may: where its program lives, whether a package owns
 Also processes and persistence points (see above).
 .TP
 .B \-\-attack
-Not available in 0.6.1 (exit 2, nothing scanned or fetched): the table that mapped signals to techniques is no longer published. The posture report is unchanged and sends nothing.
+Also name the ATT&CK techniques each signal may point to. The signal codes found (fixed labels such as ssh.password\-auth, never the setting, port or path behind them) are printed, you are asked to confirm, and each is sent on its own to Lattice, which names the techniques. A technique is a reason to read a signal, not a sign of attack. Without B\-\-attackR the posture report sends nothing at all.
+.TP
+.B \-\-yes
+Send the signal codes without asking first (for scripts).
 .TP
 .B \-\-since last
 Also print what is new, changed or gone since the last stored run: listening ports, running services, effective SSH settings (root only), persistence entries (deep only) and open findings, with the day a new finding was first found. A part read in only one of the two runs is reported as not compared, never as gone. This run is stored for the next comparison. Every host scan does the same at its end. Snapshots are kept in the private records folder (mode 0600), never sent anywhere, and the oldest beyond 30 are deleted.
@@ -357,8 +375,6 @@ Asks for a Lattice key for a real person. Without \fB\-\-accept\-terms\fR nothin
 The terms version is read from the key service's own published description and sent exactly. The key is stored in the records folder as the file \fBkey\fR (mode 0600), never printed, and used automatically by later runs while the file stays private to the user. If a key is already stored it asks for nothing more unless \fB\-\-force\fR is given.
 .SH RESULT AS DATA
 \fB\-\-format json\fR or \fB\-\-format csv\fR on the host check, \fBrecent\fR and \fBenrich\fR prints the RESULT BY CVE table as one JSON document (schema \fBlattice\-scan\-result/1\fR: tool, command, window, exit code, counts by result, rows, and the findings still open from earlier runs) or as CSV with a header row, and nothing else on standard output; progress and errors stay on standard error. \fB\-\-json FILE\fR writes the JSON to a file (mode 0600, because it names this host's software) and leaves the screen unchanged. A CSV cell that starts with = + \- or @ has a leading apostrophe so a spreadsheet does not run it. \fBproject\fR and \fBposture\fR have their own \fB\-\-format\fR and \fB\-\-json\fR.
-.SH THE EXPLOITED INDEX (NOT AVAILABLE)
-\fBlattice\-scan index\fR [\fB\-\-refresh\fR] [\fB\-\-require\-fresh\fR] is not available in 0.6.1 (exit 2, nothing fetched): the exploited index is no longer published.
 .SH EXIT STATUS
 .TP
 .B 0
@@ -422,12 +438,6 @@ Age after which a leftover scan container from an earlier, killed run is removed
 .B LATTICE_SCAN_IMAGES_LANG
 Which images get the Python, Node, Java and Ruby package scan, overriding the level: all (the deep default), running or off (the quick default).
 .TP
-.B LATTICE_SCAN_OBSERVATIONS_URL
-Not used in 0.6.1: the observation table is no longer published.
-.TP
-.B LATTICE_SCAN_OBSERVATIONS_MANIFEST_URL
-Not used in 0.6.1: the observation table is no longer published.
-.TP
 .B LATTICE_SCAN_POSTURE
 A JSON posture report to use for the exposure labels instead of reading listeners and services (tests, other tools).
 .TP
@@ -439,12 +449,6 @@ Progress is on by default. Set to 0 to turn it off, like \fB\-\-quiet\fR.
 .TP
 .B LATTICE_SCAN_FEED
 Where \fBrecent\fR reads the lists (default https://namiq.io/lattice/recent.json).
-.TP
-.B LATTICE_SCAN_INDEX_URL
-Not used in 0.6.1: the exploited index is no longer published.
-.TP
-.B LATTICE_SCAN_INDEX_MANIFEST_URL
-Not used in 0.6.1: the exploited index is no longer published.
 .TP
 .B LATTICE_SCAN_KEY_URL
 The key service \fBget\-key\fR asks (default https://namiq.io/api/v1/lattice/agent-keys).

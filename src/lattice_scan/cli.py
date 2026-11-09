@@ -11,7 +11,7 @@ What leaves the machine: CVE ids, and the key if you have one. The inventory (pa
 Records live in ~/.lattice-scan (or LATTICE_SCAN_DIR), mode 0700, because they name the host's packages. Never commit or publish them.
 
   lattice-scan --cve CVE-2026-1234 --cve-file ids.txt   check these ids (works keyless; ~1 lookup per id)
-  lattice-scan --discover --all                         the whole signed exploited index matched here: counts only (see `index`); never reads Lattice
+  lattice-scan --discover --all                         the older software here: the items that matter, shown, confirmed, sent one at a time
   lattice-scan --discover [--daily|--weekly|--monthly|--open]   no key: exploited CVEs added in the window (default weekly), checked against this host; same as `recent`
   lattice-scan --debug --cve CVE-...                detailed execution log: every request, response, timing and match decision (stderr + debug.log; never the key)
   lattice-scan inventory [-n 20]                    inventory.log: what was found on each run and what changed since the last one
@@ -570,7 +570,7 @@ class Lattice:
 
 
 from lattice_scan import report  # noqa: E402
-from lattice_scan import exploited, lattice_version as lv  # noqa: E402   # the one implementation of versions, ranges, product ids and the verdict ladder
+from lattice_scan import lattice_version as lv  # noqa: E402   # the one implementation of versions, ranges, product ids and the verdict ladder
 
 
 def run(cmd: list[str]) -> str:
@@ -1212,7 +1212,7 @@ def inventory() -> dict:
     progress("[host] hardware: " + (" ".join(x for x in (host.get("manufacturer"), host.get("model"), host.get("version")) if x) or "not reported by this machine"))
     IMAGE_SCAN.clear()
     details = image_details(images)
-    inv = {"kernel": kernel, "os": osr, "host": host, "packages": pk, "snaps": snaps, "images": images, "imageDetails": details, "node": run(["node", "-v"]).strip(),
+    inv = {"kernel": kernel, "os": osr, "manager": manager if pk else "", "host": host, "packages": pk, "snaps": snaps, "images": images, "imageDetails": details, "node": run(["node", "-v"]).strip(),
            "restartRequired": Path("/var/run/reboot-required").exists()}
     if IMAGE_SCAN:
         inv["imageScan"] = dict(IMAGE_SCAN)
@@ -2411,45 +2411,6 @@ def cmd_project(a) -> int:
 CVE_ID = re.compile(r"\bCVE-\d{4}-\d{4,}\b", re.I)
 
 
-def fetch_bytes(url: str, limit: int) -> bytes:
-    """GET a public file as raw bytes (the signed exploited index is checked on its exact bytes): https only (http only for this machine), no redirect, size-capped.
-    Raises OSError, which exploited.load turns into 'unreachable'. The request carries nothing from this machine."""
-    from urllib.parse import urlparse
-    u = urlparse(url)
-    if not (u.scheme == "https" or (u.scheme == "http" and u.hostname in ("127.0.0.1", "localhost", "::1"))):
-        raise OSError(f"refusing {url}: not https")
-    req = urllib.request.Request(url, headers={"User-Agent": f"lattice-scan/{__version__}"})
-    with _OPENER.open(req, timeout=30) as r:
-        raw = r.read(limit + 1)
-    if len(raw) > limit:
-        raise OSError(f"{url} is larger than {limit} bytes")
-    return raw
-
-
-# DORMANT since 0.6.1: nothing routes here. The exploited index is no longer published (ADR-LATTICE-SCAN-001 amendment 2026-11-09). Removed when item-by-item checking lands.
-def cmd_index(a) -> int:
-    """`lattice-scan index`: fetch (at most once a day), check and report the signed exploited index. Exit 0 ok, 2 refused (bad signature, unknown key, lower
-    generation, or stale with --require-fresh), 3 unavailable. A stale index that is still the newest we could get is a warning, not a failure."""
-    exploited.INDEX_URL = env("INDEX_URL", exploited.INDEX_URL)
-    exploited.MANIFEST_URL = env("INDEX_MANIFEST_URL", exploited.MANIFEST_URL)
-    try:
-        r = exploited.load(cache_dir() / "exploited", fetch_bytes, force=a.refresh, require_fresh=a.require_fresh)
-    except exploited.IndexRefused as err:
-        print(f"refused: {err}", file=sys.stderr)
-        return 2
-    except exploited.IndexUnavailable as err:
-        print(f"stopped: {err}", file=sys.stderr)
-        return 3
-    wr = sum(1 for x in r["rows"] if x.get("rangeStatus") == "ranges")
-    print(f"exploited index: generation {r['generation']}, as of {r['exploitedAsOf']} ({r['ageDays']} day(s) old), {len(r['rows'])} CVEs "
-          f"({wr} with version ranges), from {r['source']}; signature checked.")
-    if r["note"]:
-        print(f"note: {r['note']}", file=sys.stderr)
-    if r["stale"]:
-        print(f"warning: older than {exploited.MAX_AGE_DAYS} days. `--all` and `--report` will refuse it; windowed runs do not use it.", file=sys.stderr)
-    return 0
-
-
 def fetch_json(url: str, what: str, limit: int = 1024 * 1024) -> dict:
     """GET a small JSON document: https only (http only for this machine), no redirect, size-capped, the same three tries as a Lattice request."""
     from urllib.parse import urlparse
@@ -2760,113 +2721,6 @@ def cmd_share(a) -> int:
     return 0
 
 
-def index_verdict(row: dict, inv: dict, match=None) -> tuple[str, str]:
-    """(verdict, installed) for one row of the signed exploited index against the host's inventory, computed here from the index alone (no Lattice call):
-    unmatch (nothing installed matches), in-range, outside-range, or undetermined (a match with no usable range). `installed` is only for the caller's own use; it is
-    never printed by the free `--all`."""
-    entry = {"cve": row["id"], "vendor": str(row.get("vendor") or ""), "product": str(row.get("product") or "")}
-    m = (match or candidate)(entry, inv)
-    if not m:
-        return "unmatch", ""
-    if len(m) > 3 and not m[3]:
-        return "undetermined", m[0]       # a project match only through a scope or a client library: no range is compared
-    if row.get("rangeStatus") != "ranges" or not row.get("ranges"):
-        return "undetermined", m[0]
-    entry["ranges"] = row["ranges"]
-    v = version_check(entry, m[2])["verdict"]
-    return (v if v in ("in-range", "outside-range", "undetermined") else "undetermined"), m[0]
-
-
-def index_stats(rows: list[dict], inv: dict, match=None) -> dict:
-    """Counts by verdict and by the year CISA added the CVE. A cell under 3 is `<3` (a count of one or two could single out a CVE). No id, no product name."""
-    by_verdict: dict[str, int] = {}
-    by_year: dict[str, dict[str, int]] = {}
-    for r in rows:
-        if not (isinstance(r, dict) and isinstance(r.get("id"), str)):
-            continue
-        v, _ = index_verdict(r, inv, match)
-        by_verdict[v] = by_verdict.get(v, 0) + 1
-        if v != "unmatch":
-            y = str(r.get("added") or "")[:4] or "unknown"
-            by_year.setdefault(y, {}); by_year[y][v] = by_year[y].get(v, 0) + 1
-
-    def cell(n: int) -> str:
-        return "<3" if 0 < n < 3 else str(n)
-    return {"considered": len(rows), "counts": {k: by_verdict.get(k, 0) for k in ("in-range", "undetermined", "outside-range", "unmatch")},
-            "shown": {k: cell(by_verdict.get(k, 0)) for k in ("in-range", "undetermined", "outside-range")},
-            "byYear": {y: {k: cell(n) for k, n in sorted(d.items())} for y, d in sorted(by_year.items())}}
-
-
-def cmd_all(a) -> int:
-    """`--discover --all`: the whole signed exploited index matched against this host, locally. It is never a crawl: nothing is read from Lattice, and the free
-    output is statistics only (counts by verdict and year), in every format. A person who wants the CVEs reads a windowed scan; the detailed report is a later, paid step."""
-    exploited.INDEX_URL = env("INDEX_URL", exploited.INDEX_URL)
-    exploited.MANIFEST_URL = env("INDEX_MANIFEST_URL", exploited.MANIFEST_URL)
-    private_dir()
-    try:
-        progress("[all] reading the signed exploited index from namiq.io (a plain request: nothing from this host is sent) ...")
-        idx = exploited.load(cache_dir() / "exploited", fetch_bytes, require_fresh=True)
-    except exploited.IndexRefused as err:
-        print(f"refused: {err}", file=sys.stderr)
-        return 2
-    except exploited.IndexUnavailable as err:
-        print(f"stopped: {err}", file=sys.stderr)
-        return 3
-    inv = inventory()
-    progress(f"[all] matching {len(idx['rows'])} exploited CVEs against {len(inv['packages'])} packages here; nothing is read from Lattice ...")
-    return finish_all(a, idx, index_stats(idx["rows"], inv), "this host")
-
-
-def cmd_project_all(a) -> int:
-    """`project --discover --all`: the same statistics for the dependencies the folders declare (all folders together)."""
-    from lattice_scan import manifests
-    exploited.INDEX_URL = env("INDEX_URL", exploited.INDEX_URL)
-    exploited.MANIFEST_URL = env("INDEX_MANIFEST_URL", exploited.MANIFEST_URL)
-    try:
-        progress("[all] reading the signed exploited index from namiq.io (a plain request: nothing from your project is sent) ...")
-        idx = exploited.load(cache_dir() / "exploited", fetch_bytes, require_fresh=True)
-    except exploited.IndexRefused as err:
-        print(f"refused: {err}", file=sys.stderr)
-        return 2
-    except exploited.IndexUnavailable as err:
-        print(f"stopped: {err}", file=sys.stderr)
-        return 3
-    comps_all = []
-    for root_s in a.paths:
-        root = Path(root_s).resolve()
-        if not root.is_dir():
-            print(f"not a folder: {root_s}", file=sys.stderr)
-            return 2
-        progress(f"[project] {root.name or root}: looking for dependency files under {root}")
-        manifests.SKIPPED.clear()
-        comps, files, cut = manifests.read_project(root, on_file=_file_progress)
-        progress(f"[project] {root.name or root}: {len(files)} file(s) read, {len(comps)} declared component(s)")
-        comps_all += list(comps)
-    inv, _ = project_inventory(comps_all)
-    progress(f"[all] matching {len(idx['rows'])} exploited CVEs against {len(inv['packages'])} declared components; nothing is read from Lattice ...")
-    return finish_all(a, idx, index_stats(idx["rows"], inv, project_candidate), "these projects", "component")
-
-
-def finish_all(a, idx: dict, st: dict, where: str, unit: str = "package") -> int:
-    c = st["counts"]
-    RESULT["statistics"] = {"index": {"generation": idx["generation"], "exploitedAsOf": idx["exploitedAsOf"], "ageDays": idx["ageDays"], "cves": st["considered"]},
-                            "byVerdict": st["shown"], "byYear": st["byYear"]}
-    print(f"all {TODAY}: signed exploited index generation {idx['generation']}, as of {idx['exploitedAsOf']} ({idx['ageDays']} day(s) old), {st['considered']} CISA-listed CVEs "
-          f"matched against {where} locally.")
-    print(f"cost: 0 reads from Lattice, 0 units: {c['in-range'] + c['undetermined']} candidates are counted here, not read. Free output is statistics only.")
-    print("\nBY VERDICT (a count under 3 shows as <3)")
-    for k, v in st["shown"].items():
-        print(f"  {k:<14}{v:>6}")
-    if st["byYear"]:
-        print("\nBY YEAR CISA ADDED THEM")
-        for y, d in st["byYear"].items():
-            print(f"  {y}  " + "  ".join(f"{k} {v}" for k, v in d.items()))
-    print("\nThis is a count, not a finding list: it names no CVE and no product. To read the CVEs added recently, run lattice-scan --discover --monthly; "
-          "a candidate is a lead for a person to check, never a verdict that the host is vulnerable.")
-    mode = getattr(a, "fail_on", "never")
-    return 1 if (mode == "candidate" and c["in-range"] + c["undetermined"]) or (mode == "in-range" and c["in-range"]) else 0
-
-
 def cmd_recent(a) -> int:
     """Start here when you have no CVE id: read namiq.io's recent exploited and critical ids, rule out locally what this host cannot have, and read only
     the rest from Lattice by exact id. The host's inventory never leaves the machine; the feed request carries no id and no host data."""
@@ -2939,11 +2793,127 @@ def cmd_recent(a) -> int:
     return 0
 
 
+def confirm_send(a, heading: str, lines: list[str], note: str) -> bool:
+    """Show exactly what will be sent and ask. On stderr, so it is seen even when the result goes to a file or `--format json`. `--yes` skips the question (scripts);
+    with no terminal and no --yes nothing is sent."""
+    print(heading, file=sys.stderr)
+    for l in lines:
+        print("  " + l, file=sys.stderr)
+    print(note, file=sys.stderr)
+    if getattr(a, "yes", False):
+        return True
+    if not sys.stdin.isatty():
+        print("Nothing was sent: there is no terminal to ask on. Add --yes to send without asking.", file=sys.stderr)
+        return False
+    try:
+        ans = input("Send these? [y/N] ")
+    except EOFError:
+        ans = ""
+    if ans.strip().lower() not in ("y", "yes"):
+        print("Nothing was sent.", file=sys.stderr)
+        return False
+    return True
+
+
+VERDICT_ORDER = {"in-range": 0, "undetermined": 1, "outside-range": 2}
+
+
+def cmd_all(a) -> int:
+    """`--discover --all`: the old software the recent list cannot cover. The items that matter on this machine (what listens or runs, well-known server software, the
+    kernel) are shown, confirmed, and sent one at a time to Lattice, which answers from its graph. The exposure label is joined here, from this machine's own listeners."""
+    from . import exposure, items
+    private_dir()
+    inv = inventory()
+    post = posture_data()
+    sel = items.select(inv, post, all_installed=getattr(a, "all_installed", False), with_hardware=getattr(a, "with_hardware", False),
+                       also=tuple(getattr(a, "also", None) or ()), limit=getattr(a, "max_items", 60))
+    its = sel["items"]
+    if not its:
+        print("Nothing to check: no listening or server software was found. Add --all-installed to check every installed package one by one.", file=sys.stderr)
+        return 0
+    lines = [f"{items.describe(it):<64} ({sel['why'].get(it['product'], '')})" for it in its]
+    if sel["cut"]:
+        lines.append(f"... {sel['cut']} more were left out by --max-items {getattr(a, 'max_items', 60)}")
+    note = (f"{len(its)} item(s), one request each, {len(its)} unit(s) of your allowance. Sent: only the fields shown. Never sent: host name, addresses, ports, paths, user names, "
+            "or the package list as a whole. The server keeps no record of who asked and counts each item anonymously for statistics.")
+    if not confirm_send(a, "[all] these items will be sent to lattice.namiq.io, one at a time:", lines, note):
+        return 2
+    lat = Lattice()
+    rows: list[dict] = []
+    nores = 0
+    stopped = ""
+    done = 0
+    for n, it in enumerate(its, 1):
+        progress(f"[item {n}/{len(its)}] {items.describe(it)}")
+        try:
+            ans = lat.call("graph_affects", **it)
+        except LatticeError as err:
+            stopped = clean(str(err))
+            break
+        done += 1
+        res = [r for r in (ans.get("results") or []) if isinstance(r, dict)]
+        if not res:
+            nores += 1
+        name = it["product"]
+        label = exposure.label([f"{name} {it.get('version', '')}".strip()] if it.get("kind") != "kernel" else ["kernel " + it.get("version", "")], inv["packages"], post)
+        for r in res:
+            rows.append({"cve": str(r.get("cve")), "item": it, "verdict": str(r.get("verdict")), "why": str(r.get("why") or ""), "r": r, "exposure": label})
+    if getattr(a, "exposed", False):
+        kept = [x for x in rows if x["exposure"]["class"] in exposure.EXPOSED]
+        hidden = len(rows) - len(kept)
+        rows = kept
+    else:
+        hidden = 0
+    rows.sort(key=lambda x: (VERDICT_ORDER.get(x["verdict"], 9), exposure.sort_key(x["exposure"]), str(x["r"].get("due") or "9999"), x["cve"]))
+    table = [[x["cve"], "yes", "-", str(x["r"].get("added") or "-"), due_cell(str(x["r"].get("due") or "")), ransom(str(x["r"].get("ransomware") or "")),
+              f"{x['r'].get('vendor') or '-'} {x['r'].get('product') or '-'}".strip(), x["verdict"],
+              clean(f"{items.describe(x['item'])}: {x['why']}; {x['exposure']['text']}")] for x in rows]
+    print(f"all {TODAY}: {done} of {len(its)} item(s) checked one at a time by Lattice; {len(rows)} lead(s), {nores} item(s) with no exploited CVE listed (that is not the same as safe).")
+    print_table(table)
+    if hidden:
+        print(f"--exposed: {hidden} lead(s) for software with no listener or service were counted, not listed.")
+    if sel["skipped"]:
+        print(f"{sel['skipped']} name(s) did not fit the plain-name rule and were not sent.")
+    print("A lead is for a person to read: names are matched and versions compared as upstream numbers; a distribution can fix a CVE under an unchanged version number.")
+    if stopped:
+        left = len(its) - done
+        print(f"stopped: {stopped}\n{left} item(s) were not sent. Without a key the allowance is small; `lattice-scan get-key` gives a larger one.", file=sys.stderr)
+        return 3
+    imps = [{"versionCheck": {"verdict": x["verdict"]}, "exposure": x["exposure"]} for x in rows if x["verdict"] != "outside-range"]
+    return fail_on_exit(getattr(a, "fail_on", "never"), imps)
+
+
+def attack_techniques(a, d: dict) -> int:
+    """`posture --attack`: each distinct signal code is shown, confirmed, and sent one at a time to Lattice, which names the ATT&CK techniques it may point to.
+    A signal is a fixed code (for example ssh.password-auth), never the setting, port or path behind it."""
+    from . import items
+    codes = items.signals(d)
+    if not codes:
+        progress("[posture] no signals to explain")
+        return 0
+    if not confirm_send(a, "[posture] these signal codes will be sent to lattice.namiq.io, one at a time:", [f"signal={c}" for c in codes],
+                        f"{len(codes)} request(s). A code is a fixed label, not your setting; no host name, address, port or path is sent. Each is counted anonymously."):
+        return 2
+    lat = Lattice()
+    found: dict[str, list[str]] = {}
+    for n, c in enumerate(codes, 1):
+        progress(f"[signal {n}/{len(codes)}] {c}")
+        try:
+            ans = lat.call("graph_exposure", signal=c)
+        except LatticeError as err:
+            print(f"stopped: {clean(str(err))}\nThe techniques below are partial.", file=sys.stderr)
+            for o in d["observations"]:
+                o["techniques"] = found.get(o.get("code", ""), [])
+            return 3
+        found[c] = [str(r["technique"]) for r in (ans.get("results") or []) if isinstance(r, dict) and r.get("technique")]
+    for o in d["observations"]:
+        o["techniques"] = found.get(o.get("code", ""), [])
+    return 0
+
+
 WITHDRAWN_FEATURES = {
-    "all": "`--discover --all` (matching a downloaded index of every exploited CVE) is not available in this version. The project decided not to publish that dataset. "
-           "For the CVEs CISA added in the last 30 days use `lattice-scan --discover --monthly` (or `--open` for deadlines already passed). Checking old software one item at a time on the server is planned and not built yet.",
-    "index": "`lattice-scan index` is not available in this version: the exploited index is no longer published. Nothing was fetched.",
-    "attack": "`posture --attack` is not available in this version: the table that mapped signals to ATT&CK techniques is no longer published. The posture report itself is unchanged and still sends nothing. Nothing was fetched.",
+    "project-all": "`project --discover --all` is not available in this version. Dependency names of a project can be private, so they are not sent to be checked; "
+                   "name the ids to look up with `project FOLDER --cve CVE-...`. Nothing was sent.",
 }
 
 
@@ -2955,29 +2925,14 @@ def feature_withdrawn(which: str) -> int:
 def cmd_posture(a) -> int:
     """What this host exposes and runs: listening ports, firewall, SSH settings, services and (--deep) processes no package owns. Read only; nothing is sent anywhere."""
     from lattice_scan import posture
-    if getattr(a, "attack", False):
-        return feature_withdrawn("attack")
     deep = getattr(a, "posture_deep", False) or getattr(a, "deep", False)
     who = "root" if os.geteuid() == 0 else f"a normal user (uid {os.geteuid()})"
     progress(f"[posture] {'deep' if deep else 'quick'} scan as {who}: ports, firewall, ssh, services" + (", processes, persistence points" if deep else "")
              + ("" if os.geteuid() == 0 else "; what needs root will be listed, not guessed"))
     d = posture.collect(deep=deep)
+    rc = 0
     if getattr(a, "attack", False):
-        from . import observations
-        observations.TABLE_URL = env("OBSERVATIONS_URL", observations.TABLE_URL)
-        observations.MANIFEST_URL = env("OBSERVATIONS_MANIFEST_URL", observations.MANIFEST_URL)
-        try:
-            tbl = observations.load(cache_dir() / "exploited", fetch_bytes)
-            for o in d["observations"]:
-                o["techniques"] = tbl["map"].get(o.get("code", ""), [])
-            d["attackTable"] = {"generation": tbl["generation"], "source": tbl["source"]}
-            progress(f"[posture] ATT&CK table generation {tbl['generation']} from {tbl['source']}; signature checked")
-        except observations.TableRefused as err:
-            print(f"refused: {err}", file=sys.stderr)
-            return 2
-        except OSError as err:
-            print(f"stopped: {err}", file=sys.stderr)
-            return 3
+        rc = attack_techniques(a, d)
     progress(f"[posture] done: {len(d['ports'])} listening ports, {len(d['observations'])} signals for a person to read")
     text = posture.dump(d)
     if a.json:
@@ -2990,7 +2945,7 @@ def cmd_posture(a) -> int:
     if getattr(a, "since", None) == "last" and a.format != "json":
         private_dir()
         snapshot_report(d, "posture")
-    return 0
+    return rc
 
 
 def cmd_enrich(a) -> int:
@@ -3293,7 +3248,12 @@ def main() -> int:
     p.add_argument("--weekly", dest="period", action="store_const", const="weekly", help="with --discover: the last seven days (the default)")
     p.add_argument("--monthly", dest="period", action="store_const", const="monthly", help="with --discover: the last thirty days")
     p.add_argument("--open", dest="period", action="store_const", const="open", help="with --discover: exploited CVEs older than a week but within thirty days, overdue first")
-    p.add_argument("--all", dest="all_index", action="store_true", help="with --discover: the whole signed exploited index (every CISA-listed CVE) matched against this host locally; free output is statistics only. Needs the index to be recent (14 days)")
+    p.add_argument("--all", dest="all_index", action="store_true", help="with --discover: check the older software on this machine. The items that matter (what listens or runs, well-known server software, the kernel) are shown, confirmed, and sent one at a time to Lattice")
+    p.add_argument("--yes", action="store_true", help="send what --all or posture --attack shows without asking first (for scripts)")
+    p.add_argument("--all-installed", action="store_true", help="with --discover --all: also send every installed package, one request each (uses a lot of your allowance)")
+    p.add_argument("--with-hardware", action="store_true", help="with --discover --all: also send this machine's maker, model and firmware version as one item")
+    p.add_argument("--also", action="append", metavar="PACKAGE", help="with --discover --all: also send this installed package (repeatable)")
+    p.add_argument("--max-items", type=int, default=60, help="with --discover --all: most items to send (default 60)")
     p.add_argument("--max-read", type=int, default=None, help="with --discover: most ids to read from Lattice per run (default 20 without a key, 200 with one)")
     p.add_argument("--debug", action="store_true", help="detailed execution log to stderr and debug.log (also LATTICE_SCAN_DEBUG=1)")
     p.add_argument("--keep", action="store_true", help="keep this run's records in the default folder even with no terminal (also LATTICE_SCAN_KEEP=1); without it a terminal-less run with no folder yet uses a temporary one")
@@ -3325,7 +3285,7 @@ def main() -> int:
     pj.add_argument("--weekly", dest="period", action="store_const", const="weekly", help="with --discover: the last seven days")
     pj.add_argument("--monthly", dest="period", action="store_const", const="monthly", help="with --discover: the last thirty days (the default)")
     pj.add_argument("--open", dest="period", action="store_const", const="open", help="with --discover: exploited CVEs older than a week but within thirty days, overdue first")
-    pj.add_argument("--all", dest="all_index", action="store_true", help="with --discover: the whole signed exploited index matched against the dependencies declared here; counts by verdict and year only, nothing read from Lattice")
+    pj.add_argument("--all", dest="all_index", action="store_true", help="not available: dependency names can be private, so they are not sent to be checked (use --cve)")
     pj.add_argument("--max-read", type=int, default=None, help="most ids to read from Lattice per run (default 200 with a key, 20 without)")
     pj.add_argument("--format", choices=["console", "csv", "json"], default="console", help="what to print (default console: a report for a person)")
     pj.add_argument("--csv", help="also write the findings as CSV to this file")
@@ -3336,7 +3296,8 @@ def main() -> int:
     pj.add_argument("--fail-on", choices=["never", "in-range", "candidate"], default="never", help="exit 1 when a candidate (or an in-range one) is found; default never: a person reads it")
     po = sub.add_parser("posture", help="what this host exposes and runs: listening ports, firewall, SSH settings, services; --deep also processes that no package owns. Read only, nothing is sent")
     po.add_argument("--deep", dest="posture_deep", action="store_true", help="also check every readable process (where its executable is, whether a package owns it, outbound connections of those that none does) and persistence points; about a minute")
-    po.add_argument("--attack", action="store_true", help="also name the ATT&CK techniques each signal relates to, from the signed table namiq.io publishes (one download of a public file; no host data is sent)")
+    po.add_argument("--attack", action="store_true", help="also name the ATT&CK techniques each signal may point to: the signal codes are shown, confirmed, and sent one at a time to Lattice (a fixed code, never the setting behind it)")
+    po.add_argument("--yes", action="store_true", default=argparse.SUPPRESS, help="send the signal codes without asking first (for scripts)")
     po.add_argument("--since", choices=["last"], help="also print what is new, changed or gone since the last stored run (listeners, services, SSH settings, persistence entries, findings); this run is stored for the next comparison")
     po.add_argument("--format", choices=["console", "json"], default="console", help="what to print (default console)")
     po.add_argument("--json", metavar="FILE", help="also write the full result as JSON to FILE (mode 0600; it names this host's processes: do not share it)")
@@ -3366,9 +3327,6 @@ def main() -> int:
     en.add_argument("--fail-on", choices=["never", "exploited"], default="never", help="exit 1 when any id is exploited (default never)")
     en.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each step on stderr (the default)")
     en.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
-    ix = sub.add_parser("index", help="fetch, check and show the signed exploited index (every CISA-listed CVE with NVD's version ranges) that lets a scan match this machine on this machine")
-    ix.add_argument("--refresh", action="store_true", help="ask namiq.io now, even if the copy is under a day old")
-    ix.add_argument("--require-fresh", action="store_true", help="exit 2 if the index is older than 14 days")
     gk = sub.add_parser("get-key", help="request a Lattice key for a real person who has read the terms and gave these details; the key is stored, never printed")
     for flag in ("name", "position", "company", "email", "purpose"):
         gk.add_argument(f"--{flag}", required=True, help=f"the person's {flag}" if flag != "purpose" else "what the key will be used for, one or two sentences (at least 20 characters)")
@@ -3403,20 +3361,19 @@ def main() -> int:
         progress("[discover] no command and no CVE id given: running lattice-scan --discover --weekly")
         return structured(a, cmd_recent)
     if a.c is None and a.discover and getattr(a, "all_index", False) and not (a.cve or a.cve_file):
-        return feature_withdrawn("all")
+        return structured(a, cmd_all)
     if a.c is None and a.discover and not (a.cve or a.cve_file):
         # --discover on the host is the same engine as `recent`: it needs no key (the list is a plain request) and takes the same windows.
         a.window_name = a.period or "weekly"
         a.c, a.period, a.no_critical = "recent", WINDOW_TO_PERIOD.get(a.window_name, "weekly"), False
         return structured(a, cmd_recent)
     if a.c == "project" and getattr(a, "all_index", False):
-        return feature_withdrawn("all")
+        return feature_withdrawn("project-all")
     if a.c == "project": return cmd_project(a)
     if a.c == "recent": return structured(a, cmd_recent)
     if a.c == "posture": return cmd_posture(a)
     if a.c == "enrich": return structured(a, cmd_enrich)
     if a.c == "get-key": return cmd_get_key(a)
-    if a.c == "index": return feature_withdrawn("index")
     if a.c == "impact": return cmd_impact(a)
     if a.c == "resolve": return cmd_resolve(a)
     if a.c == "add": return cmd_add(a)
