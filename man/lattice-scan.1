@@ -19,7 +19,7 @@ lattice-scan \- check this host, or a project's declared dependencies, against t
 [\fB\-\-cve\fR \fITEXT\fR]... [\fB\-\-file\fR \fIFILE\fR]... [\fB\-\-max\-read\fR \fIN\fR] [\fB\-\-format\fR \fBconsole\fR|\fBjson\fR|\fBcsv\fR] [\fB\-\-json\fR \fIFILE\fR] [\fB\-\-fail\-on\fR \fBnever\fR|\fBexploited\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
 .br
 .B lattice-scan posture
-[\fB\-\-deep\fR] [\fB\-\-since\fR last] [\fB\-\-format\fR console|json] [\fB\-\-json\fR \fIFILE\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
+[\fB\-\-deep\fR] [\fB\-\-since\fR last] [\fB\-\-attack\fR] [\fB\-\-format\fR console|json] [\fB\-\-json\fR \fIFILE\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
 .br
 .B lattice-scan get\-key
 \fB\-\-name\fR \fINAME\fR \fB\-\-position\fR \fITEXT\fR \fB\-\-company\fR \fITEXT\fR \fB\-\-email\fR \fIADDRESS\fR \fB\-\-purpose\fR \fITEXT\fR [\fB\-\-accept\-terms\fR] [\fB\-\-force\fR]
@@ -325,6 +325,9 @@ also reads every process it may: where its program lives, whether a package owns
 .B \-\-deep
 Also processes and persistence points (see above).
 .TP
+.B \-\-attack
+Name the ATT&CK techniques each signal relates to. The table is one signed file that namiq.io publishes beside the exploited index (same pinned key; sha256 and signature are checked, a rolled\-back generation is refused); it is downloaded, not built into the tool, so the tool and the server cannot disagree. Only that public file is fetched; nothing about this host is sent. A technique is a reason to read the signal, not a sign that an attack happened. Exit 2 if the table is refused, 3 if it cannot be read and none is cached.
+.TP
 .B \-\-since last
 Also print what is new, changed or gone since the last stored run: listening ports, running services, effective SSH settings (root only), persistence entries (deep only) and open findings, with the day a new finding was first found. A part read in only one of the two runs is reported as not compared, never as gone. This run is stored for the next comparison. Every host scan does the same at its end. Snapshots are kept in the private records folder (mode 0600), never sent anywhere, and the oldest beyond 30 are deleted.
 .TP
@@ -418,6 +421,12 @@ Age after which a leftover scan container from an earlier, killed run is removed
 .TP
 .B LATTICE_SCAN_IMAGES_LANG
 Which images get the Python, Node, Java and Ruby package scan, overriding the level: all (the deep default), running or off (the quick default).
+.TP
+.B LATTICE_SCAN_OBSERVATIONS_URL
+Where \fBposture \-\-attack\fR reads the observation table (default https://namiq.io/lattice/observations.json).
+.TP
+.B LATTICE_SCAN_OBSERVATIONS_MANIFEST_URL
+Where it reads that table's manifest (default https://namiq.io/lattice/observations.manifest.json).
 .TP
 .B LATTICE_SCAN_POSTURE
 A JSON posture report to use for the exposure labels instead of reading listeners and services (tests, other tools).

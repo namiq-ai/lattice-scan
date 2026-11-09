@@ -479,8 +479,8 @@ def observe(d: dict) -> list[dict]:
     """Signals for a person. Each says what was seen and why it can be harmless. None is a verdict."""
     obs: list[dict] = []
 
-    def add(level: str, topic: str, text: str) -> None:
-        obs.append({"level": level, "topic": topic, "text": text})
+    def add(level: str, topic: str, text: str, code: str = "") -> None:
+        obs.append({"level": level, "topic": topic, "text": text, "code": code})
     ports = d["ports"]
     wide = [p for p in ports if p["bind"] == "all interfaces"]
     fw = d["firewall"]
@@ -491,31 +491,31 @@ def observe(d: dict) -> list[dict]:
         active.append("iptables rules")
     if wide:
         names = sorted({f"{p['proto']}/{p['port']}" for p in wide if not (p["proto"] == "udp" and p["port"] >= 32768)}, key=lambda x: (x.split("/")[0], int(x.split("/")[1])))
-        add("note", "ports", f"{len(names)} port(s) listen on all interfaces: {', '.join(names[:12])}{' ...' if len(names) > 12 else ''}. That is normal for a server; it matters when the firewall does not limit who can connect.")
+        add("note", "ports", f"{len(names)} port(s) listen on all interfaces: {', '.join(names[:12])}{' ...' if len(names) > 12 else ''}. That is normal for a server; it matters when the firewall does not limit who can connect.", "listen.all-interfaces")
     if not active:
         if d["scope"] == "root":
-            add("attention", "firewall", "no host firewall is active (no ufw, firewalld or nftables service, and no nftables or iptables rules were found). A network firewall in front of this host may still protect it.")
+            add("attention", "firewall", "no host firewall is active (no ufw, firewalld or nftables service, and no nftables or iptables rules were found). A network firewall in front of this host may still protect it.", "firewall.none-active")
         else:
             add("note", "firewall", "no firewall manager reported active, but the rules could not be read without root; run as root for the answer.")
     else:
         for m in fw["managers"]:
             if m["name"] == "ufw" and m.get("enabled") and m.get("defaultIncoming") in ("allow",):
-                add("attention", "firewall", "ufw is on but its default for incoming traffic is allow.")
+                add("attention", "firewall", "ufw is on but its default for incoming traffic is allow.", "firewall.default-allow")
     s = d["ssh"]["settings"]
     if not d["ssh"].get("installed", True) and not any(p.get("process") == "sshd" for p in ports):
         s = {}   # no sshd_config and no sshd listening: there is no SSH server to describe
     exposed_ssh = [p for p in wide if p.get("process") == "sshd" or (s and p["port"] == int(s.get("port", "22") or 22))]
     if s and s.get("passwordauthentication") == "yes":
-        add("attention" if exposed_ssh else "note", "ssh", "SSH accepts passwords" + (" and listens on all interfaces" if exposed_ssh else "") + ". Keys only is safer; passwords can be guessed. (It can be a choice: check Match blocks and who may log in.)")
+        add("attention" if exposed_ssh else "note", "ssh", "SSH accepts passwords" + (" and listens on all interfaces" if exposed_ssh else "") + ". Keys only is safer; passwords can be guessed. (It can be a choice: check Match blocks and who may log in.)", "ssh.password-auth")
     if s.get("permitrootlogin") == "yes":
-        add("attention", "ssh", "SSH allows root to log in with a password.")
+        add("attention", "ssh", "SSH allows root to log in with a password.", "ssh.root-password-login")
     elif s.get("permitrootlogin") in ("prohibit-password", "without-password"):
         add("note", "ssh", "SSH lets root log in with a key (the OpenSSH default).")
     if s.get("permitemptypasswords") == "yes":
-        add("attention", "ssh", "SSH allows accounts with empty passwords.")
+        add("attention", "ssh", "SSH allows accounts with empty passwords.", "ssh.empty-passwords")
     for u in d["services"].get("units", []):
         if not u["package"] and u["program"] and not u["program"].startswith(("/snap/", "/opt/")) and u["unitIsLocal"]:
-            add("note", "services", f"service {u['unit']} was added locally and its program {u['program']} belongs to no package. Usual for software you installed yourself; confirm you did.")
+            add("note", "services", f"service {u['unit']} was added locally and its program {u['program']} belongs to no package. Usual for software you installed yourself; confirm you did.", "service.local-unowned")
     pr = d.get("processes")
     if pr:
         stale = [g for g in pr["flagged"] if g["kind"] == "stale"]
@@ -523,7 +523,7 @@ def observe(d: dict) -> list[dict]:
             names = sorted({g["name"] for g in stale})
             pk = sorted({re.search(r"\((.+?)\)", g["reasons"][0]).group(1) for g in stale if re.search(r"\((.+?)\)", g["reasons"][0])})
             add("note", "restart", f"{len(stale)} running program(s) were replaced by a package update after they started and still run the old version: {', '.join(names[:8])}{' ...' if len(names) > 8 else ''} "
-                f"(packages: {', '.join(pk[:6])}{' ...' if len(pk) > 6 else ''}). A restart or reboot loads the new version; until then a fix in the update does not protect them.")
+                f"(packages: {', '.join(pk[:6])}{' ...' if len(pk) > 6 else ''}). A restart or reboot loads the new version; until then a fix in the update does not protect them.", "process.stale-binary")
         for g in pr["flagged"]:
             if g["kind"] == "stale":
                 continue
@@ -531,17 +531,17 @@ def observe(d: dict) -> list[dict]:
             many = f", {len(g['pids'])} processes" if len(g["pids"]) > 1 else ""
             where = f"{g['name']} ({g['exe']}, pid {pids}{many})"
             out = f" Outbound: {', '.join(addr_port(o) for o in g['outbound'][:2])}." if g["outbound"] else ""
-            add("attention" if g["kind"] == "attention" else "note", "process", f"{where}: {'; '.join(g['reasons'])}.{out}")
+            add("attention" if g["kind"] == "attention" else "note", "process", f"{where}: {'; '.join(g['reasons'])}.{out}", "process.unowned")
     pe = d.get("persistence")
     if pe:
         if pe["ldPreload"]:
-            add("attention", "persistence", f"/etc/ld.so.preload lists {len(pe['ldPreload'])} library(ies): {', '.join(pe['ldPreload'][:3])}. It loads into every program; some security tools do this, most hosts have none.")
+            add("attention", "persistence", f"/etc/ld.so.preload lists {len(pe['ldPreload'])} library(ies): {', '.join(pe['ldPreload'][:3])}. It loads into every program; some security tools do this, most hosts have none.", "persist.ld-preload")
         if pe["extraUid0Users"]:
-            add("attention", "persistence", f"account(s) other than root with user id 0: {', '.join(pe['extraUid0Users'])}.")
+            add("attention", "persistence", f"account(s) other than root with user id 0: {', '.join(pe['extraUid0Users'])}.", "persist.extra-uid0")
         if pe["suidNoPackage"]:
-            add("note", "persistence", f"{len(pe['suidNoPackage'])} setuid file(s) that no package owns, for example {pe['suidNoPackage'][0]}.")
+            add("note", "persistence", f"{len(pe['suidNoPackage'])} setuid file(s) that no package owns, for example {pe['suidNoPackage'][0]}.", "persist.suid-unowned")
         if pe["cronFilesNoPackage"]:
-            add("note", "persistence", f"{len(pe['cronFilesNoPackage'])} scheduled-job file(s) that no package owns: {', '.join(pe['cronFilesNoPackage'][:4])}.")
+            add("note", "persistence", f"{len(pe['cronFilesNoPackage'])} scheduled-job file(s) that no package owns: {', '.join(pe['cronFilesNoPackage'][:4])}.", "persist.cron-unowned")
     return obs
 
 
@@ -648,6 +648,8 @@ def render(d: dict) -> str:
         L.append("  nothing stood out in what could be read")
     for o in d["observations"]:
         L.append(f"  [{o['level']}] {o['topic']}: {o['text']}")
+        if o.get("techniques"):
+            L.append(f"      ATT&CK, relates to: {', '.join(o['techniques'])}  (from namiq.io's observation table; a reason to read, not a sign that an attack happened)")
     if d["unreadable"]:
         L.append("")
         L.append(f"NOT READ ({d['scope']} scope): " + "; ".join(d["unreadable"]) + ("." if d["scope"] == "root" else ". Run as root to read them (sudo lattice-scan posture)."))
