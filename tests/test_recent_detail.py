@@ -29,7 +29,7 @@ def with_open(test):
 class Recent(EntryBase):
     def setUp(self):
         super().setUp()
-        Entry.feed = feed(daily=DAILY)
+        Entry.feed = feed(DAILY[0], DAILY[1], daily=DAILY)   # the bare run is weekly, so the weekly list carries the same rows
 
     @with_open
     def test_open_findings_are_listed_even_when_nothing_on_the_list_matches(self):

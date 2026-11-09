@@ -279,9 +279,11 @@ class Client(unittest.TestCase):
         self.assertTrue(any(k == "secret-key-value" for _, k, _ in Stub.seen))
         self.assertNotIn("secret-key-value", err + out + (cli.OUT / "debug.log").read_text())
 
-    def test_discover_needs_a_key(self):
+    def test_discover_is_the_recent_engine_and_needs_no_key(self):
+        # host --discover reads namiq.io's list like `recent`; with no list reachable it stops with exit 3, never a key demand
         rc, _, err = self.run_cli("--discover")
-        self.assertEqual(rc, 2); self.assertIn("needs a key", err)
+        self.assertNotIn("needs a key", err)
+        self.assertIn(rc, (0, 3))
 
     def test_missing_cve_file_is_a_message_not_a_traceback(self):
         rc, _, err = self.run_cli("--cve-file", "/nonexistent/ids.txt")

@@ -36,7 +36,7 @@ It uses the Python standard library only, needs Python 3.9 or newer, and works w
 .B LIMITS
 below.
 .PP
-Run with no arguments at all, \fBlattice\-scan\fR does \fBlattice\-scan recent \-\-daily\fR: it reads the daily list of recent CVEs and checks the likely ones against this host. The daily list is the default here because the weekly list is long, and a keyless run that has to look many entries up reaches Lattice's limit. Any argument or subcommand runs what it names.
+Run with no arguments at all, \fBlattice\-scan\fR does \fBlattice\-scan \-\-discover \-\-weekly\fR: it reads the weekly list of recent CVEs and checks the likely ones against this host. The daily list is the default here because the weekly list is long, and a keyless run that has to look many entries up reaches Lattice's limit. Any argument or subcommand runs what it names.
 .PP
 There are two modes. The default mode checks the
 .B host
@@ -189,7 +189,7 @@ then \fBtrial_accepted\fR or \fBcommercial\fR.
 .TP
 .B Without a key
 \fB\-\-kev\-catalogue\fR is refused (exit 2) before any request is made. Only the CVEs you name are checked: \fB\-\-cve CVE\-2026\-46300,CVE\-2021\-44228\fR (comma separated; the option may be
-repeated), or \fB\-\-cve\-file\fR with one or more ids per line. A string that is not a CVE id is refused (exit 2) before anything is asked. At most 40 are read a run, inside the keyless allowance.
+repeated), or \fB\-\-cve\-file\fR with one or more ids per line. A string that is not a CVE id is refused (exit 2) before anything is asked. At most 20 are read a run without a key (200 with one).
 .SS Choosing which ids to read
 Lattice looks up by CVE id, not by product, so something has to name the ids. Either name them with
 .B \-\-cve
@@ -213,7 +213,7 @@ Ids to read, as in host mode. Several may be given in one argument, separated by
 CISA's catalogue, used locally to choose ids. Needs a key whose email is confirmed (see \fBWho can scan what\fR).
 .TP
 .BI \-\-max\-read " N"
-Most ids to read from Lattice per run (default 200 with a key, 40 without; the keyless day is 60). Ids over the limit are listed as not read.
+Most ids to read from Lattice per run (default 200 with a key, 20 without). Ids over the limit are listed as not read.
 .TP
 .BR \-\-format " " console | csv | json
 What to print. The default,

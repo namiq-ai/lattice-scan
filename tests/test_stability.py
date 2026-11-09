@@ -106,13 +106,14 @@ class Stability(EntryBase):
         self.assertFalse(cli.append_found_once({"event": "found", "ref": "CVE-2099-0010"}))
 
     # ---- no arguments
-    def test_no_arguments_runs_the_daily_list_not_the_weekly_one(self):
+    def test_no_arguments_runs_discover_weekly(self):
+        # owner decision 2026-11-08: the bare command is --discover --weekly (it was the daily list)
         Entry.feed = feed([exp("CVE-2099-0001")], daily=([exp("CVE-2099-0005", vendor="Otherco", product="Otherthing")], []))
         rc, out, err = self.run_cli()
         self.assertEqual(rc, 0, err)
-        self.assertIn("running the daily list", err); self.assertIn("(daily, 2026-11-03 to 2026-11-04)", out)
-        self.assertNotIn("CVE-2099-0001", out)                           # that one is only in the weekly list
-        self.assertEqual(self.lattice_reads(), 0)
+        self.assertIn("--discover --weekly", err); self.assertIn("(weekly, 2026-10-29 to 2026-11-04)", out)
+        self.assertIn("CVE-2099-0001", out)
+        self.assertEqual(self.lattice_reads(), 2)                        # the one candidate: a lookup and a detail read
 
     def test_only_a_quiet_flag_still_means_no_arguments(self):
         Entry.feed = feed([exp("CVE-2099-0001")], daily=([exp("CVE-2099-0001")], []))
@@ -126,8 +127,8 @@ class Stability(EntryBase):
         Stub_seen_before = len(__import__("test_lattice_scan").Stub.seen)
         rc, out, _ = self.run_cli("--refresh", "--inventory")                            # inventory only: no feed, no Lattice call
         self.assertEqual(rc, 0); self.assertEqual(len(__import__("test_lattice_scan").Stub.seen), Stub_seen_before)
-        rc, _, err = self.run_cli("--discover")                           # needs a key: still its own usage error
-        self.assertEqual(rc, 2); self.assertIn("--discover needs a key", err)
+        rc, out, err = self.run_cli("--discover", "--daily")              # no key needed: the same engine as `recent --daily`
+        self.assertEqual(rc, 0, err); self.assertNotIn("needs a key", err); self.assertIn("(daily,", out)
 
 
 if __name__ == "__main__":
