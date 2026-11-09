@@ -91,3 +91,42 @@ class DiscoverAll(EntryBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProjectAll(unittest.TestCase):
+    def setUp(self):
+        import contextlib, io, tempfile
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.proj = Path(self.tmp.name) / "proj"; self.proj.mkdir()
+        (self.proj / "requirements.txt").write_text("examplelib==2.17.1\n")
+        self.env = mock.patch.dict("os.environ", {"LATTICE_SCAN_DIR": str(Path(self.tmp.name) / "rec")}); self.env.start(); self.addCleanup(self.env.stop)
+
+    def run_project(self, rows, *extra):
+        import contextlib, io
+        out, err = io.StringIO(), io.StringIO()
+        sys.argv = ["lattice-scan", "project", str(self.proj), "--discover", "--all", "-q", *extra]
+        with mock.patch.object(cli.exploited, "load", return_value=index(rows)), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = cli.main()
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_project_counts_declared_components_and_names_nothing(self):
+        rows = [row(f"CVE-2099-{i:04d}", ranges=RANGE("2.0.1", "3.0.0")) for i in range(1, 5)]
+        rows += [row("CVE-2099-0100", vendor="Nowhere", product="Nothingware")]
+        rc, out, err = self.run_project(rows)
+        self.assertEqual(rc, 0, err)
+        import re
+        self.assertRegex(out, r"in-range\s+4"); self.assertIn("these projects", out)
+        self.assertNotIn("CVE-2099", out); self.assertNotIn("Examplelib", out)
+
+    def test_project_all_in_json_has_statistics_and_no_rows(self):
+        rc, out, _ = self.run_project([row("CVE-2099-0001", ranges=RANGE("2.0.1", "3.0.0"))], "--format", "json")
+        doc = json.loads(out)
+        self.assertEqual(doc["rows"], []); self.assertEqual(doc["statistics"]["byVerdict"]["in-range"], "<3"); self.assertNotIn("CVE-2099", out)
+
+    def test_all_without_discover_is_a_usage_error(self):
+        import contextlib, io
+        sys.argv = ["lattice-scan", "project", str(self.proj), "--all"]
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = cli.main()
+        self.assertEqual(rc, 2); self.assertIn("--all goes with --discover", err.getvalue())
