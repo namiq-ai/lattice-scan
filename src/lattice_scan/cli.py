@@ -1479,6 +1479,30 @@ def with_exposure(imp: dict, installed: list[str], inv: dict) -> dict:
     return imp
 
 
+def open_findings() -> dict[str, dict]:
+    """The findings still open in the records, for a snapshot: id -> what is installed and the day it was first found."""
+    return {c: {"installed": "; ".join(((f.get("impact") or {}).get("installed")) or []), "found": f.get("found", "")} for c, f in state().items() if f.get("status") == "open"}
+
+
+def snapshot_report(post: dict | None, inv_hash: str, save_it: bool = True) -> None:
+    """Print what is new, changed or gone since the last stored snapshot, then store this run's. Local only; a failure here never stops a scan."""
+    from . import snapshot
+    try:
+        now = dt.datetime.now().isoformat(timespec="milliseconds")
+        cur = snapshot.build(TODAY, now, inv_hash, post, open_findings())
+        last = snapshot.latest(OUT)
+        if last:
+            d = snapshot.diff(last, cur)
+            RESULT["change"] = d
+            print(snapshot.render(d, cur))
+        else:
+            print("CHANGE SINCE THE LAST RUN: this is the first stored snapshot; the next run will say what is new, changed or gone.")
+        if save_it:
+            snapshot.save(OUT, cur)
+    except Exception as err:  # noqa: BLE001
+        dbg(f"snapshot not stored: {type(err).__name__}: {err}")
+
+
 def impact(entry: dict, inv: dict, installed: list[str], vers: list[str]) -> dict:
     """What a person needs to judge this match, from what Lattice returned plus the inventory. It decides nothing.
 
@@ -1867,6 +1891,8 @@ def structured(a, fn) -> int:
            "window": "all" if stats else getattr(a, "period", None), "exitCode": rc, "counts": counts, "rows": rows, "earlier": earlier}
     if stats:
         doc["statistics"] = stats
+    if RESULT.get("change"):
+        doc["change"] = RESULT["change"]
     if jfile:
         write_private(Path(jfile), json.dumps(doc, indent=1))   # names this host's software: mode 0600
     if fmt == "json":
@@ -2057,6 +2083,7 @@ def cmd_run(a) -> int:
     if inv["restartRequired"]:
         print("restart required: an installed update is waiting for a reboot")
     detail_files(inv)
+    snapshot_report(posture_data(), inv["hash"])
     return fail_on_exit(getattr(a, "fail_on", "never"), [imp for _, _, imp in hits + again_hits])
 
 
@@ -2919,6 +2946,9 @@ def cmd_posture(a) -> int:
             print(f"cannot write {a.json}: {err}", file=sys.stderr)
             return 2
     print(text if a.format == "json" else posture.render(d))
+    if getattr(a, "since", None) == "last" and a.format != "json":
+        private_dir()
+        snapshot_report(d, "posture")
     return 0
 
 
@@ -3265,6 +3295,7 @@ def main() -> int:
     pj.add_argument("--fail-on", choices=["never", "in-range", "candidate"], default="never", help="exit 1 when a candidate (or an in-range one) is found; default never: a person reads it")
     po = sub.add_parser("posture", help="what this host exposes and runs: listening ports, firewall, SSH settings, services; --deep also processes that no package owns. Read only, nothing is sent")
     po.add_argument("--deep", dest="posture_deep", action="store_true", help="also check every readable process (where its executable is, whether a package owns it, outbound connections of those that none does) and persistence points; about a minute")
+    po.add_argument("--since", choices=["last"], help="also print what is new, changed or gone since the last stored run (listeners, services, SSH settings, persistence entries, findings); this run is stored for the next comparison")
     po.add_argument("--format", choices=["console", "json"], default="console", help="what to print (default console)")
     po.add_argument("--json", metavar="FILE", help="also write the full result as JSON to FILE (mode 0600; it names this host's processes: do not share it)")
     po.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each step on stderr (the default)")
