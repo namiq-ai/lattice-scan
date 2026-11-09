@@ -59,9 +59,9 @@ Lattice itself) needs a Lattice key; `recent` does not.
 
 Each host candidate has an `exposure:` line: what this machine shows locally about the matched software (listens on all interfaces, loopback only, service running, installed with nothing running, inside an image). Quote it as printed. It is not "reachable from the internet" and never write that; without root the tool says the firewall rules were not read. `--exposed` lists only software that listens or runs. Ask the person before using it to decide what to ignore: the others are counted, not shown.
 
-### Not available in this version
+### Older software: `--discover --all`, and `posture --attack`
 
-`--discover --all`, `project --discover --all`, `lattice-scan index` and `posture --attack` print "not available in this version" and exit 2. They needed a published dataset, which is no longer published. Tell the person that, and use `--discover --monthly` or `--open` for named CVEs. Do not try to work around it.
+`--discover --all` checks the older software the recent list cannot cover. It prints the items it will send (a product, a version, the package ecosystem and the operating-system family and number; never a host name, address, port or path), asks the person to confirm, and sends them one at a time to Lattice. **Show the person that list and let them answer; do not add `--yes` on your own.** Each item uses one unit of the allowance, so a keyless run may stop part-way (exit 3): say how many items were not sent. A result is a lead, not a finding: names are matched and versions compared as upstream numbers. `--all-installed` and `--with-hardware` send more and are the person's choice. `posture --attack` works the same way with posture signal codes. `project --discover --all` is not available (dependency names can be private); use `project FOLDER --cve ...`.
 
 ### Change since the last run
 
