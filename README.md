@@ -49,14 +49,14 @@ A person reads what it prints and decides. It also ships as a Claude Code and Op
 
 ```bash
 lattice-scan --cve CVE-2021-44228 --cve CVE-2026-46300     # compared with this host; prints the evidence, priority, EPSS, SSVC, weakness, ATT&CK
-LATTICE_API_KEY=... lattice-scan --discover                # a key lists what CISA added in the last week
+lattice-scan --discover --weekly                           # no key: what CISA added in the last week, checked against this host (--daily, --monthly, --open)
 lattice-scan list | impact CVE-... | resolve CVE-... --status fixed --proof "..."    # the findings recorded so far, one in detail, and closing one
 ```
 
 **Nothing to start from:**
 
 ```bash
-lattice-scan                                               # no arguments: the same as `recent --daily`
+lattice-scan                                               # no arguments: the same as `--discover --weekly` (it was `recent --daily` before 0.5.0)
 lattice-scan recent                                        # every CVE in namiq.io's recent list (weekly + open: exploited and critical); only likely matches go to Lattice (--daily: last day or two; --weekly; --open: only the older ones)
 printf '...' | lattice-scan enrich                         # ids from an audit or advisory: exploited? since when? patch due? ransomware? (no key: 20 ids a run)
 ```

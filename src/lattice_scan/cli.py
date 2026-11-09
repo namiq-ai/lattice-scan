@@ -11,7 +11,7 @@ What leaves the machine: CVE ids, and the key if you have one. The inventory (pa
 Records live in ~/.lattice-scan (or LATTICE_SCAN_DIR), mode 0700, because they name the host's packages. Never commit or publish them.
 
   lattice-scan --cve CVE-2026-1234 --cve-file ids.txt   check these ids (works keyless; ~1 lookup per id)
-  lattice-scan --discover                               needs a key: list exploited CVEs added in the window (graph_search + graph_node)
+  lattice-scan --discover [--daily|--weekly|--monthly|--open]   no key: exploited CVEs added in the window (default weekly), checked against this host; same as `recent`
   lattice-scan --debug --cve CVE-...                detailed execution log: every request, response, timing and match decision (stderr + debug.log; never the key)
   lattice-scan inventory [-n 20]                    inventory.log: what was found on each run and what changed since the last one
   lattice-scan --refresh                            collect the inventory again from scratch and print all of it (no Lattice call)
@@ -24,8 +24,8 @@ Records live in ~/.lattice-scan (or LATTICE_SCAN_DIR), mode 0700, because they n
 Keyless access answers graph_lookup only (small daily limit). Since OCO-5819 option A that answer carries CISA's vendor_project, product, date_added,
 due_date and required_action, and the NVD product list and affected_ranges, so the impact check works without a key. The version check compares
 upstream version numbers only; a distro can fix a CVE under an unchanged number, so a person still decides, and the report shows whether an installed
-package's own changelog names the CVE. --discover (listing what was added in the window)
-needs a key, because graph_search is not keyless. Get a key: https://namiq.io/lattice/docs#agents. If the server says quota_exceeded the run stops and
+package's own changelog names the CVE. --discover (listing what was added in the window) reads namiq.io's list, which is a plain request, so it needs no key;
+without a key it reads at most 20 ids from Lattice per run (--max-read; 200 with a key). Get a key: https://namiq.io/lattice/docs#agents. If the server says quota_exceeded the run stops and
 prints its message; a person decides about any link in it, the script never opens one.
 
 Env: LATTICE_URL (default https://lattice.namiq.io/mcp), LATTICE_API_KEY, LATTICE_SCAN_DIR (a folder this user can write; set it for an agent in a sandbox), LATTICE_SCAN_KEEP=1, LATTICE_SCAN_INVENTORY (tests: fixed inventory JSON),
@@ -2188,7 +2188,7 @@ def cmd_project(a) -> int:
         print(f"no key: {NEEDS_KEY}", file=sys.stderr)
         return 2
     if a.max_read is None:
-        a.max_read = 200 if KEY else 40
+        a.max_read = 200 if KEY else 20
     results = []
     lat = Lattice()
     started = False
@@ -2394,6 +2394,9 @@ def fetch_json(url: str, what: str, limit: int = 1024 * 1024) -> dict:
                 continue
             raise LatticeError(f"cannot read {what} at {url} after {attempt + 1} tries: {e}")
     raise LatticeError(f"cannot read {what}")
+
+
+WINDOW_TO_PERIOD = {"daily": "daily", "weekly": "weekly", "monthly": "all", "open": "open"}   # the feed's own name for the thirty-day list is "all"
 
 
 def read_feed(period: str = "weekly") -> dict:
@@ -2687,7 +2690,7 @@ def cmd_recent(a) -> int:
     look: list[str] = []
     by_id: dict[str, dict] = {}
     details: list[str] = []
-    for r in feed["exploited"][: a.max_read]:
+    for r in feed["exploited"]:
         entry = {"cve": r["id"], "vendor": r.get("vendor", ""), "product": r.get("product", "")}
         m = candidate(entry, inv)
         progress(f"[recent] {r['id']}  {entry['vendor']} {entry['product']}: " + ("something installed may match, will read it from Lattice" if m else "nothing installed matches, not sent to Lattice"))
@@ -2710,15 +2713,20 @@ def cmd_recent(a) -> int:
              f"{len(look)} exploited may match this host, {watch} critical may match")
     a.inv, a.extra_rows, a.extra_detail = inv, rows, details
     look.sort(key=lambda i: read_order(by_id[i]))
+    cap = a.max_read if a.max_read is not None else (200 if KEY else 20)   # the one read cap for every command (AD-3): reads from Lattice, not ids matched here
+    unread = look[cap:]
+    look = look[:cap]
+    for cve in unread:
+        rows.append([cve, *feed_cells(by_id[cve]), "skipped", f"may match; not read: over --max-read {cap} (run again with --max-read, or name it with --cve)"])
     if look:
         progress(estimate_line("[recent]", look))
-    considered = min(len(feed["exploited"]), a.max_read)
+    considered = len(feed["exploited"])
     crit = 0 if a.no_critical else len(feed["critical"])
-    head = (f"recent {TODAY} ({a.period}, {feed['from'] or '?'} to {feed['to'] or '?'}): {len(feed['exploited'])} exploited and {len(feed['critical'])} critical CVEs read from namiq.io "
-            f"(as of {feed['asOf'] or '?'}). Checked against this host's software: exploited {considered - len(look)} ruled out, {len(look)} may match; "
+    head = (f"recent {TODAY} ({getattr(a, 'window_name', None) or a.period}, {feed['from'] or '?'} to {feed['to'] or '?'}): {len(feed['exploited'])} exploited and {len(feed['critical'])} critical CVEs read from namiq.io "
+            f"(as of {feed['asOf'] or '?'}). Checked against this host's software: exploited {considered - len(look) - len(unread)} ruled out, {len(look) + len(unread)} may match; "
             + (f"critical {crit - watch} ruled out, {watch} may match" if not a.no_critical else "critical not checked (--no-critical)") + ".")
-    if considered < len(feed["exploited"]):
-        head += f" Only the first {considered} of {len(feed['exploited'])} exploited ids were considered (--max-read)."
+    if unread:
+        head += f" {len(unread)} may match but were not read (--max-read {cap}); they are listed as skipped."
     if look:
         print(head)
         a.cve, a.cve_file, a.discover, a.refresh, a.again = look, None, False, False, False
@@ -3050,7 +3058,12 @@ def main() -> int:
     p.add_argument("--version", action="version", version=f"lattice-scan {__version__}")
     p.add_argument("--cve", action="append", help="a CVE id to check (repeatable)")
     p.add_argument("--cve-file", help="file of CVE ids, one per line, # comments allowed")
-    p.add_argument("--discover", action="store_true", help="find exploited CVEs added in the window (needs LATTICE_API_KEY)")
+    p.add_argument("--discover", action="store_true", help="find exploited CVEs added in the window and check them against this host; no key needed (default window: weekly)")
+    p.add_argument("--daily", dest="period", action="store_const", const="daily", help="with --discover: the last day or two")
+    p.add_argument("--weekly", dest="period", action="store_const", const="weekly", help="with --discover: the last seven days (the default)")
+    p.add_argument("--monthly", dest="period", action="store_const", const="monthly", help="with --discover: the last thirty days")
+    p.add_argument("--open", dest="period", action="store_const", const="open", help="with --discover: exploited CVEs older than a week but within thirty days, overdue first")
+    p.add_argument("--max-read", type=int, default=None, help="with --discover: most ids to read from Lattice per run (default 20 without a key, 200 with one)")
     p.add_argument("--debug", action="store_true", help="detailed execution log to stderr and debug.log (also LATTICE_SCAN_DEBUG=1)")
     p.add_argument("--keep", action="store_true", help="keep this run's records in the default folder even with no terminal (also LATTICE_SCAN_KEEP=1); without it a terminal-less run with no folder yet uses a temporary one")
     p.add_argument("--inventory", action="store_true", help="with --refresh: only collect and show the inventory, no scan and no network call")
@@ -3080,7 +3093,7 @@ def main() -> int:
     pj.add_argument("--weekly", dest="period", action="store_const", const="weekly", help="with --discover: the last seven days")
     pj.add_argument("--monthly", dest="period", action="store_const", const="monthly", help="with --discover: the last thirty days (the default)")
     pj.add_argument("--open", dest="period", action="store_const", const="open", help="with --discover: exploited CVEs older than a week but within thirty days, overdue first")
-    pj.add_argument("--max-read", type=int, default=None, help="most ids to read from Lattice per run (default 200 with a key, 40 without: the keyless day is 60)")
+    pj.add_argument("--max-read", type=int, default=None, help="most ids to read from Lattice per run (default 200 with a key, 20 without)")
     pj.add_argument("--format", choices=["console", "csv", "json"], default="console", help="what to print (default console: a report for a person)")
     pj.add_argument("--csv", help="also write the findings as CSV to this file")
     pj.add_argument("--json", help="also write the full result as JSON to this file")
@@ -3100,7 +3113,8 @@ def main() -> int:
     rc.add_argument("--daily", dest="period", action="store_const", const="daily", help="same as --period daily")
     rc.add_argument("--weekly", dest="period", action="store_const", const="weekly", help="same as --period weekly")
     rc.add_argument("--all", dest="period", action="store_const", const="all", help="same as --period all (the default)")
-    rc.add_argument("--max-read", type=int, default=200, help="most exploited ids to consider from the list (default 200: the whole list)")
+    rc.add_argument("--monthly", dest="period", action="store_const", const="all", help="same as --period all: the whole thirty-day list (what --all has always meant here)")
+    rc.add_argument("--max-read", type=int, default=None, help="most ids to read from Lattice per run (default 20 without a key, 200 with one). Every id is still checked against this host locally")
     rc.add_argument("--format", choices=["console", "json", "csv"], default=argparse.SUPPRESS, help="what to print: console (default), json or csv")
     rc.add_argument("--json", metavar="FILE", default=argparse.SUPPRESS, help="also write the result as JSON to FILE (mode 0600)")
     rc.add_argument("--fail-on", choices=["never", "in-range", "candidate"], default=argparse.SUPPRESS, help="exit 1 when a candidate (or an in-range one) is found; default never")
@@ -3149,8 +3163,13 @@ def main() -> int:
     if a.c is None and not (a.cve or a.cve_file or a.discover or (a.refresh and a.inventory)):
         # Nothing asked for: do what a person or an agent with no CVE id wants, the daily list (lattice-scan recent --daily). Daily, not weekly: the weekly list is
         # long, and a keyless run that has to look many entries up reaches Lattice's limit (about 20 reads an hour).
-        a.c, a.period, a.max_read, a.no_critical = "recent", "daily", 40, False
-        progress("[recent] no command and no CVE id given: running the daily list (lattice-scan recent --daily)")
+        a.c, a.period, a.no_critical = "recent", WINDOW_TO_PERIOD.get(a.period or "weekly", "weekly"), False
+        progress("[discover] no command and no CVE id given: running lattice-scan --discover --weekly")
+        return structured(a, cmd_recent)
+    if a.c is None and a.discover and not (a.cve or a.cve_file):
+        # --discover on the host is the same engine as `recent`: it needs no key (the list is a plain request) and takes the same windows.
+        a.window_name = a.period or "weekly"
+        a.c, a.period, a.no_critical = "recent", WINDOW_TO_PERIOD.get(a.window_name, "weekly"), False
         return structured(a, cmd_recent)
     if a.c == "project": return cmd_project(a)
     if a.c == "recent": return structured(a, cmd_recent)

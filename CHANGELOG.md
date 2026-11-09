@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- New: `lattice-scan --discover` on the host needs no key. It is the same engine as `recent`, with the windows `--daily`, `--weekly` (the default), `--monthly` and `--open`; `recent` accepts `--monthly` too (the whole thirty-day list, what `recent --all` has always read).
+- Changed: running `lattice-scan` with no arguments is now `--discover --weekly` (it was `recent --daily`). The weekly window misses less; the read cap below keeps it inside the keyless allowance.
+- Changed: one `--max-read` for every command: 20 reads from Lattice without a key, 200 with one (`project` was 40, `recent` and the bare run 200 and 40). Every id is still checked against the host locally; ids that match but are over the cap are listed as skipped (not read), not dropped.
+- Fixed: `recent` counted ids as "ruled out" after the read cap was applied.
 - New: `lattice-scan index` fetches, checks and caches the signed exploited index (every CISA-exploited CVE with NVD's version ranges) from namiq.io: sha256 against the manifest, then an Ed25519 signature against a pinned key, with generation, schema and as-of date taken from the signed file. It refuses a bad signature, an unknown key (upgrade), a lower generation and a damaged copy, keeps the previous copy, uses the cache for a day, and uses it offline while it is within 14 days of its as-of date. Nothing from the machine is sent. Nothing else uses it yet.
 - New, internal: `ed25519`, a verify-only Ed25519 implementation in pure Python (RFC 8032 reference), so the tool can check a signed exploited index with only the standard library. Checked against the RFC test vector and OpenSSL signatures, and it refuses malformed or non-canonical input with False. Nothing uses it yet.
 
