@@ -135,7 +135,7 @@ def select(inv: dict, post: dict | None, *, level: str = "quick", also: tuple[st
             return
         seen.add(key)
         items.append(it)
-        why[it["product"] + (":" + it["kind"] if it.get("kind") else "")] = reason
+        why[describe(it)] = reason
 
     add(_item_os(inv.get("os") or ""), "this machine's operating system") if inv.get("os") else None
     k = inv.get("kernel") or ""
@@ -144,7 +144,9 @@ def select(inv: dict, post: dict | None, *, level: str = "quick", also: tuple[st
     h = inv.get("host") or {}
     model, maker = str(h.get("model") or ""), str(h.get("manufacturer") or "")
     if model and maker:
-        add(make(model.replace(" ", "-"), str(h.get("biosVersion") or h.get("version") or ""), "", "", "hardware", maker), "this machine's maker and model")
+        ver = str(h.get("biosVersion") or h.get("version") or "")
+        # the maker's full name often does not fit the plain-name rule ("Example Corp (HK) Ltd"); then only the model is sent, never a cleaned-up guess of the maker
+        add(make(model.replace(" ", "-"), ver, "", "", "hardware", maker) or make(model.replace(" ", "-"), ver, "", "", "hardware"), "this machine's maker and model")
     for ref, d in sorted((inv.get("imageDetails") or {}).items()):
         if isinstance(d, dict) and d.get("os"):
             add(_item_os(f"{d.get('os')} {d.get('osVersion') or ''}"), "the operating system of a container image")

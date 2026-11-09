@@ -2836,7 +2836,7 @@ def cmd_all(a) -> int:
     if not its:
         print("Nothing to check: no operating system, kernel or listening software was found.", file=sys.stderr)
         return 0
-    lines = [f"{items.describe(it):<64} ({sel['why'].get(it['product'] + (':' + it['kind'] if it.get('kind') else ''), '')})" for it in its]
+    lines = [f"{items.describe(it):<64} ({sel['why'].get(items.describe(it), '')})" for it in its]
     if sel["cut"]:
         lines.append(f"... {sel['cut']} more were left out by the limit of {limit} items")
     who = ("level 1, quick (no key): this machine, its images' operating systems and what listens or runs here" if level == "quick" else
