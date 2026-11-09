@@ -1,132 +1,52 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 NamiQ LLC
-"""`--discover --all`: the whole signed exploited index matched against the host locally. It reads nothing from Lattice and its free output is statistics only
-(counts by verdict and year, a count under 3 as `<3`) in the console, `--format json`, `--format csv` and `--json FILE`: no CVE id and no product name. A refused or
-unreachable index stops the run with exit 2 or 3. Invented products and reserved ids only."""
-import json, sys, tempfile, unittest
+"""0.6.1: the features that needed a published dataset are switched off. Each says so on stderr, exits 2, fetches nothing, and points at what still works."""
+import sys, unittest
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src")); sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lattice_scan import cli, exploited  # noqa: E402
-from test_agent_entry import Entry, EntryBase  # noqa: E402
-
-RANGE = lambda start, end: [{"scheme": "generic", "product": "exampleco/examplelib", "startIncluding": start, "endExcluding": end}]
+from lattice_scan import cli  # noqa: E402
+from test_agent_entry import EntryBase  # noqa: E402
 
 
-def row(cve, added="2024-05-01", vendor="Exampleco", product="Examplelib", ranges=None, status="ranges"):
-    return {"id": cve, "vendor": vendor, "product": product, "pid": "generic:examplelib", "aliases": [], "ranges": ranges if ranges is not None else RANGE("2.0.1", "2.15.0"),
-            "versions": [], "rangeStatus": status, "added": added, "due": "2024-05-22", "ransomware": "not recorded"}
+class Withdrawn(EntryBase):
+    def run_none_fetched(self, *argv):
+        with mock.patch.object(cli, "fetch_bytes", side_effect=AssertionError("must not fetch")), mock.patch.object(cli, "fetch_json", side_effect=AssertionError("must not fetch")):
+            return self.run_cli(*argv)
 
-
-def index(rows, age=1):
-    return {"rows": rows, "generation": 7, "exploitedAsOf": "2026-11-06", "ageDays": age, "stale": False, "source": "test", "note": ""}
-
-
-class DiscoverAll(EntryBase):
-    def run_all(self, rows, *extra):
-        with mock.patch.object(cli.exploited, "load", return_value=index(rows)):
-            return self.run_cli("--discover", "--all", *extra)
-
-    def test_counts_by_verdict_and_year_and_nothing_is_read(self):
-        rows = [row(f"CVE-2099-{i:04d}", added="2023-03-03", ranges=RANGE("2.0.1", "2.15.0")) for i in range(1, 6)]          # 2.17.1 is above: outside-range
-        rows += [row(f"CVE-2099-{i:04d}", added="2022-02-02", ranges=RANGE("2.0.1", "3.0.0")) for i in range(10, 14)]          # inside: in-range
-        rows += [row("CVE-2099-0100", added="2022-04-04", status="none", ranges=[])]                                          # no range: undetermined
-        rows += [row("CVE-2099-0200", vendor="Nowhere", product="Nothingware")]                                                # not installed: unmatch
-        rc, out, err = self.run_all(rows)
-        self.assertEqual(rc, 0, err)
+    def test_discover_all_on_the_host_says_it_is_not_available(self):
+        rc, out, err = self.run_none_fetched("--discover", "--all")
+        self.assertEqual(rc, 2); self.assertEqual(out, "")
+        self.assertIn("not available in this version", err); self.assertIn("--discover --monthly", err)
         self.assertEqual(self.lattice_reads(), 0)
-        import re
-        for line in (r"in-range\s+4", r"outside-range\s+5", r"undetermined\s+<3"):
-            self.assertRegex(out, line)
-        self.assertIn("2023  outside-range 5", out); self.assertIn("2022  in-range 4  undetermined <3", out)
-        self.assertIn("0 reads from Lattice", out)
 
-    def test_no_cve_id_and_no_product_name_in_any_format(self):
-        rows = [row(f"CVE-2099-{i:04d}") for i in range(1, 8)]
-        with tempfile.TemporaryDirectory() as d:
-            jf = str(Path(d) / "all.json")
-            outs = [self.run_all(rows)[1], self.run_all(rows, "--format", "json")[1], self.run_all(rows, "--format", "csv")[1]]
-            self.run_all(rows, "--json", jf)
-            outs.append(Path(jf).read_text())
-        for text in outs:
-            self.assertNotIn("CVE-2099", text); self.assertNotIn("Examplelib", text); self.assertNotIn("Exampleco", text); self.assertNotIn("libexamplelib2", text)
-        doc = json.loads(outs[1])
-        self.assertEqual(doc["window"], "all"); self.assertEqual(doc["rows"], []); self.assertEqual(doc["statistics"]["index"]["generation"], 7)
-        self.assertTrue(outs[2].startswith("verdict,year,count\n"))
+    def test_project_discover_all_says_it_is_not_available(self):
+        rc, out, err = self.run_none_fetched("project", ".", "--discover", "--all")
+        self.assertEqual((rc, out), (2, "")); self.assertIn("not available in this version", err)
 
-    def test_a_bucket_under_three_is_shown_as_less_than_three(self):
-        rows = [row("CVE-2099-0001", ranges=RANGE("2.0.1", "3.0.0")), row("CVE-2099-0002", ranges=RANGE("2.0.1", "3.0.0"))]
-        _, out, _ = self.run_all(rows, "--format", "json")
-        doc = json.loads(out)
-        self.assertEqual(doc["statistics"]["byVerdict"]["in-range"], "<3"); self.assertEqual(doc["statistics"]["byYear"]["2024"]["in-range"], "<3")
+    def test_index_command_says_it_is_not_available(self):
+        rc, out, err = self.run_none_fetched("index")
+        self.assertEqual((rc, out), (2, "")); self.assertIn("no longer published", err)
 
-    def test_refused_index_exits_2_and_unreachable_exits_3(self):
-        with mock.patch.object(cli.exploited, "load", side_effect=exploited.IndexRefused("bad signature")):
-            rc, _, err = self.run_cli("--discover", "--all")
-        self.assertEqual(rc, 2); self.assertIn("refused: bad signature", err)
-        with mock.patch.object(cli.exploited, "load", side_effect=exploited.IndexUnavailable("cannot reach")):
-            rc, _, err = self.run_cli("--discover", "--all")
-        self.assertEqual(rc, 3); self.assertIn("stopped: cannot reach", err)
+    def test_posture_attack_says_it_is_not_available_and_does_not_scan(self):
+        from lattice_scan import posture
+        with mock.patch.object(posture, "collect", side_effect=AssertionError("must not scan")):
+            rc, out, err = self.run_none_fetched("posture", "--attack")
+        self.assertEqual((rc, out), (2, "")); self.assertIn("not available in this version", err)
 
-    def test_all_asks_the_index_to_be_fresh(self):
-        with mock.patch.object(cli.exploited, "load", return_value=index([])) as m:
-            self.run_cli("--discover", "--all")
-        self.assertTrue(m.call_args.kwargs.get("require_fresh"))
+    def test_recent_all_is_the_thirty_day_list_and_still_works(self):
+        from test_agent_entry import Entry, exp, feed
+        Entry.feed = feed([exp("CVE-2099-0001")])
+        rc, out, err = self.run_cli("recent", "--all")
+        self.assertEqual(rc, 0, err); self.assertIn("CVE-2099-0001", out)
 
-    def test_fail_on_in_range_exits_1_only_when_something_is_in_range(self):
-        inside = [row("CVE-2099-0001", ranges=RANGE("2.0.1", "3.0.0"))]
-        outside = [row("CVE-2099-0002")]
-        self.assertEqual(self.run_all(inside, "--fail-on", "in-range")[0], 1)
-        self.assertEqual(self.run_all(outside, "--fail-on", "in-range")[0], 0)
-        self.assertEqual(self.run_all(outside)[0], 0)
-
-    def test_recent_all_keeps_its_old_meaning(self):
-        # `recent --all` is still the whole thirty-day feed; only `--discover --all` is the index
-        Entry.feed = __import__("test_agent_entry").feed([__import__("test_agent_entry").exp("CVE-2099-0001")])
-        with mock.patch.object(cli.exploited, "load", side_effect=AssertionError("recent --all must not load the index")):
-            rc, out, _ = self.run_cli("recent", "--all")
-        self.assertEqual(rc, 0); self.assertIn("CVE-2099-0001", out)
+    def test_the_downloader_is_not_reachable_from_the_command_line(self):
+        import inspect
+        src = inspect.getsource(cli.main)
+        for name in ("cmd_all", "cmd_project_all", "cmd_index"):
+            self.assertNotIn(name + "(", src)
 
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class ProjectAll(unittest.TestCase):
-    def setUp(self):
-        import contextlib, io, tempfile
-        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
-        self.proj = Path(self.tmp.name) / "proj"; self.proj.mkdir()
-        (self.proj / "requirements.txt").write_text("examplelib==2.17.1\n")
-        self.env = mock.patch.dict("os.environ", {"LATTICE_SCAN_DIR": str(Path(self.tmp.name) / "rec")}); self.env.start(); self.addCleanup(self.env.stop)
-
-    def run_project(self, rows, *extra):
-        import contextlib, io
-        out, err = io.StringIO(), io.StringIO()
-        sys.argv = ["lattice-scan", "project", str(self.proj), "--discover", "--all", "-q", *extra]
-        with mock.patch.object(cli.exploited, "load", return_value=index(rows)), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            rc = cli.main()
-        return rc, out.getvalue(), err.getvalue()
-
-    def test_project_counts_declared_components_and_names_nothing(self):
-        rows = [row(f"CVE-2099-{i:04d}", ranges=RANGE("2.0.1", "3.0.0")) for i in range(1, 5)]
-        rows += [row("CVE-2099-0100", vendor="Nowhere", product="Nothingware")]
-        rc, out, err = self.run_project(rows)
-        self.assertEqual(rc, 0, err)
-        import re
-        self.assertRegex(out, r"in-range\s+4"); self.assertIn("these projects", out)
-        self.assertNotIn("CVE-2099", out); self.assertNotIn("Examplelib", out)
-
-    def test_project_all_in_json_has_statistics_and_no_rows(self):
-        rc, out, _ = self.run_project([row("CVE-2099-0001", ranges=RANGE("2.0.1", "3.0.0"))], "--format", "json")
-        doc = json.loads(out)
-        self.assertEqual(doc["rows"], []); self.assertEqual(doc["statistics"]["byVerdict"]["in-range"], "<3"); self.assertNotIn("CVE-2099", out)
-
-    def test_all_without_discover_is_a_usage_error(self):
-        import contextlib, io
-        sys.argv = ["lattice-scan", "project", str(self.proj), "--all"]
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            rc = cli.main()
-        self.assertEqual(rc, 2); self.assertIn("--all goes with --discover", err.getvalue())

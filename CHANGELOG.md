@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1 — 2026-11-09
+
+- Removed from use: `--discover --all`, `project --discover --all`, `lattice-scan index` and `posture --attack`. They needed a downloaded dataset (the signed exploited index, the ATT&CK table), and that dataset is no longer published. Each prints "not available in this version" on stderr, exits 2 and fetches nothing. `--discover --monthly` and `--open` still list named CVEs, `recent --all` is unchanged, and the posture report is unchanged (it still sends nothing).
+- Unchanged: the exposure line, `--exposed`, `--fail-on exposed`, snapshots and "change since the last run", the COVERAGE line, and the stable posture signal codes.
+- Planned, not built: checking old software one item at a time on the server.
+
 ## 0.6.0 — 2026-11-09
 
 This release also carries 0.4.10 and 0.5.0, which were prepared but never published.
