@@ -2937,6 +2937,22 @@ def cmd_posture(a) -> int:
     progress(f"[posture] {'deep' if deep else 'quick'} scan as {who}: ports, firewall, ssh, services" + (", processes, persistence points" if deep else "")
              + ("" if os.geteuid() == 0 else "; what needs root will be listed, not guessed"))
     d = posture.collect(deep=deep)
+    if getattr(a, "attack", False):
+        from . import observations
+        observations.TABLE_URL = env("OBSERVATIONS_URL", observations.TABLE_URL)
+        observations.MANIFEST_URL = env("OBSERVATIONS_MANIFEST_URL", observations.MANIFEST_URL)
+        try:
+            tbl = observations.load(cache_dir() / "exploited", fetch_bytes)
+            for o in d["observations"]:
+                o["techniques"] = tbl["map"].get(o.get("code", ""), [])
+            d["attackTable"] = {"generation": tbl["generation"], "source": tbl["source"]}
+            progress(f"[posture] ATT&CK table generation {tbl['generation']} from {tbl['source']}; signature checked")
+        except observations.TableRefused as err:
+            print(f"refused: {err}", file=sys.stderr)
+            return 2
+        except OSError as err:
+            print(f"stopped: {err}", file=sys.stderr)
+            return 3
     progress(f"[posture] done: {len(d['ports'])} listening ports, {len(d['observations'])} signals for a person to read")
     text = posture.dump(d)
     if a.json:
@@ -3295,6 +3311,7 @@ def main() -> int:
     pj.add_argument("--fail-on", choices=["never", "in-range", "candidate"], default="never", help="exit 1 when a candidate (or an in-range one) is found; default never: a person reads it")
     po = sub.add_parser("posture", help="what this host exposes and runs: listening ports, firewall, SSH settings, services; --deep also processes that no package owns. Read only, nothing is sent")
     po.add_argument("--deep", dest="posture_deep", action="store_true", help="also check every readable process (where its executable is, whether a package owns it, outbound connections of those that none does) and persistence points; about a minute")
+    po.add_argument("--attack", action="store_true", help="also name the ATT&CK techniques each signal relates to, from the signed table namiq.io publishes (one download of a public file; no host data is sent)")
     po.add_argument("--since", choices=["last"], help="also print what is new, changed or gone since the last stored run (listeners, services, SSH settings, persistence entries, findings); this run is stored for the next comparison")
     po.add_argument("--format", choices=["console", "json"], default="console", help="what to print (default console)")
     po.add_argument("--json", metavar="FILE", help="also write the full result as JSON to FILE (mode 0600; it names this host's processes: do not share it)")

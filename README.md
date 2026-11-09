@@ -76,6 +76,7 @@ lattice-scan --deep                                        # deep inventory: eve
 
 ```bash
 lattice-scan posture                                       # listening ports, firewall, SSH settings, services (seconds)
+lattice-scan posture --attack                              # also name the ATT&CK techniques each signal relates to (one download of a signed public table)
 lattice-scan posture --since last                          # what is new, changed or gone since the last stored run (every host scan prints this too)
 lattice-scan posture --deep                                # also processes no package owns, and persistence points (about a minute)
 sudo lattice-scan posture --deep                           # as root: firewall rules, effective SSH settings, every process
