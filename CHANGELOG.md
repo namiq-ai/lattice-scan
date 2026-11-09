@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- New: `lattice-scan --discover --all` matches every CISA-listed CVE in the signed exploited index against this host, locally. Nothing is read from Lattice and nothing is sent. The free output is statistics only, in the console, `--format json|csv` and `--json FILE`: counts by verdict (in-range, undetermined, outside-range) and by the year CISA added them, a count under 3 as `<3`, and no CVE id or product name. It needs a verified index no older than 14 days (exit 2 if refused or stale, 3 if unreachable). `recent --all` is unchanged (the thirty-day list).
 - New: `lattice-scan --discover` on the host needs no key. It is the same engine as `recent`, with the windows `--daily`, `--weekly` (the default), `--monthly` and `--open`; `recent` accepts `--monthly` too (the whole thirty-day list, what `recent --all` has always read).
 - Changed: running `lattice-scan` with no arguments is now `--discover --weekly` (it was `recent --daily`). The weekly window misses less; the read cap below keeps it inside the keyless allowance.
 - Changed: one `--max-read` for every command: 20 reads from Lattice without a key, 200 with one (`project` was 40, `recent` and the bare run 200 and 40). Every id is still checked against the host locally; ids that match but are over the cap are listed as skipped (not read), not dropped.
