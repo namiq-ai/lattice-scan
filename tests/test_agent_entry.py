@@ -263,7 +263,7 @@ class AgentEntry(EntryBase):
         self.assertEqual(rc, 3)
         self.assertIn("could not be reached", out)
         self.assertNotIn("allowance", out); self.assertNotIn("get-key", out)
-        self.assertIn("stopped: cannot reach Lattice", err)
+        self.assertIn("stopped:", err); self.assertIn("cannot reach Lattice", err)
 
     def test_enrich_at_the_quota_still_names_the_allowance(self):
         Stub.mode = "quota"

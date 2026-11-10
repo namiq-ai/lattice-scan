@@ -34,7 +34,7 @@ Env: LATTICE_URL (default https://lattice.namiq.io/mcp), LATTICE_API_KEY, LATTIC
 LATTICE_SCAN_TODAY (YYYY-MM-DD), LATTICE_SCAN_TEST=1 (our own test runs: the user agent reads `lattice-scan/<version> (test)` so the server's counts leave them out), LATTICE_SCAN_WINDOW (days back; default 6 = seven days counting today).
 """
 from __future__ import annotations
-import argparse, atexit, datetime as dt, hashlib, json, os, re, shutil, signal, statistics, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request
+import argparse, atexit, datetime as dt, errno, hashlib, json, os, re, shutil, signal, socket, statistics, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request
 from pathlib import Path
 
 from lattice_scan import __version__
@@ -129,6 +129,54 @@ class LatticeError(Exception):
 
 class LatticeUnreachable(LatticeError):
     """The network failed (no route, refused, timed out), as opposed to the server answering with a refusal or a limit."""
+
+
+# No network (or --offline): the run goes on with the answers it saved on an earlier run, says so, and never reads a saved "not listed" as "clear".
+OFFLINE = False                    # --offline / LATTICE_SCAN_OFFLINE=1: no connection is made at all
+NET_DOWN = False                   # set by the first network failure of a run: nothing else is tried (no repeated waits)
+SAVED_USED: dict[str, float] = {}  # what this run answered from saved data -> when the oldest of it was fetched
+BANNER_SHOWN = False
+SAVED_WARN_DAYS = 30
+
+
+def net_guard() -> None:
+    if OFFLINE:
+        raise LatticeUnreachable("offline mode: no connection is made")
+    if NET_DOWN:
+        raise LatticeUnreachable("the network failed earlier in this run, so it is not tried again")
+
+
+def mark_down() -> None:
+    global NET_DOWN
+    NET_DOWN = True
+
+
+def network_is_down(e: BaseException) -> bool:
+    """Refused, no route or no name: waiting and asking again will not help (a timeout might, so it keeps its retries)."""
+    r = getattr(e, "reason", e)
+    return isinstance(r, socket.gaierror) or (isinstance(r, OSError) and getattr(r, "errno", None) in (errno.ECONNREFUSED, errno.ENETUNREACH, errno.EHOSTUNREACH, errno.ENETDOWN))
+
+
+def saved_date(at: float) -> str:
+    return dt.date.fromtimestamp(at).isoformat()
+
+
+def offline_banner() -> str:
+    if not SAVED_USED:
+        return ""
+    oldest = min(SAVED_USED.values())
+    days = max(0, int((time.time() - oldest) // 86400))
+    warn = f"WARNING: the saved data is {days} days old; " if days > SAVED_WARN_DAYS else ""
+    return (f"OFFLINE: {warn}Lattice and namiq.io were not used. Saved data from {saved_date(oldest)} ({days} day(s) old): {', '.join(sorted(SAVED_USED))}. "
+            "A saved 'not listed' is not rechecked and is not the same as clear.")
+
+
+def show_offline_banner() -> None:
+    global BANNER_SHOWN
+    b = offline_banner()
+    if b and not BANNER_SHOWN:
+        BANNER_SHOWN = True
+        print(b)
 
 
 QUICK_ITEMS, KEY_ITEMS, RATE_WAIT_BUDGET = 25, 200, 5   # items per level; waits for the minute limit in one --discover --all run
@@ -343,6 +391,25 @@ def read_cache_load() -> dict:
         return {"entries": {}}
 
 
+def saved_note(what: str, at: float) -> None:
+    first = what not in SAVED_USED
+    SAVED_USED[what] = min(at, SAVED_USED.get(what, at))
+    if first:
+        progress(f"[offline] using saved {what} from {saved_date(at)}")
+
+
+def read_cache_stale(tool: str, args: dict) -> tuple[dict, float] | None:
+    """The saved answer to this lookup or node read at any age, with when it was fetched. Used only when Lattice cannot be reached."""
+    key = _cache_key(tool, args)
+    e = read_cache_load()["entries"].get(key) if key else None
+    try:
+        if e and isinstance(e["data"], dict):
+            return e["data"], float(e["at"])
+    except (KeyError, TypeError, ValueError):
+        pass
+    return None
+
+
 def read_cache_get(tool: str, args: dict) -> dict | None:
     """A recent answer to the same lookup or node read, so a repeat run (or a second look at the same id) asks Lattice nothing. The cache holds graph
     data about public CVEs only, never anything about this host."""
@@ -410,7 +477,7 @@ RUN_URL = env("RUN_URL", "https://namiq.io/lattice/run")
 def report_enabled() -> bool:
     """Whether this run may say, once, that a scan ran. Off for: LATTICE_SCAN_NO_REPORT=1, DO_NOT_TRACK=1, a Lattice or feed address other than the
     public ones (a self-hosted server must never hear from us), and any run under a test runner."""
-    if env("NO_REPORT") == "1" or os.environ.get("DO_NOT_TRACK", "") not in ("", "0"):
+    if OFFLINE or env("NO_REPORT") == "1" or os.environ.get("DO_NOT_TRACK", "") not in ("", "0"):
         return False
     if URL != "https://lattice.namiq.io/mcp" or FEED_URL != "https://namiq.io/lattice/recent.json" or RUN_URL != "https://namiq.io/lattice/run":
         return False
@@ -474,6 +541,9 @@ class Lattice:
         self.server_new = False                  # set once an answer carries the inline fields: only then is a batch tried (an older server is never asked)
         self.batches = 0
         self.rate_budget: int | None = None      # waits left for the minute limit in this run; None: only the per-request limit applies
+        self.down = False                        # Lattice could not be reached in this run: answers come from saved data or not at all
+        self.why = ""                            # the network error that made it so, kept for the message when there is no saved answer
+        self.saved_at: dict[str, float] = {}     # id -> when the saved answer used for it was fetched
 
     @staticmethod
     def _wait_to_retry(attempt: int, why: str) -> None:
@@ -491,6 +561,7 @@ class Lattice:
         if self.session:
             h["Mcp-Session-Id"] = self.session
         req = urllib.request.Request(URL, json.dumps(body).encode(), h)
+        net_guard()
         t0 = time.time()
         dbg(f"-> POST {URL} {body.get('method')} {json.dumps(body.get('params', {}).get('arguments', ''))} key={'set' if KEY else 'none'} session={self.session or '-'}")
         attempt = rate_tries = 0
@@ -524,10 +595,14 @@ class Lattice:
                 raise LatticeError(f"HTTP {e.code} from Lattice: {detail}")
             except (urllib.error.URLError, OSError) as e:   # includes a TLS handshake or read timeout
                 dbg(f"<- failed in {time.time() - t0:.2f}s: {e!r}")
+                if network_is_down(e):
+                    mark_down()
+                    raise LatticeUnreachable(f"cannot reach Lattice: {e}")
                 if attempt < len(RETRY_DELAYS):
                     self._wait_to_retry(attempt, str(e))
                     attempt += 1
                     continue
+                mark_down()
                 raise LatticeUnreachable(f"cannot reach Lattice after {attempt + 1} tries: {e}")
         dbg(f"   body: {raw[:300]}{' ...' if len(raw) > 300 else ''}")
         dbg(f"   full body: {raw}", file_only=True)
@@ -540,7 +615,11 @@ class Lattice:
 
     def start(self) -> None:
         check_url()
-        self._post({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "lattice-scan", "version": __version__}}})
+        try:
+            self._post({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "lattice-scan", "version": __version__}}})
+        except LatticeUnreachable as err:
+            self.down, self.why = True, str(err)   # not a stop: each lookup is answered from saved data where there is some
+            return
         try:
             self._post({"jsonrpc": "2.0", "method": "notifications/initialized"})
         except LatticeError:
@@ -581,7 +660,9 @@ class Lattice:
                 read_cache_put("graph_lookup", {"id": r["id"]}, ans)
 
     def call(self, tool: str, **args) -> dict:
-        if tool == "graph_lookup" and args.get("id") and self.batch_ok and self.server_new and len(self.pending) > 1:
+        if OFFLINE:   # no connection at all: even a fresh saved answer is labelled as saved
+            return self._saved_or_raise(tool, args)
+        if tool == "graph_lookup" and args.get("id") and self.batch_ok and self.server_new and len(self.pending) > 1 and not self.down:
             cid = str(args["id"]).upper()
             if cid not in self.prefetched and cid in self.pending and read_cache_get(tool, args) is None:
                 self._prefetch(cid)
@@ -597,6 +678,8 @@ class Lattice:
             self.cached += 1
             dbg(f"cache: {tool} {args} answered from the read cache")
             return json.loads(json.dumps(hit))
+        if self.down or OFFLINE or NET_DOWN:
+            return self._saved_or_raise(tool, args)
         # Keyless access allows a few calls a minute (the server says how many), counted across every run on this machine: space them out instead of burning the day's units on 429s.
         if not KEY:
             wait = pace_wait()
@@ -606,7 +689,11 @@ class Lattice:
                 time.sleep(wait)
             pace_note()
         self.n += 1
-        r = self._post({"jsonrpc": "2.0", "id": self.n, "method": "tools/call", "params": {"name": tool, "arguments": {k: v for k, v in args.items() if v is not None}}})
+        try:
+            r = self._post({"jsonrpc": "2.0", "id": self.n, "method": "tools/call", "params": {"name": tool, "arguments": {k: v for k, v in args.items() if v is not None}}})
+        except LatticeUnreachable as err:
+            self.down, self.why = True, str(err)
+            return self._saved_or_raise(tool, args)
         self.last_gap = time.time()
         if not r or "result" not in r:
             raise LatticeError(f"{tool}: {json.dumps(r)[:200]}")
@@ -635,6 +722,17 @@ class Lattice:
             if tool == "graph_lookup" and args.get("id"):
                 self._learn(data)
         return data
+
+    def _saved_or_raise(self, tool: str, args: dict) -> dict:
+        """Lattice cannot be reached: the saved answer to this exact lookup, at any age and labelled with its date, or an error that says there is none."""
+        saved = read_cache_stale(tool, args)
+        if saved is None:
+            raise LatticeUnreachable(f"{self.why or 'offline mode: no connection is made'}; no saved answer for {args.get('id') or args.get('uid') or tool}")
+        data, at = saved
+        self.cached += 1
+        self.saved_at[str(args.get("id") or args.get("uid") or "").upper()] = at
+        saved_note("CVE answers", at)
+        return json.loads(json.dumps(data))
 
     def _learn(self, answer: dict) -> None:
         """A lookup answer that carries the inline urgency fields (ADR-LATTICE-API-001 C1) comes from a server that also takes a batch (C2)."""
@@ -1929,6 +2027,13 @@ RESULT: dict[str, list[list[str]]] = {}
 RESULT_KEYS = ["cve", "exploit", "cvss", "listed", "patchDue", "ransomware", "product", "result", "matched"]   # the nine columns of the console table
 
 
+def unlisted_text(lat: "Lattice", cve: str) -> str:
+    at = lat.saved_at.get(cve.upper())
+    if at is None:
+        return "not in CISA's list in this snapshot (not the same as safe)"
+    return f"not listed as of {saved_date(at)}, not rechecked (saved answer; not the same as clear)"
+
+
 def print_table(rows: list[list[str]], title: str = "RESULT BY CVE") -> None:
     """The RESULT BY CVE table of the host check, `recent` and `enrich` (nine columns, see cells())."""
     if not rows:
@@ -2073,7 +2178,7 @@ def cmd_run(a) -> int:
             if e is None:
                 not_listed.append(cve)
                 progress(f"{tag}  not in CISA's exploited list in this snapshot (that is not the same as safe)")
-                rows.append([cve, *cells(None), "unlisted", "not in CISA's list in this snapshot (not the same as safe)"])
+                rows.append([cve, *cells(None), "unlisted", unlisted_text(lat, cve)])
                 if cve in named and lat.last_unlisted:
                     ctx = context(lat, lat.last_unlisted)
                     if ctx:
@@ -2120,6 +2225,7 @@ def cmd_run(a) -> int:
     scanlog(f"ok key={'yes' if KEY else 'no'} inventory={inv['hash']} read={read} candidates={len(hits)} already-recorded={len(again_hits)}"
             + "".join(f" [{e['cve']}: {why}]" for e, why, imp in hits) + (f" not-listed={','.join(not_listed)}" if not_listed else "")
             + (" restart-required" if inv["restartRequired"] else ""))
+    show_offline_banner()
     print(f"host scan {TODAY}: {read} exploited entries read, {len(hits)} candidates (a person must read each against the installed version)")
     withdrawn = recheck_open(inv)   # an open finding from an older, looser matcher is withdrawn, not kept open for ever
     rows += getattr(a, "extra_rows", [])   # `recent`: the feed's ids that were ruled out on this host and never sent to Lattice
@@ -2491,6 +2597,7 @@ def fetch_json(url: str, what: str, limit: int = 1024 * 1024) -> dict:
     if not (u.scheme == "https" or (u.scheme == "http" and u.hostname in ("127.0.0.1", "localhost", "::1"))):
         raise LatticeError(f"refusing {what}: {url} is not https")
     req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": user_agent()})
+    net_guard()
     for attempt in range(len(RETRY_DELAYS) + 1):
         try:
             with _OPENER.open(req, timeout=30) as r:
@@ -2510,9 +2617,13 @@ def fetch_json(url: str, what: str, limit: int = 1024 * 1024) -> dict:
                 continue
             raise LatticeError(f"{what}: HTTP {e.code} from {url}")
         except (urllib.error.URLError, OSError) as e:
+            if network_is_down(e):
+                mark_down()
+                raise LatticeUnreachable(f"cannot read {what} at {url}: {e}")
             if attempt < len(RETRY_DELAYS):
                 Lattice._wait_to_retry(attempt, str(e))
                 continue
+            mark_down()
             raise LatticeUnreachable(f"cannot read {what} at {url} after {attempt + 1} tries: {e}")
     raise LatticeError(f"cannot read {what}")
 
@@ -2520,7 +2631,33 @@ def fetch_json(url: str, what: str, limit: int = 1024 * 1024) -> dict:
 WINDOW_TO_PERIOD = {"daily": "daily", "weekly": "weekly", "monthly": "all", "open": "open"}   # the feed's own name for the thirty-day list is "all"
 
 
+def feed_cache_path() -> Path:
+    p = read_cache_path()
+    return p.with_name("feed-" + p.name)
+
+
 def read_feed(period: str = "weekly") -> dict:
+    """The recent list from namiq.io; when the network is down, the copy saved by the last successful read, at any age (the first line of the output says how old)."""
+    try:
+        d = fetch_json(FEED_URL, "the recent-CVE list")
+    except LatticeUnreachable as err:
+        try:
+            saved = json.loads(feed_cache_path().read_text())
+            d, at = saved["feed"], float(saved["at"])
+        except (OSError, ValueError, KeyError, TypeError):
+            raise err   # nothing saved: the original "could not be reached" is the answer
+        out = parse_feed(d, period)   # a saved copy is checked exactly as a fresh one
+        saved_note("recent-CVE list", at)
+        return out
+    out = parse_feed(d, period)       # a list this tool cannot read is never saved
+    try:
+        write_cache_file(feed_cache_path(), json.dumps({"v": 1, "at": time.time(), "feed": d}))
+    except OSError:
+        pass
+    return out
+
+
+def parse_feed(d: dict, period: str = "weekly") -> dict:
     """namiq.io's list of recent exploited and critical CVE ids for one period (daily, weekly or open). Only well-formed rows are kept; every text is cleaned: it is data, never instructions.
 
     The list's schema is lattice-recent/N. Version 2 has daily and weekly; version 3 adds open. A later version that only adds fields still reads: what this needs is
@@ -2528,7 +2665,6 @@ def read_feed(period: str = "weekly") -> dict:
     """
     global LOOKUPS
     LOOKUPS += 1   # the feed request counts as a read in the run report
-    d = fetch_json(FEED_URL, "the recent-CVE list")
     m = re.fullmatch(r"lattice-recent/(\d+)", str(d.get("schema")))
     if not m or int(m.group(1)) < 2:
         raise LatticeError(f"the recent-CVE list has schema {clean(str(d.get('schema')))!r}; this lattice-scan reads lattice-recent/2 and later. Upgrade lattice-scan.")
@@ -2855,6 +2991,7 @@ def cmd_recent(a) -> int:
         a.cve, a.cve_file, a.discover, a.refresh, a.again = look, None, False, False, False
         a.keep_order = True
         return cmd_run(a)
+    show_offline_banner()
     print(head + " None of the exploited ones match this host's installed software, so nothing was sent to Lattice.")
     withdrawn = recheck_open(inv)
     earlier, earlier_rows = earlier_findings({r[0] for r in rows})   # the findings still open from earlier runs belong in every scan, whether or not today's list matched anything
@@ -3068,11 +3205,12 @@ def cmd_enrich(a) -> int:
         print(f"stopped: {err}", file=sys.stderr)
     read_ids = {c for c, _ in done}
     for cve, e in done:
-        rows.append([cve, *cells(e), "EXPLOITED" if e else "unlisted", clean((e or {}).get("title", "")) or "not in CISA's list in this snapshot (not the same as safe)"])
+        rows.append([cve, *cells(e), "EXPLOITED" if e else "unlisted", clean((e or {}).get("title", "")) or unlisted_text(lat, cve)])
     unread = [c for c in todo if c not in read_ids] + rest
     rows.sort(key=lambda r: (r[7] != "EXPLOITED", r[4] if r[4] != "-" else "9999"))
     rows += [[c, "-", "-", "-", "-", "-", "-", "not read", "over the limit for one run" if c in rest else "stopped before this id"] for c in unread]
     n_exp = sum(1 for _, e in done if e)
+    show_offline_banner()
     print(f"enrich {TODAY}: {len(ids)} CVE ids found, {len(done)} read, {n_exp} exploited (CISA), {sum(1 for _, e in done if e and ransom(e.get('ransomware', '')) == 'known')} with known ransomware use")
     print_table(rows)
     if unread:
@@ -3118,7 +3256,7 @@ def cmd_get_key(a) -> int:
         except urllib.error.HTTPError as e:
             status, raw = e.code, e.read(MAX_REPLY).decode(errors="replace")
         except (urllib.error.URLError, OSError) as e:
-            raise LatticeError(f"cannot reach the key service: {e}")
+            raise LatticeUnreachable(f"cannot reach the key service: {e}")
     except LatticeError as err:
         print(f"stopped: {err}", file=sys.stderr)
         return 1
@@ -3340,6 +3478,7 @@ def _main() -> int:
     p.add_argument("--also", action="append", metavar="PACKAGE", help="with --discover --all: also send this installed package (repeatable)")
     p.add_argument("--max-items", type=int, default=None, help="with --discover --all: most items to send (default 25 without a key, 200 with one)")
     p.add_argument("--max-read", type=int, default=None, help="with --discover: most ids to read from Lattice per run (default 20 without a key, 200 with one)")
+    p.add_argument("--offline", action="store_true", default=argparse.SUPPRESS, help="make no connection at all: answer from what an earlier run saved, say how old it is, and list what has no saved answer (also LATTICE_SCAN_OFFLINE=1)")
     p.add_argument("--debug", action="store_true", help="detailed execution log to stderr and debug.log (also LATTICE_SCAN_DEBUG=1)")
     p.add_argument("--keep", action="store_true", help="keep this run's records in the default folder even with no terminal (also LATTICE_SCAN_KEEP=1); without it a terminal-less run with no folder yet uses a temporary one")
     p.add_argument("--inventory", action="store_true", help="with --refresh: only collect and show the inventory, no scan and no network call")
@@ -3363,6 +3502,7 @@ def _main() -> int:
     pj.add_argument("paths", nargs="*", default=["."], help="project folders (default: the current folder)")
     pj.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each file and CVE as it is checked, on stderr (the default; see --quiet)")
     pj.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
+    pj.add_argument("--offline", action="store_true", default=argparse.SUPPRESS, help="make no connection; answer from what an earlier run saved (also LATTICE_SCAN_OFFLINE=1)")
     pj.add_argument("--cve", action="append", help="CVE ids, comma separated (CVE-A,CVE-B); repeatable"); pj.add_argument("--cve-file", help="file of ids, one or several per line, # comments")
     pj.add_argument("--kev-catalogue", help="CISA's known_exploited_vulnerabilities.json; chooses which ids to read. Needs a key whose email is confirmed. Nothing from the file is sent")
     pj.add_argument("--discover", action="store_true", help="no CVE ids needed, no key needed: read namiq.io's list of recent exploited CVEs, keep those whose product a dependency here matches, and read only those from Lattice (default window: monthly)")
@@ -3388,6 +3528,7 @@ def _main() -> int:
     po.add_argument("--json", metavar="FILE", help="also write the full result as JSON to FILE (mode 0600; it names this host's processes: do not share it)")
     po.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each step on stderr (the default)")
     po.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
+    po.add_argument("--offline", action="store_true", default=argparse.SUPPRESS, help="make no connection; answer from what an earlier run saved (also LATTICE_SCAN_OFFLINE=1)")
     rc = sub.add_parser("recent", help="start here with no CVE id: read namiq.io's recent exploited and critical CVEs, check what this host could have, read only those from Lattice")
     rc.add_argument("--period", choices=["all", "daily", "weekly", "open"], default="all", help="all: everything in the list, the weekly and the open parts (default); daily: added or published in the last day or two; weekly: the last seven days, which includes daily; open: exploited CVEs added before the weekly window but within 30 days, overdue first (overdue means CISA's due date has passed; it says nothing about any machine)")
     rc.add_argument("--open", dest="period", action="store_const", const="open", help="same as --period open")
@@ -3403,6 +3544,7 @@ def _main() -> int:
     rc.add_argument("--no-critical", action="store_true", help="leave out the critical (not known exploited) ids")
     rc.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each step on stderr (the default)")
     rc.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
+    rc.add_argument("--offline", action="store_true", default=argparse.SUPPRESS, help="make no connection; answer from what an earlier run saved (also LATTICE_SCAN_OFFLINE=1)")
     en = sub.add_parser("enrich", help="CVE ids you already have (audit, advisory, ticket): exploited? ransomware? patch due? No comparison with this host")
     en.add_argument("--cve", action="append", help="CVE ids or any text containing them (repeatable)")
     en.add_argument("--file", action="append", help="a file to find CVE ids in; - or a pipe on stdin works too")
@@ -3412,6 +3554,7 @@ def _main() -> int:
     en.add_argument("--fail-on", choices=["never", "exploited"], default="never", help="exit 1 when any id is exploited (default never)")
     en.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each step on stderr (the default)")
     en.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
+    en.add_argument("--offline", action="store_true", default=argparse.SUPPRESS, help="make no connection; answer from what an earlier run saved (also LATTICE_SCAN_OFFLINE=1)")
     gk = sub.add_parser("get-key", help="request a Lattice key for a real person who has read the terms and gave these details; the key is stored, never printed")
     for flag in ("name", "position", "company", "email", "purpose"):
         gk.add_argument(f"--{flag}", required=True, help=f"the person's {flag}" if flag != "purpose" else "what the key will be used for, one or two sentences (at least 20 characters)")
@@ -3436,7 +3579,9 @@ def _main() -> int:
         os.environ["LATTICE_SCAN_READ_CACHE"] = "off"   # ... and asks Lattice again
     if getattr(a, "again", False):
         os.environ["LATTICE_SCAN_READ_CACHE"] = "off"   # --again reads the id again, from Lattice
-    global DEBUG, PROGRESS, KEEP
+    global DEBUG, PROGRESS, KEEP, OFFLINE, NET_DOWN, BANNER_SHOWN
+    OFFLINE, NET_DOWN, BANNER_SHOWN = bool(getattr(a, "offline", False)) or env("OFFLINE") == "1", False, False
+    SAVED_USED.clear()
     DEBUG = a.debug or env("DEBUG") == "1"
     KEEP = a.keep or env("KEEP") == "1"
     # OCO-5837: progress goes to stderr and is on by default; --quiet or LATTICE_SCAN_PROGRESS=0 turns it off. stdout is never touched.
