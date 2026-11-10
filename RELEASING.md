@@ -19,6 +19,15 @@ After step 3's pull request is merged to `main` (version bumped, CHANGELOG secti
 
 Pushing a `v*` tag by hand still works and still refuses a tag with no notes file.
 
+## The signed recent-CVE list (root key and certificate)
+
+The scanner checks namiq.io's `recent.json` against a signature (`src/lattice_scan/feedsig.py`). The release workflow runs `packaging/check_feed_signature.py`, which runs the build's own check on the live list and **fails the release** if a signature is offered that this build would refuse (for example a wrong `ROOT_PUBLIC_KEY`); an unsigned list or an unreachable site only warns.
+
+- **Normal release:** nothing to do. The root public key and `MIN_SERIAL` stay as they are.
+- **Revoking a certificate:** raise `MIN_SERIAL` in `feedsig.py` above the serial to drop, release, and only then renew the certificate with a higher serial (`deploy/feed-cert/renew-feed-cert.sh` in namiq-web). Releases older than this one keep accepting the old serial: revocation reaches only upgraded installs.
+- **Rotating the root key:** this build holds one root key, so a rotation cannot be done silently; plan it as a coordinated step (new root key, new `ROOT_PUBLIC_KEY`, release, certificate from the new root) and expect older installs to read the list as unverified or to refuse it until they upgrade. Decide this before it is needed.
+- **Certificate renewal** (every 60 days, warns at 14) is a namiq-web step: see `deploy/systemd/README.md` there. It does not need a scanner release.
+
 ## The Claude Code plugin
 
 The skill is released with the tool. Bump `.claude-plugin/plugin.json` together with `__version__` (step 1) and rebuild the bundled script; the release refuses a tag where they differ, or where a module in

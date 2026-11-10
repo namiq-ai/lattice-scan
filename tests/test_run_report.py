@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 NamiQ LLC
 """The one report a run makes: that a scan ran. Its whole content, when it is off, and that it never breaks a run. A local server stands in for namiq.io."""
-import json, os, sys, threading, unittest
+import json, os, sys, tempfile, threading, unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest import mock
@@ -41,11 +41,14 @@ class RunReport(unittest.TestCase):
         self.on = mock.patch.object(cli, "report_enabled", return_value=True)
         self.url_patch = mock.patch.object(cli, "RUN_URL", self.url)
         self.marker = mock.patch.object(cli, "note_report_once", lambda: None)
-        for p in (self.on, self.url_patch, self.marker):
+        self.tmp = tempfile.TemporaryDirectory()   # the kept-note file must never be the real cache folder's
+        self.cache = mock.patch.object(cli, "cache_dir", lambda: Path(self.tmp.name))
+        for p in (self.on, self.url_patch, self.marker, self.cache):
             p.start()
 
     def tearDown(self):
         mock.patch.stopall()
+        self.tmp.cleanup()
 
     def test_the_body_is_three_fields_and_names_nothing_of_the_host(self):
         with mock.patch.object(cli, "LOOKUPS", 12):
