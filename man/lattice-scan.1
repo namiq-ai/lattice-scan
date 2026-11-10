@@ -461,6 +461,18 @@ Set to 1 for \fB\-\-debug\fR.
 .TP
 .B LATTICE_SCAN_TODAY
 Pretend today is this YYYY\-MM\-DD (tests, reproducing a report).
+.TP
+.B LATTICE_SCAN_TEST
+Set to 1 by our own test runs: the user agent reads \fBlattice\-scan/\fR\fIversion\fR \fB(test)\fR so the website's counts leave them out.
+.TP
+.B LATTICE_SCAN_NO_REPORT
+Set to 1 to send nothing when a run ends. By default a run that read from Lattice reports that a scan ran: the command, how it ended and a band for the number of reads, never a host, package, CVE id, path, address or key. \fBDO_NOT_TRACK\fR=1 does the same. It is always off when \fBLATTICE_URL\fR or the feed address is not namiq.io.
+.TP
+.B LATTICE_SCAN_RUN_URL
+Where the run report goes (tests). Any value other than the default switches the report off.
+.TP
+.B LATTICE_SCAN_REPORT_FORCE
+Tests only: allows the report under a test runner.
 .PP
 The first internal version read \fBHOST_SCAN_\fR\fIname\fR for each \fBLATTICE_SCAN_\fR\fIname\fR; those are still honoured when the new name is unset.
 .TP
