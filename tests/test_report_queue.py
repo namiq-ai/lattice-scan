@@ -51,8 +51,8 @@ class Queue(unittest.TestCase):
     def queue(self):
         return cli.queue_load()
 
-    def test_offline_makes_no_connection_and_keeps_the_note(self):
-        with mock.patch.object(cli, "OFFLINE", True), mock.patch.object(socket, "socket", side_effect=AssertionError("connection")):
+    def test_a_failed_network_makes_no_connection_and_keeps_the_note(self):
+        with mock.patch.object(cli, "NET_DOWN", True), mock.patch.object(socket, "socket", side_effect=AssertionError("connection")):
             self.assertFalse(cli.report_run("recent", 0))
         self.assertEqual(GOT, [])
         self.assertEqual(self.queue(), [{"command": "recent", "result": "ok", "lookups": "1-5", "day": day()}])
@@ -95,7 +95,7 @@ class Queue(unittest.TestCase):
         self.assertEqual(len(self.queue()), 41 - (cli.QUEUE_SEND_MAX + 1))
 
     def test_switched_off_keeps_nothing(self):
-        with mock.patch.object(cli, "report_enabled", return_value=False), mock.patch.object(cli, "OFFLINE", True):
+        with mock.patch.object(cli, "report_enabled", return_value=False), mock.patch.object(cli, "NET_DOWN", True):
             cli.report_run("recent", 0)
         self.assertEqual(self.queue(), [])
 

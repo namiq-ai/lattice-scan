@@ -74,15 +74,15 @@ class Offline(EntryBase):
         self.assertEqual(rc, 3)
         self.assertEqual(len(calls), 1, calls)
 
-    def test_offline_flag_opens_no_connection_at_all(self):
+    def test_there_is_no_offline_flag_or_variable(self):
         self.prime()
-        def forbidden(*a, **k):
-            raise AssertionError("a connection was attempted")
-        with mock.patch.object(cli._OPENER, "open", forbidden):
-            rc, out, err = self.run_cli("--offline", "enrich", "--cve", IDS)
-            rc2, out2, _ = self.run_cli("--offline", "enrich", "--cve", "CVE-2099-0777")
-        self.assertEqual(rc, 0, out + err); self.assertIn("OFFLINE:", out)
-        self.assertEqual(rc2, 3); self.assertIn("not read", out2)
+        with self.assertRaises(SystemExit) as cm:
+            self.run_cli("--offline", "recent")                     # argparse: unrecognized arguments
+        self.assertEqual(cm.exception.code, 2)
+        with mock.patch.dict(os.environ, {"LATTICE_SCAN_OFFLINE": "1"}):
+            self.go_offline()
+            rc, out, err = self.run_cli("enrich", "--cve", IDS)       # the variable does nothing; only a failing network sends the run to saved data
+        self.assertEqual(rc, 0, out + err)
 
     def test_recent_uses_the_saved_list_and_says_so(self):
         self.prime(); self.go_offline()
@@ -90,10 +90,11 @@ class Offline(EntryBase):
         self.assertNotIn("stopped:", err)
         self.assertIn("OFFLINE:", out); self.assertIn("recent-CVE list", out)
 
-    def test_offline_with_nothing_saved_stops_with_a_clear_reason(self):
-        rc, out, err = self.run_cli("--offline", "recent")
+    def test_no_network_and_nothing_saved_stops_with_a_clear_reason(self):
+        self.go_offline()
+        rc, out, err = self.run_cli("recent")
         self.assertEqual(rc, 3)
-        self.assertIn("stopped:", err); self.assertIn("offline mode", err)
+        self.assertIn("stopped:", err); self.assertIn("recent-CVE list", err)
 
     def test_data_older_than_thirty_days_is_a_warning_not_a_refusal(self):
         self.prime(aged_hours=40 * 24)

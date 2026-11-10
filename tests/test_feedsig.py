@@ -116,7 +116,7 @@ class Served(unittest.TestCase):
         Served.hits = []
         Served.files = {"/recent.json": BODY, "/recent.json.sig": sig(), "/recent.json.cert": cert()}
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
-        for p in (mock.patch.object(cli, "FEED_URL", self.base), mock.patch.object(feedsig, "ROOT_PUBLIC_KEY", ROOT_PUB), mock.patch.object(cli, "OFFLINE", False),
+        for p in (mock.patch.object(cli, "FEED_URL", self.base), mock.patch.object(feedsig, "ROOT_PUBLIC_KEY", ROOT_PUB),
                   mock.patch.object(cli, "NET_DOWN", False), mock.patch.dict(os.environ, {"LATTICE_SCAN_READ_CACHE": "on"}),
                   mock.patch.object(cli, "read_cache_path", lambda: Path(self.tmp.name) / "read-cache.json")):
             p.start(); self.addCleanup(p.stop)
@@ -164,9 +164,9 @@ class Served(unittest.TestCase):
         self.assertEqual(len(out["exploited"]), 1)
         self.assertFalse(cli.NET_DOWN)
 
-    def test_offline_reads_the_saved_copy_and_asks_for_no_signature(self):
+    def test_a_network_that_failed_earlier_reads_the_saved_copy_and_asks_for_no_signature(self):
         cli.read_feed("weekly"); Served.hits.clear()
-        with mock.patch.object(cli, "OFFLINE", True):
+        with mock.patch.object(cli, "NET_DOWN", True):
             out = cli.read_feed("weekly")
         self.assertEqual(len(out["exploited"]), 1); self.assertEqual(Served.hits, [])
 

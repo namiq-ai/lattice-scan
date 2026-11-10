@@ -5,7 +5,7 @@
 lattice-scan \- check this host, or a project's declared dependencies, against the CVEs CISA lists as exploited, through Lattice
 .SH SYNOPSIS
 .B lattice-scan
-[\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-discover\fR] [\fB\-\-format\fR \fBconsole\fR|\fBjson\fR|\fBcsv\fR] [\fB\-\-json\fR \fIFILE\fR] [\fB\-\-refresh\fR [\fB\-\-inventory\fR]] [\fB\-\-list\fR] [\fB\-\-deep\fR] [\fB\-\-again\fR] [\fB\-\-keep\fR] [\fB\-\-offline\fR] [\fB\-\-debug\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
+[\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-discover\fR] [\fB\-\-format\fR \fBconsole\fR|\fBjson\fR|\fBcsv\fR] [\fB\-\-json\fR \fIFILE\fR] [\fB\-\-refresh\fR [\fB\-\-inventory\fR]] [\fB\-\-list\fR] [\fB\-\-deep\fR] [\fB\-\-again\fR] [\fB\-\-keep\fR] [\fB\-\-debug\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
 .br
 .B lattice-scan project
 [\fIPATH\fR...] [\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-kev\-catalogue\fR \fIFILE\fR] [\fB\-\-max\-read\fR \fIN\fR]
@@ -122,9 +122,6 @@ Print, on standard error, what is being checked: each part of the host collected
 .TP
 .B \-\-quiet\fR, \fB\-q
 Print no progress.
-.TP
-.B \-\-offline
-Make no connection at all. Answers come from what an earlier run saved (the recent list and each CVE answer, at any age); the first line of the output says \fBOFFLINE:\fR and how old the data is, and warns past 30 days. A saved "not listed" is printed as "not listed as of DATE, not rechecked" and is never the same as clear. An id with no saved answer is listed as not read (exit 3). The "a scan ran" note is kept in a small file in the cache folder (50 notes at most, 30 days at most) and sent with the next online run. The same happens, after one failed attempt, whenever Lattice or namiq.io cannot be reached.
 .TP
 .B \-\-keep
 Keep this run's records in the default folder even when there is no terminal. Without it, a run with no terminal on standard input or error (an agent, a cron job) and no records folder yet writes its records to a temporary folder that is deleted when the run ends, so nothing is left in the home folder. A folder that already exists is used as before, and so is any folder named by
@@ -443,9 +440,6 @@ A JSON posture report to use for the exposure labels instead of reading listener
 .TP
 .B LATTICE_SCAN_INVENTORY
 A JSON inventory to use instead of collecting one (tests, other tools).
-.TP
-.B LATTICE_SCAN_OFFLINE
-Set to 1 for \fB\-\-offline\fR.
 .TP
 .B LATTICE_SCAN_PROGRESS
 Progress is on by default. Set to 0 to turn it off, like \fB\-\-quiet\fR.
