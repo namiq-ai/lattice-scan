@@ -8,6 +8,7 @@ CANDIDATE when a product word in the entry matches an installed package, snap, c
 host: a person reads the affected range against the installed version, then records the outcome with `resolve`.
 
 What leaves the machine: CVE ids, and the key if you have one. The inventory (package names, versions) is never sent; matching happens here.
+After a run that read anything it also reports that a scan ran: the command, how it ended and a band for the number of reads, never a host, package, CVE id or path. Off: LATTICE_SCAN_NO_REPORT=1 or DO_NOT_TRACK=1 (README, 'What leaves the machine').
 Records live in ~/.lattice-scan (or LATTICE_SCAN_DIR), mode 0700, because they name the host's packages. Never commit or publish them.
 
   lattice-scan --cve CVE-2026-1234 --cve-file ids.txt   check these ids (works keyless; ~1 lookup per id)
@@ -398,6 +399,62 @@ def pace_note() -> None:
         pass
 
 
+LOOKUPS = 0   # requests this run made to Lattice (the run report below says only how many, in a band)
+RUN_URL = env("RUN_URL", "https://namiq.io/lattice/run")
+
+
+def report_enabled() -> bool:
+    """Whether this run may say, once, that a scan ran. Off for: LATTICE_SCAN_NO_REPORT=1, DO_NOT_TRACK=1, a Lattice or feed address other than the
+    public ones (a self-hosted server must never hear from us), and any run under a test runner."""
+    if env("NO_REPORT") == "1" or os.environ.get("DO_NOT_TRACK", "") not in ("", "0"):
+        return False
+    if URL != "https://lattice.namiq.io/mcp" or FEED_URL != "https://namiq.io/lattice/recent.json" or RUN_URL != "https://namiq.io/lattice/run":
+        return False
+    return not ({"unittest", "pytest"} & set(sys.modules)) or env("REPORT_FORCE") == "1"
+
+
+def lookup_band(n: int) -> str:
+    return "0" if n <= 0 else "1-5" if n <= 5 else "6-20" if n <= 20 else "21-100" if n <= 100 else "100+"
+
+
+def report_body(command: str, rc: int) -> dict:
+    """The whole of what a run reports, and nothing else: the command, how it ended, and how many reads it made, in a band. No host name, no package, no
+    CVE id, no path, no address, no key. The version and the day come from the user agent and the server clock; the server derives the caller's daily hash."""
+    return {"command": command if command in REPORT_COMMANDS else "other", "result": "ok" if rc == 0 else "matched" if rc == 1 else "stopped" if rc == 3 else "failed",
+            "lookups": lookup_band(LOOKUPS)}
+
+
+REPORT_COMMANDS = ("scan", "recent", "project", "posture", "enrich", "all", "inventory", "get-key")
+
+
+def report_run(command: str, rc: int, timeout: float = 3.0) -> bool:
+    """Say that a scan ran. Best effort: it never changes the exit code, waits at most `timeout` seconds, follows no redirect, and is silent on any failure."""
+    if not report_enabled():
+        return False
+    try:
+        note_report_once()
+        req = urllib.request.Request(RUN_URL, json.dumps(report_body(command, rc)).encode(), {"Content-Type": "application/json", "User-Agent": user_agent()}, method="POST")
+        opener = urllib.request.build_opener(_NoRedirect)
+        with opener.open(req, timeout=timeout) as r:
+            return 200 <= r.status < 300
+    except Exception:  # noqa: BLE001 - a report must never break a scan
+        return False
+
+
+def note_report_once() -> None:
+    """The first run tells the person what is reported and how to stop it, once per user (a marker beside the pace file)."""
+    marker = cache_dir() / "run-report-noted"
+    try:
+        if marker.exists():
+            return
+        progress("[report] after a scan, lattice-scan tells namiq.io that a scan ran: the command, how it ended and how many reads it made, in a band (for example 6-20). "
+                 "Never a host name, package, CVE id, path or address. To stop it: LATTICE_SCAN_NO_REPORT=1 or DO_NOT_TRACK=1. Details: README, 'What leaves the machine'.")
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+    except OSError:
+        pass
+
+
 class Lattice:
     """Minimal MCP client over streamable HTTP. The server may answer plain JSON or an SSE stream; both are read."""
 
@@ -422,6 +479,8 @@ class Lattice:
         time.sleep(delay)
 
     def _post(self, body: dict) -> dict | None:
+        global LOOKUPS
+        LOOKUPS += 1
         h = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "User-Agent": user_agent()}
         if KEY:
             h["X-API-Key"] = KEY
@@ -2463,6 +2522,8 @@ def read_feed(period: str = "weekly") -> dict:
     The list's schema is lattice-recent/N. Version 2 has daily and weekly; version 3 adds open. A later version that only adds fields still reads: what this needs is
     checked, not the number, so a feed that grows does not stop every installed tool. Version 1, or a list without the period asked for, is refused with a request to upgrade.
     """
+    global LOOKUPS
+    LOOKUPS += 1   # the feed request counts as a read in the run report
     d = fetch_json(FEED_URL, "the recent-CVE list")
     m = re.fullmatch(r"lattice-recent/(\d+)", str(d.get("schema")))
     if not m or int(m.group(1)) < 2:
@@ -3256,7 +3317,7 @@ def stats() -> dict:
             "medianDaysListedToFixed": statistics.median(gaps) if gaps else None}
 
 
-def main() -> int:
+def _main() -> int:
     p = argparse.ArgumentParser(prog="lattice-scan", description="Check a host against CISA-exploited CVEs through Lattice.")
     p.add_argument("--version", action="version", version=f"lattice-scan {__version__}")
     p.add_argument("--cve", action="append", help="a CVE id to check (repeatable)")
@@ -3358,6 +3419,8 @@ def main() -> int:
     il.add_argument("--all", metavar="FILE", help="with --share: also write every package, snap and image to FILE (private, 0600; never printed)")
     lg = sub.add_parser("log"); lg.add_argument("-n", type=int, default=20, help="last N lines (default 20)")
     a = p.parse_args()
+    global RUN_COMMAND
+    RUN_COMMAND = a.c or "scan"
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # a stopped run still cleans up (atexit); only SIGKILL cannot, and the next run sweeps what it left
     if getattr(a, "deep", False):
         os.environ["LATTICE_SCAN_LEVEL"] = "deep"
@@ -3410,6 +3473,23 @@ def main() -> int:
             print(f"{f['ref']:<18} {f['status']:<15} listed {f.get('listed','-')} found {f.get('found','-')} closed {f.get('closed','-')}  {f.get('title','')[:50]}")
         return 0
     return structured(a, cmd_run)
+
+
+RUN_COMMAND = "scan"
+
+
+def main() -> int:
+    """Run the command, then (if it read anything and the person has not turned it off) report that a scan ran. See report_body for the whole content."""
+    rc = 2
+    try:
+        rc = _main()
+        return rc
+    except SystemExit as e:
+        rc = e.code if isinstance(e.code, int) else (0 if e.code is None else 2)
+        raise
+    finally:
+        if LOOKUPS > 0:
+            report_run(RUN_COMMAND, rc)
 
 
 if __name__ == "__main__":

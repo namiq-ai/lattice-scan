@@ -259,7 +259,9 @@ Command line arguments are never recorded (they carry passwords). Programs in co
 ## What leaves the machine
 
 CVE ids, and the key if you set one. `posture` sends nothing at all, unless you add `--attack`: then the signal codes it found (fixed labels such as `ssh.password-auth`) are shown, confirmed and sent one at a time. `--discover --all` shows the items it will send (a product, a version, the package ecosystem and the OS family and number), asks, and sends them one at a time; never a host name, address, port or path. The inventory (hardware, package names and versions, and what is inside images) is not sent as a list; matching happens locally, except for the items you confirm with `--discover --all`.
-`recent` also downloads namiq.io's public list of recent CVE ids; that request carries no id and nothing about the host. `get-key` sends the name, position, company, email and purpose you give it, only after `--accept-terms`.
+`recent` also downloads namiq.io's public list of recent CVE ids; that request carries no id and nothing about the host.
+
+**One report per run.** When a run has read from Lattice or from the recent list, the tool tells namiq.io once that a scan ran, so we can count scans (downloads cannot tell us). The whole of it is three fields: the command (such as `recent`), how it ended (`ok`, `matched`, `stopped` or `failed`) and how many reads it made, as a band (`0`, `1-5`, `6-20`, `21-100`, `100+`). Never a host name, package, CVE id, path, address or key. The first run prints a note saying so. Turn it off with `LATTICE_SCAN_NO_REPORT=1` or `DO_NOT_TRACK=1`; it is also off whenever `LATTICE_URL` or the feed address points anywhere but namiq.io, and it never changes the exit code or waits more than 3 seconds. `get-key` sends the name, position, company, email and purpose you give it, only after `--accept-terms`.
 
 ## What it writes
 
