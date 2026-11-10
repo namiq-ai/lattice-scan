@@ -257,6 +257,20 @@ class AgentEntry(EntryBase):
         self.assertEqual(rc, 3)
         self.assertIn("stopped:", err); self.assertIn("not read", out); self.assertIn("get-key", out)
 
+    def test_enrich_with_the_network_down_blames_the_network_not_the_allowance(self):
+        cli.URL = "http://127.0.0.1:9/mcp"   # nothing listens on the discard port: connection refused
+        rc, out, err = self.run_cli("enrich", "--cve", "CVE-2099-0001")
+        self.assertEqual(rc, 3)
+        self.assertIn("could not be reached", out)
+        self.assertNotIn("allowance", out); self.assertNotIn("get-key", out)
+        self.assertIn("stopped:", err); self.assertIn("cannot reach Lattice", err)
+
+    def test_enrich_at_the_quota_still_names_the_allowance(self):
+        Stub.mode = "quota"
+        rc, out, _ = self.run_cli("enrich", "--cve", "CVE-2099-0001,CVE-2099-0002")
+        self.assertEqual(rc, 3)
+        self.assertIn("allowance", out); self.assertNotIn("could not be reached", out)
+
     def test_enrich_caps_a_keyless_run(self):
         ids = ",".join(f"CVE-2099-{n:04d}" for n in range(1, 26))
         _, out, _ = self.run_cli("enrich", "--cve", ids, "--max-read", "2")
