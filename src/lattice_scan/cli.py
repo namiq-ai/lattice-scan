@@ -2663,13 +2663,14 @@ def cmd_project(a) -> int:
 CVE_ID = re.compile(r"\bCVE-\d{4}-\d{4,}\b", re.I)
 
 
-def fetch_json(url: str, what: str, limit: int = 1024 * 1024) -> dict:
-    """GET a small JSON document: https only (http only for this machine), no redirect, size-capped, the same three tries as a Lattice request."""
+def http_get_bytes(url: str, what: str, limit: int = 1024 * 1024, accept: str = "application/json", mark: bool = True) -> bytes:
+    """GET a small document: https only (http only for this machine), no redirect, size-capped, the same three tries as a Lattice request.
+    mark=False: a failure does not mark the network as down for the rest of the run (used for the optional signature files after the list itself was read)."""
     from urllib.parse import urlparse
     u = urlparse(url)
     if not (u.scheme == "https" or (u.scheme == "http" and u.hostname in ("127.0.0.1", "localhost", "::1"))):
         raise LatticeError(f"refusing {what}: {url} is not https")
-    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": user_agent()})
+    req = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": user_agent()})
     net_guard()
     for attempt in range(len(RETRY_DELAYS) + 1):
         try:
@@ -2677,28 +2678,50 @@ def fetch_json(url: str, what: str, limit: int = 1024 * 1024) -> dict:
                 raw = r.read(limit + 1)
             if len(raw) > limit:
                 raise LatticeError(f"{what} is larger than {limit // 1024} KB: refusing it")
-            try:
-                data = json.loads(raw.decode("utf-8", "replace"))
-            except ValueError:
-                raise LatticeError(f"{what} at {url} is not JSON")
-            if not isinstance(data, dict):
-                raise LatticeError(f"{what} at {url} is not a JSON object")
-            return data
+            return raw
         except urllib.error.HTTPError as e:
+            e.close()   # an HTTPError holds the open response; close it here (a run with -W error::ResourceWarning fails otherwise)
             if e.code in (502, 503, 504) and attempt < len(RETRY_DELAYS):
                 Lattice._wait_to_retry(attempt, f"HTTP {e.code}")
                 continue
             raise LatticeError(f"{what}: HTTP {e.code} from {url}")
         except (urllib.error.URLError, OSError) as e:
             if network_is_down(e):
-                mark_down()
+                if mark:
+                    mark_down()
                 raise LatticeUnreachable(f"cannot read {what} at {url}: {e}")
             if attempt < len(RETRY_DELAYS):
                 Lattice._wait_to_retry(attempt, str(e))
                 continue
-            mark_down()
+            if mark:
+                mark_down()
             raise LatticeUnreachable(f"cannot read {what} at {url} after {attempt + 1} tries: {e}")
     raise LatticeError(f"cannot read {what}")
+
+
+def parse_json_object(raw: bytes, what: str, url: str) -> dict:
+    try:
+        data = json.loads(raw.decode("utf-8", "replace"))
+    except ValueError:
+        raise LatticeError(f"{what} at {url} is not JSON")
+    if not isinstance(data, dict):
+        raise LatticeError(f"{what} at {url} is not a JSON object")
+    return data
+
+
+def fetch_json(url: str, what: str, limit: int = 1024 * 1024) -> dict:
+    """GET a small JSON document (see http_get_bytes)."""
+    return parse_json_object(http_get_bytes(url, what, limit), what, url)
+
+
+def fetch_optional(url: str, what: str) -> bytes | None:
+    """A signature file: its bytes, or None when namiq.io has none (HTTP 404). Any other failure raises; it never marks the network down."""
+    try:
+        return http_get_bytes(url, what, limit=4096, accept="*/*", mark=False)
+    except LatticeError as e:
+        if "HTTP 404" in str(e):
+            return None
+        raise
 
 
 WINDOW_TO_PERIOD = {"daily": "daily", "weekly": "weekly", "monthly": "all", "open": "open"}   # the feed's own name for the thirty-day list is "all"
@@ -2709,10 +2732,31 @@ def feed_cache_path() -> Path:
     return p.with_name("feed-" + p.name)
 
 
+def check_feed_signature(raw: bytes) -> "feedsig.Result":
+    """Fetch recent.json.sig and recent.json.cert (two small static files, the same host) and judge the list that was just read. A failed check is repeated once with
+    fresh copies of all three files, because a cache may briefly hold a new list with an old signature."""
+    from lattice_scan import feedsig
+    for attempt in (1, 2):
+        try:
+            sig = fetch_optional(FEED_URL + ".sig", "the signature of the recent-CVE list")
+            cert = fetch_optional(FEED_URL + ".cert", "the certificate of the recent-CVE list")
+        except Exception as e:  # noqa: BLE001 - cannot be asked now: the list stays usable, labelled
+            return feedsig.Result("unsigned", f"the signature could not be fetched ({clean(str(e))[:80]})")
+        r = feedsig.check(raw, sig, cert)
+        if r.status != "refused" or attempt == 2:
+            return r
+        try:
+            raw = http_get_bytes(FEED_URL, "the recent-CVE list", mark=False)
+        except Exception:  # noqa: BLE001
+            return r
+    return r  # pragma: no cover
+
+
 def read_feed(period: str = "weekly") -> dict:
-    """The recent list from namiq.io; when the network is down, the copy saved by the last successful read, at any age (the first line of the output says how old)."""
+    """The recent list from namiq.io, with its signature checked; when the network is down, the copy saved by the last successful read, at any age (the first line of the output says how old).
+    A list whose signature or certificate is offered and wrong is not used."""
     try:
-        d = fetch_json(FEED_URL, "the recent-CVE list")
+        raw = http_get_bytes(FEED_URL, "the recent-CVE list")
     except LatticeUnreachable as err:
         try:
             saved = json.loads(feed_cache_path().read_text())
@@ -2722,9 +2766,17 @@ def read_feed(period: str = "weekly") -> dict:
         out = parse_feed(d, period)   # a saved copy is checked exactly as a fresh one
         saved_note("recent-CVE list", at)
         return out
+    d = parse_json_object(raw, "the recent-CVE list", FEED_URL)
+    sigr = check_feed_signature(raw)
+    if sigr.status == "refused":
+        raise LatticeError(f"the recent-CVE list failed its signature check: {sigr.reason}. It was not used. Try again later; if it keeps failing, tell contact@namiq.io.")
+    if sigr.status == "verified":
+        progress(f"[feed] signature verified (certificate serial {sigr.serial}, valid to {sigr.not_after[:10]})")
+    else:
+        progress(f"[feed] not signed: {sigr.reason}. The list is read as before and is not verified.")
     out = parse_feed(d, period)       # a list this tool cannot read is never saved
     try:
-        write_cache_file(feed_cache_path(), json.dumps({"v": 1, "at": time.time(), "feed": d}))
+        write_cache_file(feed_cache_path(), json.dumps({"v": 1, "at": time.time(), "feed": d, "sig": sigr.status}))
     except OSError:
         pass
     return out
