@@ -30,7 +30,7 @@ without a key it reads at most 20 ids from Lattice per run (--max-read; 200 with
 prints its message; a person decides about any link in it, the script never opens one.
 
 Env: LATTICE_URL (default https://lattice.namiq.io/mcp), LATTICE_API_KEY, LATTICE_SCAN_DIR (a folder this user can write; set it for an agent in a sandbox), LATTICE_SCAN_KEEP=1, LATTICE_SCAN_INVENTORY (tests: fixed inventory JSON),
-LATTICE_SCAN_TODAY (YYYY-MM-DD), LATTICE_SCAN_WINDOW (days back; default 6 = seven days counting today).
+LATTICE_SCAN_TODAY (YYYY-MM-DD), LATTICE_SCAN_TEST=1 (our own test runs: the user agent reads `lattice-scan/<version> (test)` so the server's counts leave them out), LATTICE_SCAN_WINDOW (days back; default 6 = seven days counting today).
 """
 from __future__ import annotations
 import argparse, atexit, datetime as dt, hashlib, json, os, re, shutil, signal, statistics, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request
@@ -50,6 +50,12 @@ def records_dir() -> Path:
         return Path(env("DIR"))
     new, old = Path.home() / ".lattice-scan", Path.home() / ".host-scan"
     return old if old.exists() and not new.exists() else new  # records written before the rename stay where they are
+
+
+def user_agent() -> str:
+    """`lattice-scan/<version>`, and ` (test)` after it when LATTICE_SCAN_TEST=1. The server's counts of who uses the tool cannot tell our own runs from a stranger's,
+    and our test loops (hundreds of calls a day, often of a build not yet released) swamp the figures. The mark is the one thing added: no host, user or path."""
+    return f"lattice-scan/{__version__}" + (" (test)" if os.environ.get("LATTICE_SCAN_TEST", "").strip().lower() in ("1", "true", "yes") else "")
 
 
 URL = os.environ.get("LATTICE_URL", "https://lattice.namiq.io/mcp")
@@ -416,7 +422,7 @@ class Lattice:
         time.sleep(delay)
 
     def _post(self, body: dict) -> dict | None:
-        h = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "User-Agent": f"lattice-scan/{__version__}"}
+        h = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "User-Agent": user_agent()}
         if KEY:
             h["X-API-Key"] = KEY
         if self.session:
@@ -2421,7 +2427,7 @@ def fetch_json(url: str, what: str, limit: int = 1024 * 1024) -> dict:
     u = urlparse(url)
     if not (u.scheme == "https" or (u.scheme == "http" and u.hostname in ("127.0.0.1", "localhost", "::1"))):
         raise LatticeError(f"refusing {what}: {url} is not https")
-    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": f"lattice-scan/{__version__}"})
+    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": user_agent()})
     for attempt in range(len(RETRY_DELAYS) + 1):
         try:
             with _OPENER.open(req, timeout=30) as r:
@@ -3037,7 +3043,7 @@ def cmd_get_key(a) -> int:
         version = terms_version()
         body = {"terms": {"version": version, "accepted": True}, "agent": {"name": "lattice-scan", "version": __version__},
                 "principal": {"name": a.name, "position": a.position, "company": a.company, "email": a.email}, "purpose": a.purpose, "consent": True}
-        req = urllib.request.Request(KEY_API, json.dumps(body).encode(), {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": f"lattice-scan/{__version__}"})
+        req = urllib.request.Request(KEY_API, json.dumps(body).encode(), {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": user_agent()})
         try:
             with _OPENER.open(req, timeout=30) as r:
                 status, raw = r.status, r.read(MAX_REPLY).decode(errors="replace")
