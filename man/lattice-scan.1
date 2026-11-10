@@ -124,7 +124,7 @@ Print, on standard error, what is being checked: each part of the host collected
 Print no progress.
 .TP
 .B \-\-offline
-Make no connection at all. Answers come from what an earlier run saved (the recent list and each CVE answer, at any age); the first line of the output says \fBOFFLINE:\fR and how old the data is, and warns past 30 days. A saved "not listed" is printed as "not listed as of DATE, not rechecked" and is never the same as clear. An id with no saved answer is listed as not read (exit 3). No run report is sent. The same happens, after one failed attempt, whenever Lattice or namiq.io cannot be reached.
+Make no connection at all. Answers come from what an earlier run saved (the recent list and each CVE answer, at any age); the first line of the output says \fBOFFLINE:\fR and how old the data is, and warns past 30 days. A saved "not listed" is printed as "not listed as of DATE, not rechecked" and is never the same as clear. An id with no saved answer is listed as not read (exit 3). The "a scan ran" note is kept in a small file in the cache folder (50 notes at most, 30 days at most) and sent with the next online run. The same happens, after one failed attempt, whenever Lattice or namiq.io cannot be reached.
 .TP
 .B \-\-keep
 Keep this run's records in the default folder even when there is no terminal. Without it, a run with no terminal on standard input or error (an agent, a cron job) and no records folder yet writes its records to a temporary folder that is deleted when the run ends, so nothing is left in the home folder. A folder that already exists is used as before, and so is any folder named by
@@ -472,7 +472,7 @@ Pretend today is this YYYY\-MM\-DD (tests, reproducing a report).
 Set to 1 by our own test runs: the user agent reads \fBlattice\-scan/\fR\fIversion\fR \fB(test)\fR so the website's counts leave them out.
 .TP
 .B LATTICE_SCAN_NO_REPORT
-Set to 1 to send nothing when a run ends. By default a run that read from Lattice reports that a scan ran: the command, how it ended and a band for the number of reads, never a host, package, CVE id, path, address or key. \fBDO_NOT_TRACK\fR=1 does the same. It is always off when \fBLATTICE_URL\fR or the feed address is not namiq.io.
+Set to 1 to send nothing when a run ends and to keep nothing for later. By default a run that read from Lattice reports that a scan ran (kept in a small local file and sent with the next online run when namiq.io cannot be reached): the command, how it ended and a band for the number of reads, never a host, package, CVE id, path, address or key. It is always off when \fBLATTICE_URL\fR or the feed address is not namiq.io.
 .TP
 .B LATTICE_SCAN_RUN_URL
 Where the run report goes (tests). Any value other than the default switches the report off.

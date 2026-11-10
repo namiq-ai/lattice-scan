@@ -8,7 +8,7 @@ CANDIDATE when a product word in the entry matches an installed package, snap, c
 host: a person reads the affected range against the installed version, then records the outcome with `resolve`.
 
 What leaves the machine: CVE ids, and the key if you have one. The inventory (package names, versions) is never sent; matching happens here.
-After a run that read anything it also reports that a scan ran: the command, how it ended and a band for the number of reads, never a host, package, CVE id or path. Off: LATTICE_SCAN_NO_REPORT=1 or DO_NOT_TRACK=1 (README, 'What leaves the machine').
+After a run that read anything it also reports that a scan ran: the command, how it ended and a band for the number of reads, never a host, package, CVE id or path. Off: LATTICE_SCAN_NO_REPORT=1 (README, 'What leaves the machine').
 Records live in ~/.lattice-scan (or LATTICE_SCAN_DIR), mode 0700, because they name the host's packages. Never commit or publish them.
 
   lattice-scan --cve CVE-2026-1234 --cve-file ids.txt   check these ids (works keyless; ~1 lookup per id)
@@ -475,9 +475,9 @@ RUN_URL = env("RUN_URL", "https://namiq.io/lattice/run")
 
 
 def report_enabled() -> bool:
-    """Whether this run may say, once, that a scan ran. Off for: LATTICE_SCAN_NO_REPORT=1, DO_NOT_TRACK=1, a Lattice or feed address other than the
+    """Whether this run may say, once, that a scan ran. Off for: LATTICE_SCAN_NO_REPORT=1, a Lattice or feed address other than the
     public ones (a self-hosted server must never hear from us), and any run under a test runner."""
-    if OFFLINE or env("NO_REPORT") == "1" or os.environ.get("DO_NOT_TRACK", "") not in ("", "0"):
+    if env("NO_REPORT") == "1":
         return False
     if URL != "https://lattice.namiq.io/mcp" or FEED_URL != "https://namiq.io/lattice/recent.json" or RUN_URL != "https://namiq.io/lattice/run":
         return False
@@ -498,16 +498,89 @@ def report_body(command: str, rc: int) -> dict:
 REPORT_COMMANDS = ("scan", "recent", "project", "posture", "enrich", "all", "inventory", "get-key")
 
 
+QUEUE_MAX = 50           # events kept while namiq.io cannot be reached; the oldest is dropped first
+QUEUE_DAYS = 30          # an event older than this is dropped, not sent
+QUEUE_SEND_MAX = 10      # events sent late in one run, so a long gap never makes a run slow
+
+
+def report_queue_path() -> Path:
+    return cache_dir() / "run-report-queue.jsonl"
+
+
+def queue_load() -> list[dict]:
+    """The events waiting to be sent: only the four known fields, only well-formed rows, none older than QUEUE_DAYS."""
+    out: list[dict] = []
+    try:
+        lines = report_queue_path().read_text().splitlines()
+    except OSError:
+        return out
+    limit = (dt.date.today() - dt.timedelta(days=QUEUE_DAYS)).isoformat()
+    for line in lines:
+        try:
+            row = json.loads(line)
+            ev = {k: str(row[k]) for k in ("command", "result", "lookups", "day")}
+        except (ValueError, KeyError, TypeError):
+            continue
+        if ev["command"] in REPORT_COMMANDS + ("other",) and ev["day"] >= limit and ev["result"] in ("ok", "matched", "stopped", "failed") \
+                and ev["lookups"] in ("0", "1-5", "6-20", "21-100", "100+"):
+            out.append(ev)
+    return out[-QUEUE_MAX:]
+
+
+def queue_save(events: list[dict]) -> None:
+    f = report_queue_path()
+    try:
+        if not events:
+            f.unlink(missing_ok=True)
+            return
+        f.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        tmp = f.with_name(f"{f.name}.{os.getpid()}")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as h:
+            h.write("".join(json.dumps(e) + "\n" for e in events[-QUEUE_MAX:]))
+        os.replace(tmp, f)
+    except OSError:
+        pass
+
+
+def post_report(body: dict, timeout: float) -> bool:
+    req = urllib.request.Request(RUN_URL, json.dumps(body).encode(), {"Content-Type": "application/json", "User-Agent": user_agent()}, method="POST")
+    with urllib.request.build_opener(_NoRedirect).open(req, timeout=timeout) as r:
+        return 200 <= r.status < 300
+
+
 def report_run(command: str, rc: int, timeout: float = 3.0) -> bool:
-    """Say that a scan ran. Best effort: it never changes the exit code, waits at most `timeout` seconds, follows no redirect, and is silent on any failure."""
+    """Say that a scan ran, with store-and-forward: when namiq.io cannot be reached, or the run is --offline, the note is kept in a small local file
+    (50 events at most, 30 days at most, only the same three fields and the UTC day) and sent with the next run that is online, oldest first.
+    Best effort: it never changes the exit code, waits at most `timeout` seconds in all, follows no redirect, and is silent on any failure."""
     if not report_enabled():
         return False
     try:
         note_report_once()
-        req = urllib.request.Request(RUN_URL, json.dumps(report_body(command, rc)).encode(), {"Content-Type": "application/json", "User-Agent": user_agent()}, method="POST")
-        opener = urllib.request.build_opener(_NoRedirect)
-        with opener.open(req, timeout=timeout) as r:
-            return 200 <= r.status < 300
+        event = {**report_body(command, rc), "day": dt.datetime.now(dt.timezone.utc).date().isoformat()}
+        pending = queue_load()
+        if OFFLINE or NET_DOWN:
+            queue_save(pending + [event])
+            return False
+        deadline = time.monotonic() + timeout
+        sent = False
+        todo = pending + [event]
+        for i, ev in enumerate(todo[:QUEUE_SEND_MAX + 1]):
+            left = deadline - time.monotonic()
+            if left <= 0.2:
+                break
+            body = {k: ev[k] for k in ("command", "result", "lookups")}
+            if ev is not event and ev["day"] != event["day"]:
+                body["day"] = ev["day"]    # a late note says on which day the scan ran; a note sent the same day says nothing extra
+            try:
+                if not post_report(body, left):
+                    break
+            except Exception:  # noqa: BLE001 - unreachable or slow: keep this note and the rest for the next run
+                break
+            sent = ev is event or sent
+            todo[i] = None  # type: ignore[call-overload]
+        queue_save([e for e in todo if e is not None])
+        return sent
     except Exception:  # noqa: BLE001 - a report must never break a scan
         return False
 
@@ -519,7 +592,7 @@ def note_report_once() -> None:
         if marker.exists():
             return
         progress("[report] after a scan, lattice-scan tells namiq.io that a scan ran: the command, how it ended and how many reads it made, in a band (for example 6-20). "
-                 "Never a host name, package, CVE id, path or address. To stop it: LATTICE_SCAN_NO_REPORT=1 or DO_NOT_TRACK=1. Details: README, 'What leaves the machine'.")
+                 "Never a host name, package, CVE id, path or address. Offline, the note waits in a small local file and is sent with the next online run. To stop it: LATTICE_SCAN_NO_REPORT=1. Details: README, 'What leaves the machine'.")
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.touch()
     except OSError:
@@ -3640,7 +3713,7 @@ def main() -> int:
         rc = e.code if isinstance(e.code, int) else (0 if e.code is None else 2)
         raise
     finally:
-        if LOOKUPS > 0:
+        if LOOKUPS > 0 or SAVED_USED:
             report_run(RUN_COMMAND, rc)
 
 

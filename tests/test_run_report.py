@@ -36,7 +36,7 @@ class RunReport(unittest.TestCase):
 
     def setUp(self):
         GOT.clear()
-        self.env = mock.patch.dict(os.environ, {"LATTICE_SCAN_NO_REPORT": "", "DO_NOT_TRACK": "", "LATTICE_SCAN_TEST": ""})
+        self.env = mock.patch.dict(os.environ, {"LATTICE_SCAN_NO_REPORT": "", "LATTICE_SCAN_TEST": ""})
         self.env.start()
         self.on = mock.patch.object(cli, "report_enabled", return_value=True)
         self.url_patch = mock.patch.object(cli, "RUN_URL", self.url)
@@ -80,24 +80,23 @@ class RunReport(unittest.TestCase):
 class SwitchedOff(unittest.TestCase):
     def check(self, env: dict, **patch):
         patch = patch or {"LOOKUPS": cli.LOOKUPS}   # patch.multiple needs at least one name
-        merged = {"LATTICE_SCAN_NO_REPORT": "", "DO_NOT_TRACK": "", "LATTICE_SCAN_REPORT_FORCE": "1", **env}
+        merged = {"LATTICE_SCAN_NO_REPORT": "", "LATTICE_SCAN_REPORT_FORCE": "1", **env}
         with mock.patch.dict(os.environ, merged), mock.patch.multiple(cli, **patch):
             return cli.report_enabled()
 
     def test_on_by_default_when_nothing_says_otherwise(self):
         self.assertTrue(self.check({}))
 
-    def test_off_by_the_tools_own_switch_and_by_do_not_track(self):
+    def test_off_by_the_tools_own_switch_only(self):
         self.assertFalse(self.check({"LATTICE_SCAN_NO_REPORT": "1"}))
-        self.assertFalse(self.check({"DO_NOT_TRACK": "1"}))
-        self.assertTrue(self.check({"DO_NOT_TRACK": "0"}))
+        self.assertTrue(self.check({"DO_NOT_TRACK": "1"}))   # not read: the tool has its own switch
 
     def test_off_for_a_self_hosted_lattice_or_feed(self):
         self.assertFalse(self.check({}, URL="https://lattice.corp.example.test/mcp"))
         self.assertFalse(self.check({}, FEED_URL="https://feeds.corp.example.test/recent.json"))
 
     def test_off_under_a_test_runner_unless_forced(self):
-        with mock.patch.dict(os.environ, {"LATTICE_SCAN_NO_REPORT": "", "DO_NOT_TRACK": "", "LATTICE_SCAN_REPORT_FORCE": ""}):
+        with mock.patch.dict(os.environ, {"LATTICE_SCAN_NO_REPORT": "", "LATTICE_SCAN_REPORT_FORCE": ""}):
             self.assertFalse(cli.report_enabled())          # unittest is imported here
 
 

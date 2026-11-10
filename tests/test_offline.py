@@ -102,15 +102,6 @@ class Offline(EntryBase):
         self.assertEqual(rc, 0)
         self.assertIn("WARNING", out); self.assertIn("40 day(s) old", out)
 
-    def test_the_run_report_is_never_sent_offline(self):
-        env = {"LATTICE_SCAN_REPORT_FORCE": "1"}
-        with mock.patch.dict(os.environ, env), mock.patch.object(cli, "URL", "https://lattice.namiq.io/mcp"), \
-                mock.patch.object(cli, "FEED_URL", "https://namiq.io/lattice/recent.json"), mock.patch.object(cli, "RUN_URL", "https://namiq.io/lattice/run"):
-            with mock.patch.object(cli, "OFFLINE", False):
-                self.assertTrue(cli.report_enabled())
-            with mock.patch.object(cli, "OFFLINE", True):
-                self.assertFalse(cli.report_enabled())
-
 
 if __name__ == "__main__":
     unittest.main()

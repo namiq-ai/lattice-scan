@@ -2,10 +2,11 @@
 
 ## Unreleased
 
+- Changed: the `DO_NOT_TRACK` environment variable is no longer read. The only switches for the one-per-run "a scan ran" note are `LATTICE_SCAN_NO_REPORT=1` and `--offline` (or `LATTICE_SCAN_OFFLINE=1`). The note holds the command, how it ended and a band for the number of reads, nothing else.
 - New: the tool no longer stops when the network is down. A refused or unreachable connection is tried once, not once per id and not with repeated waits. `recent`, `enrich` and the host scan then answer from what an earlier run saved (the recent list is now saved too; each CVE answer is kept as before but is used at any age when the network is down). The first line says `OFFLINE:` and how old the data is, and warns past 30 days; a saved "not listed" reads `not listed as of DATE, not rechecked`, never clear; an id with no saved answer is listed as not read (exit 3 only for those).
-- New: `--offline` (or `LATTICE_SCAN_OFFLINE=1`) makes no connection at all and sends no run report.
+- New: `--offline` (or `LATTICE_SCAN_OFFLINE=1`) makes no connection at all. The one-per-run "a scan ran" note is kept in a small local file while the network is unreachable or `--offline` is used (50 at most, 30 days at most; the same three fields and the UTC day) and sent, oldest first, with the next online run.
 - Fixed: when Lattice cannot be reached (no network, connection refused, timeout), `enrich` now says so and tells the user to check the network. It used to say the keyless allowance was used up and suggest asking for a key. The exit code (3 when an id is unread) is unchanged.
-- New: after a run that read from Lattice or the recent list, the tool reports to namiq.io that a scan ran: the command, how it ended and a band for the number of reads (`6-20`), never a host, package, CVE id, path, address or key. The first run says so. Off with `LATTICE_SCAN_NO_REPORT=1` or `DO_NOT_TRACK=1`, and always off for a self-hosted Lattice or feed address. It waits at most 3 seconds and never changes the exit code.
+- New: after a run that read from Lattice or the recent list, the tool reports to namiq.io that a scan ran: the command, how it ended and a band for the number of reads (`6-20`), never a host, package, CVE id, path, address or key. The first run says so. Off with `LATTICE_SCAN_NO_REPORT=1`, and always off for a self-hosted Lattice or feed address. It waits at most 3 seconds and never changes the exit code.
 - New: `LATTICE_SCAN_TEST=1` makes the tool send `lattice-scan/<version> (test)` as its user agent, so the website's counts can leave our own test runs out. Nothing else is added to a request: no host, user or path. Without the variable nothing changes.
 
 ## 0.7.0 — 2026-11-09
