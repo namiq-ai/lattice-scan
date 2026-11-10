@@ -35,7 +35,7 @@ class Queue(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        cls.srv.shutdown()
+        cls.srv.shutdown(); cls.srv.server_close()
 
     def setUp(self):
         GOT.clear()
