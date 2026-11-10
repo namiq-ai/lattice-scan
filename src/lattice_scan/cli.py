@@ -131,8 +131,7 @@ class LatticeUnreachable(LatticeError):
     """The network failed (no route, refused, timed out), as opposed to the server answering with a refusal or a limit."""
 
 
-# No network (or --offline): the run goes on with the answers it saved on an earlier run, says so, and never reads a saved "not listed" as "clear".
-OFFLINE = False                    # --offline / LATTICE_SCAN_OFFLINE=1: no connection is made at all
+# No network: the run goes on with the answers it saved on an earlier run, says so, and never reads a saved "not listed" as "clear".
 NET_DOWN = False                   # set by the first network failure of a run: nothing else is tried (no repeated waits)
 SAVED_USED: dict[str, float] = {}  # what this run answered from saved data -> when the oldest of it was fetched
 BANNER_SHOWN = False
@@ -140,8 +139,6 @@ SAVED_WARN_DAYS = 30
 
 
 def net_guard() -> None:
-    if OFFLINE:
-        raise LatticeUnreachable("offline mode: no connection is made")
     if NET_DOWN:
         raise LatticeUnreachable("the network failed earlier in this run, so it is not tried again")
 
@@ -550,7 +547,7 @@ def post_report(body: dict, timeout: float) -> bool:
 
 
 def report_run(command: str, rc: int, timeout: float = 3.0) -> bool:
-    """Say that a scan ran, with store-and-forward: when namiq.io cannot be reached, or the run is --offline, the note is kept in a small local file
+    """Say that a scan ran, with store-and-forward: when namiq.io cannot be reached, the note is kept in a small local file
     (50 events at most, 30 days at most, only the same three fields and the UTC day) and sent with the next run that is online, oldest first.
     Best effort: it never changes the exit code, waits at most `timeout` seconds in all, follows no redirect, and is silent on any failure."""
     if not report_enabled():
@@ -559,7 +556,7 @@ def report_run(command: str, rc: int, timeout: float = 3.0) -> bool:
         note_report_once()
         event = {**report_body(command, rc), "day": dt.datetime.now(dt.timezone.utc).date().isoformat()}
         pending = queue_load()
-        if OFFLINE or NET_DOWN:
+        if NET_DOWN:
             queue_save(pending + [event])
             return False
         deadline = time.monotonic() + timeout
@@ -733,8 +730,6 @@ class Lattice:
                 read_cache_put("graph_lookup", {"id": r["id"]}, ans)
 
     def call(self, tool: str, **args) -> dict:
-        if OFFLINE:   # no connection at all: even a fresh saved answer is labelled as saved
-            return self._saved_or_raise(tool, args)
         if tool == "graph_lookup" and args.get("id") and self.batch_ok and self.server_new and len(self.pending) > 1 and not self.down:
             cid = str(args["id"]).upper()
             if cid not in self.prefetched and cid in self.pending and read_cache_get(tool, args) is None:
@@ -751,7 +746,7 @@ class Lattice:
             self.cached += 1
             dbg(f"cache: {tool} {args} answered from the read cache")
             return json.loads(json.dumps(hit))
-        if self.down or OFFLINE or NET_DOWN:
+        if self.down or NET_DOWN:
             return self._saved_or_raise(tool, args)
         # Keyless access allows a few calls a minute (the server says how many), counted across every run on this machine: space them out instead of burning the day's units on 429s.
         if not KEY:
@@ -3603,7 +3598,6 @@ def _main() -> int:
     p.add_argument("--also", action="append", metavar="PACKAGE", help="with --discover --all: also send this installed package (repeatable)")
     p.add_argument("--max-items", type=int, default=None, help="with --discover --all: most items to send (default 25 without a key, 200 with one)")
     p.add_argument("--max-read", type=int, default=None, help="with --discover: most ids to read from Lattice per run (default 20 without a key, 200 with one)")
-    p.add_argument("--offline", action="store_true", default=argparse.SUPPRESS, help="make no connection at all: answer from what an earlier run saved, say how old it is, and list what has no saved answer (also LATTICE_SCAN_OFFLINE=1)")
     p.add_argument("--debug", action="store_true", help="detailed execution log to stderr and debug.log (also LATTICE_SCAN_DEBUG=1)")
     p.add_argument("--keep", action="store_true", help="keep this run's records in the default folder even with no terminal (also LATTICE_SCAN_KEEP=1); without it a terminal-less run with no folder yet uses a temporary one")
     p.add_argument("--inventory", action="store_true", help="with --refresh: only collect and show the inventory, no scan and no network call")
@@ -3627,7 +3621,6 @@ def _main() -> int:
     pj.add_argument("paths", nargs="*", default=["."], help="project folders (default: the current folder)")
     pj.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each file and CVE as it is checked, on stderr (the default; see --quiet)")
     pj.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
-    pj.add_argument("--offline", action="store_true", default=argparse.SUPPRESS, help="make no connection; answer from what an earlier run saved (also LATTICE_SCAN_OFFLINE=1)")
     pj.add_argument("--cve", action="append", help="CVE ids, comma separated (CVE-A,CVE-B); repeatable"); pj.add_argument("--cve-file", help="file of ids, one or several per line, # comments")
     pj.add_argument("--kev-catalogue", help="CISA's known_exploited_vulnerabilities.json; chooses which ids to read. Needs a key whose email is confirmed. Nothing from the file is sent")
     pj.add_argument("--discover", action="store_true", help="no CVE ids needed, no key needed: read namiq.io's list of recent exploited CVEs, keep those whose product a dependency here matches, and read only those from Lattice (default window: monthly)")
@@ -3653,7 +3646,6 @@ def _main() -> int:
     po.add_argument("--json", metavar="FILE", help="also write the full result as JSON to FILE (mode 0600; it names this host's processes: do not share it)")
     po.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each step on stderr (the default)")
     po.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
-    po.add_argument("--offline", action="store_true", default=argparse.SUPPRESS, help="make no connection; answer from what an earlier run saved (also LATTICE_SCAN_OFFLINE=1)")
     rc = sub.add_parser("recent", help="start here with no CVE id: read namiq.io's recent exploited and critical CVEs, check what this host could have, read only those from Lattice")
     rc.add_argument("--period", choices=["all", "daily", "weekly", "open"], default="all", help="all: everything in the list, the weekly and the open parts (default); daily: added or published in the last day or two; weekly: the last seven days, which includes daily; open: exploited CVEs added before the weekly window but within 30 days, overdue first (overdue means CISA's due date has passed; it says nothing about any machine)")
     rc.add_argument("--open", dest="period", action="store_const", const="open", help="same as --period open")
@@ -3669,7 +3661,6 @@ def _main() -> int:
     rc.add_argument("--no-critical", action="store_true", help="leave out the critical (not known exploited) ids")
     rc.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each step on stderr (the default)")
     rc.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
-    rc.add_argument("--offline", action="store_true", default=argparse.SUPPRESS, help="make no connection; answer from what an earlier run saved (also LATTICE_SCAN_OFFLINE=1)")
     en = sub.add_parser("enrich", help="CVE ids you already have (audit, advisory, ticket): exploited? ransomware? patch due? No comparison with this host")
     en.add_argument("--cve", action="append", help="CVE ids or any text containing them (repeatable)")
     en.add_argument("--file", action="append", help="a file to find CVE ids in; - or a pipe on stdin works too")
@@ -3679,7 +3670,6 @@ def _main() -> int:
     en.add_argument("--fail-on", choices=["never", "exploited"], default="never", help="exit 1 when any id is exploited (default never)")
     en.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each step on stderr (the default)")
     en.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
-    en.add_argument("--offline", action="store_true", default=argparse.SUPPRESS, help="make no connection; answer from what an earlier run saved (also LATTICE_SCAN_OFFLINE=1)")
     gk = sub.add_parser("get-key", help="request a Lattice key for a real person who has read the terms and gave these details; the key is stored, never printed")
     for flag in ("name", "position", "company", "email", "purpose"):
         gk.add_argument(f"--{flag}", required=True, help=f"the person's {flag}" if flag != "purpose" else "what the key will be used for, one or two sentences (at least 20 characters)")
@@ -3704,8 +3694,8 @@ def _main() -> int:
         os.environ["LATTICE_SCAN_READ_CACHE"] = "off"   # ... and asks Lattice again
     if getattr(a, "again", False):
         os.environ["LATTICE_SCAN_READ_CACHE"] = "off"   # --again reads the id again, from Lattice
-    global DEBUG, PROGRESS, KEEP, OFFLINE, NET_DOWN, BANNER_SHOWN
-    OFFLINE, NET_DOWN, BANNER_SHOWN = bool(getattr(a, "offline", False)) or env("OFFLINE") == "1", False, False
+    global DEBUG, PROGRESS, KEEP, NET_DOWN, BANNER_SHOWN
+    NET_DOWN, BANNER_SHOWN = False, False
     SAVED_USED.clear()
     DEBUG = a.debug or env("DEBUG") == "1"
     KEEP = a.keep or env("KEEP") == "1"
