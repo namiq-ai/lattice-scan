@@ -127,6 +127,10 @@ class LatticeError(Exception):
     pass
 
 
+class LatticeUnreachable(LatticeError):
+    """The network failed (no route, refused, timed out), as opposed to the server answering with a refusal or a limit."""
+
+
 QUICK_ITEMS, KEY_ITEMS, RATE_WAIT_BUDGET = 25, 200, 5   # items per level; waits for the minute limit in one --discover --all run
 RATE_RETRIES, MAX_RATE_WAIT = 2, 70.0   # a 429 that says 'retry after N seconds' is waited out (at most twice, and only if N is a minute or so)
 PACE_CALLS, PACE_WINDOW = 5, 60.5         # keyless: calls a minute until the server says otherwise, counted across runs; half a second of margin
@@ -524,7 +528,7 @@ class Lattice:
                     self._wait_to_retry(attempt, str(e))
                     attempt += 1
                     continue
-                raise LatticeError(f"cannot reach Lattice after {attempt + 1} tries: {e}")
+                raise LatticeUnreachable(f"cannot reach Lattice after {attempt + 1} tries: {e}")
         dbg(f"   body: {raw[:300]}{' ...' if len(raw) > 300 else ''}")
         dbg(f"   full body: {raw}", file_only=True)
         if not raw.strip():
@@ -2509,7 +2513,7 @@ def fetch_json(url: str, what: str, limit: int = 1024 * 1024) -> dict:
             if attempt < len(RETRY_DELAYS):
                 Lattice._wait_to_retry(attempt, str(e))
                 continue
-            raise LatticeError(f"cannot read {what} at {url} after {attempt + 1} tries: {e}")
+            raise LatticeUnreachable(f"cannot read {what} at {url} after {attempt + 1} tries: {e}")
     raise LatticeError(f"cannot read {what}")
 
 
@@ -3051,7 +3055,7 @@ def cmd_enrich(a) -> int:
     todo, rest = ids[:cap], ids[cap:]
     rows: list[list[str]] = []
     done: list[tuple[str, dict | None]] = []
-    stopped = ""
+    stopped, unreachable = "", False
     lat = Lattice()
     try:
         lat.start()
@@ -3060,7 +3064,7 @@ def cmd_enrich(a) -> int:
             progress(f"[{n}/{len(todo)}] {cve}  asking Lattice (only this id is sent) ...")
             done.append((cve, kev_entry(lat, cve)))
     except LatticeError as err:
-        stopped = str(err)
+        stopped, unreachable = str(err), isinstance(err, LatticeUnreachable)
         print(f"stopped: {err}", file=sys.stderr)
     read_ids = {c for c, _ in done}
     for cve, e in done:
@@ -3072,7 +3076,10 @@ def cmd_enrich(a) -> int:
     print(f"enrich {TODAY}: {len(ids)} CVE ids found, {len(done)} read, {n_exp} exploited (CISA), {sum(1 for _, e in done if e and ransom(e.get('ransomware', '')) == 'known')} with known ransomware use")
     print_table(rows)
     if unread:
-        print(f"{len(unread)} id(s) not read: " + (f"keyless access has a small allowance (the server states it in each answer). Run it again later (answers already read are kept for a few hours and cost nothing), or ask the person for a key: lattice-scan get-key --help" if not KEY else "run again later"))
+        if unreachable:   # the network failed: the keyless allowance and a key are not the fix
+            print(f"{len(unread)} id(s) not read: Lattice could not be reached (see the stopped line above). Check the network and run it again; answers already read are kept for a few hours and cost nothing.")
+        else:
+            print(f"{len(unread)} id(s) not read: " + (f"keyless access has a small allowance (the server states it in each answer). Run it again later (answers already read are kept for a few hours and cost nothing), or ask the person for a key: lattice-scan get-key --help" if not KEY else "run again later"))
     if a.fail_on == "exploited" and n_exp:
         return 1
     return 3 if unread else 0
