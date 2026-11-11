@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 NamiQ LLC
 """0.7.0: `--discover --all` and `posture --attack` send items to Lattice one at a time, after showing exactly what, and only after a yes. Invented names, reserved ids."""
-import io, json, sys, threading, unittest
+import contextlib, io, json, sys, threading, unittest
 from http.server import HTTPServer
 from pathlib import Path
 from unittest import mock
@@ -71,6 +71,81 @@ class AllItems(EntryBase):
         self.assertEqual(rc, 2); self.assertEqual(Items.sent, [])
         self.assertIn("examplelib-server", err); self.assertIn("Nothing was sent", err)
 
+    class Tty(io.StringIO):
+        def isatty(self):
+            return True
+
+    def ask(self, answer, *argv):
+        """Run --discover --all at a (pretend) terminal that types `answer`."""
+        out, err = io.StringIO(), io.StringIO()
+        sys.argv = ["lattice-scan", "--discover", "--all", *argv]
+        old = sys.stdin
+        sys.stdin = self.Tty(answer)
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = cli.main()
+        finally:
+            sys.stdin = old
+        return rc, err.getvalue()
+
+    def test_the_question_is_short_plain_and_says_what_is_sent_and_what_comes_back(self):
+        rc, err = self.ask("n\n")
+        self.assertEqual((rc, Items.sent), (2, []))
+        q = err.split("Send?")[0]
+        self.assertIn("Check 5 programs on this computer against the known-exploited CVE list?", q)
+        self.assertIn("e.g. example 12.4", q); self.assertIn("and 2 more", q)
+        self.assertIn("Sends: name and version only", q); self.assertIn("You get: the CISA-listed CVEs", q)
+        self.assertNotIn("product=", q); self.assertNotIn("level 1", q); self.assertNotIn("unit(s)", q)   # no key=value dump, no tier jargon
+        self.assertLessEqual(len(q.splitlines()), 6)
+
+    def test_enter_means_yes_and_details_lists_every_item_then_asks_again(self):
+        rc, err = self.ask("d\n\n")
+        self.assertEqual(rc, 0); self.assertTrue(Items.sent)
+        self.assertEqual(err.count("Send? "), 2); self.assertIn("product=examplelib-server", err)
+
+    def test_always_is_remembered_and_the_next_terminal_run_is_not_asked(self):
+        rc, err = self.ask("a\n")
+        self.assertEqual(rc, 0); self.assertIn("Remembered", err)
+        rec = json.loads((cli.OUT / "consent.json").read_text())["items:quick"]
+        self.assertIn("product", rec["fields"]); self.assertIn("version", rec["fields"])
+        self.assertEqual(oct((cli.OUT / "consent.json").stat().st_mode & 0o777), "0o600")
+        Items.sent.clear()
+        rc, err = self.ask("")                       # nothing typed: a question would read a closed input as no
+        self.assertEqual(rc, 0); self.assertTrue(Items.sent)
+        self.assertNotIn("Send?", err); self.assertIn("you chose 'always'", err)
+
+    def test_always_does_not_reach_an_agent_without_a_terminal(self):
+        self.ask("a\n"); Items.sent.clear()
+        rc, out, err = self.run_cli("--discover", "--all")
+        self.assertEqual((rc, Items.sent), (2, [])); self.assertIn("Add --yes", err)
+
+    def test_always_covers_only_the_fields_it_was_given_for(self):
+        self.ask("a\n"); Items.sent.clear()
+        d = json.loads((cli.OUT / "consent.json").read_text()); d["items:quick"]["fields"] = ["product"]   # as if an older release sent less
+        (cli.OUT / "consent.json").write_text(json.dumps(d))
+        rc, err = self.ask("n\n")
+        self.assertEqual((rc, Items.sent), (2, [])); self.assertIn("Send?", err)
+
+    def test_always_for_quick_does_not_cover_a_run_with_a_key(self):
+        self.ask("a\n"); Items.sent.clear()
+        cli.KEY = "k-test"
+        rc, err = self.ask("n\n")
+        self.assertEqual((rc, Items.sent), (2, [])); self.assertIn("Send?", err)
+
+    def test_consent_command_shows_and_forgets(self):
+        self.ask("a\n")
+        rc, out, err = self.run_cli("consent")
+        self.assertEqual(rc, 0); self.assertIn("items:quick", out); self.assertIn("always since", out)
+        rc, out, err = self.run_cli("consent", "forget")
+        self.assertIn("Forgotten", out); self.assertFalse((cli.OUT / "consent.json").exists())
+        Items.sent.clear()
+        rc, err = self.ask("n\n"); self.assertIn("Send?", err)
+
+    def test_an_answer_cannot_be_remembered_in_a_temporary_records_folder(self):
+        with mock.patch.object(cli, "TEMP_RECORDS", True):
+            rc, err = self.ask("a\n")
+        self.assertEqual(rc, 0); self.assertIn("could not be remembered", err); self.assertFalse((cli.OUT / "consent.json").exists())
+
     def test_no_terminal_and_no_yes_sends_nothing(self):
         rc, out, err = self.run_cli("--discover", "--all")
         self.assertEqual((rc, Items.sent), (2, [])); self.assertIn("Add --yes", err)
@@ -92,7 +167,7 @@ class AllItems(EntryBase):
         self.assertEqual(names[:5], ["example", "linux", "Box-9", "examplelib-server", "otherd"])
         self.assertLess(names.index("openssl"), names.index("nginx"))          # foundational before well-known server software
         self.assertLess(names.index("nginx"), names.index("rarething"))        # then everything else, in name order
-        self.assertIn("level 2", err)
+        self.assertIn("allowance", err)
 
     def test_quick_forces_level_1_even_with_a_key(self):
         cli.KEY = "lat_test_0000000000000000"

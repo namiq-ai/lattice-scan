@@ -213,7 +213,8 @@ def write_private(path: Path, text: str) -> None:
 def use_temp_records(note: str) -> None:
     """Send this run's records to a private temporary folder that is deleted when the run ends. WHY: an agent in its own sandbox has no home it may
     write to, or should not leave a list of installed packages in one. The findings of such a run are not remembered by the next one: LATTICE_SCAN_DIR or --keep opts in."""
-    global OUT
+    global OUT, TEMP_RECORDS
+    TEMP_RECORDS = True
     d = Path(tempfile.mkdtemp(prefix="lattice-scan-"))   # mkdtemp is 0700
     atexit.register(shutil.rmtree, d, True)
     OUT = d
@@ -3125,26 +3126,105 @@ def cmd_recent(a) -> int:
     return 0
 
 
-def confirm_send(a, heading: str, lines: list[str], note: str) -> bool:
-    """Show exactly what will be sent and ask. On stderr, so it is seen even when the result goes to a file or `--format json`. `--yes` skips the question (scripts);
-    with no terminal and no --yes nothing is sent."""
-    print(heading, file=sys.stderr)
-    for l in lines:
-        print("  " + l, file=sys.stderr)
-    print(note, file=sys.stderr)
-    if getattr(a, "yes", False):
-        return True
-    if not sys.stdin.isatty():
-        print("Nothing was sent: there is no terminal to ask on. Add --yes to send without asking.", file=sys.stderr)
-        return False
+CONSENT_FILE = "consent.json"
+TEMP_RECORDS = False   # set when this run keeps its records in a temporary folder: an answer cannot be remembered there
+
+
+def consent_load() -> dict:
     try:
-        ans = input("Send these? [y/N] ")
-    except EOFError:
-        ans = ""
-    if ans.strip().lower() not in ("y", "yes"):
-        print("Nothing was sent.", file=sys.stderr)
+        d = json.loads((OUT / CONSENT_FILE).read_text())
+    except (OSError, ValueError):
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def consent_remembered(kind: str, fields: tuple[str, ...]) -> dict | None:
+    """The saved 'always' for this kind of lookup, only while the fields it sends are exactly the ones the person agreed to: a release that sends more asks again."""
+    rec = consent_load().get(kind)
+    return rec if isinstance(rec, dict) and rec.get("fields") == list(fields) else None
+
+
+def consent_save(kind: str, fields: tuple[str, ...]) -> bool:
+    if TEMP_RECORDS:
+        return False
+    d = consent_load()
+    d[kind] = {"fields": list(fields), "on": TODAY}
+    try:
+        OUT.mkdir(parents=True, exist_ok=True, mode=0o700)
+        write_private(OUT / CONSENT_FILE, json.dumps(d, indent=1))
+    except OSError:
         return False
     return True
+
+
+def cmd_consent(a) -> int:
+    """`lattice-scan consent [show|forget]`: what 'always' answers are remembered, and forget them."""
+    d = consent_load()
+    if a.action == "forget":
+        try:
+            (OUT / CONSENT_FILE).unlink()
+        except FileNotFoundError:
+            pass
+        print("Forgotten. The next lookup asks again." if d else "Nothing was remembered.")
+        return 0
+    if not d:
+        print("No answers are remembered: every lookup asks first. Answer 'a' (always) at a question to remember it; it then applies at a terminal only.")
+        return 0
+    for kind, rec in sorted(d.items()):
+        print(f"{kind:<14} always since {rec.get('on', '?')}  (sends only: {', '.join(rec.get('fields') or [])})")
+    print("lattice-scan consent forget   to be asked again")
+    return 0
+
+
+def confirm_send(a, kind: str, ask: str, sample: str, lines: list[str], note: str, fields) -> bool:
+    """Ask before anything is sent to Lattice, in as few words as possible, on stderr so it is seen even when the result goes to a file or `--format json`.
+
+    One question, the benefit, the guarantee, a short sample; `d` shows every item. `a` (always) is remembered for this kind of lookup and these fields only (`consent` shows or
+    forgets it) and applies only at a terminal, where the one-line notice is seen. `--yes` skips the question (scripts) and prints the full list. With no terminal and no --yes, nothing is sent."""
+    fields = tuple(sorted(fields))
+    heading = f"[{kind.split(':')[0]}] what will be sent to lattice.namiq.io, one at a time:"
+
+    def details() -> None:
+        print(heading, file=sys.stderr)
+        for l in lines:
+            print("  " + l, file=sys.stderr)
+        print(note, file=sys.stderr)
+
+    if getattr(a, "yes", False):
+        details()
+        return True
+    rec = consent_remembered(kind, fields) if sys.stdin.isatty() else None   # only where a person sees the line: an agent or a cron job still needs --yes
+    if rec:
+        print(f"{ask.rstrip('?')}: sending (you chose 'always' on {rec.get('on', '?')}; `lattice-scan consent forget` asks again).", file=sys.stderr)
+        return True
+    if not sys.stdin.isatty():
+        details()
+        print("Nothing was sent: there is no terminal to ask on. Add --yes to send without asking.", file=sys.stderr)
+        return False
+    head, _, gain = ask.partition("\n")
+    print(head, file=sys.stderr)
+    print("  e.g. " + sample, file=sys.stderr)
+    print("Sends: " + note.split("\n")[0], file=sys.stderr)
+    if gain:
+        print("You get: " + gain, file=sys.stderr)
+    shown = False
+    while True:
+        print("Send? [Y]es / [n]o / [a]lways / [d]etails: ", end="", file=sys.stderr, flush=True)   # stderr: stdout may be a file; input() would write there
+        line = sys.stdin.readline()
+        ans = line.strip().lower() if line else "n"       # a closed input is a no, an empty line (Enter) is the default yes
+        if ans in ("d", "details") and not shown:
+            details()
+            shown = True
+            continue
+        break
+    if ans in ("", "y", "yes"):
+        return True
+    if ans in ("a", "always"):
+        print("Remembered. `lattice-scan consent forget` asks again." if consent_save(kind, fields)
+              else "Sending this time; the answer could not be remembered (this run keeps no records folder).", file=sys.stderr)
+        return True
+    print("Nothing was sent.", file=sys.stderr)
+    return False
 
 
 VERDICT_ORDER = {"in-range": 0, "undetermined": 1, "outside-range": 2}
@@ -3167,11 +3247,14 @@ def cmd_all(a) -> int:
     lines = [f"{items.describe(it):<64} ({sel['why'].get(items.describe(it), '')})" for it in its]
     if sel["cut"]:
         lines.append(f"... {sel['cut']} more were left out by the limit of {limit} items")
-    who = ("level 1, quick (no key): this machine, its images' operating systems and what listens or runs here" if level == "quick" else
-           "level 2 (your key): the quick items, then foundational packages, well-known server software and the other packages, until your allowance ends")
-    note = (f"{who}. {len(its)} item(s), one request each, {len(its)} unit(s) of your allowance. Sent: only the fields shown. Never sent: host name, addresses, ports, paths, user names, "
-            "or the package list as a whole. The server keeps no record of who asked and counts each item anonymously for statistics.")
-    if not confirm_send(a, "[all] these items will be sent to lattice.namiq.io, one at a time:", lines, note):
+    n = len(its)
+    sample = ", ".join(items.plain(it) for it in its[:3]) + (f" and {n - 3} more" if n > 3 else "")
+    use = "" if level == "quick" else f" It uses {n} lookup(s) of your key's allowance."
+    note = ("name and version only, one lookup each. Never: host name, addresses, ports, paths, user names, your package list.\n"
+            f"{n} item(s) in all; {'this machine, its images' + chr(39) + ' operating systems and what listens or runs here' if level == 'quick' else 'the quick items, then foundational packages, well-known server software and the other packages, until your allowance ends'}.{use} "
+            "namiq.io does not record who asked; it only counts lookups.")
+    if not confirm_send(a, f"items:{level}", f"Check {n} program{'s' if n != 1 else ''} on this computer against the known-exploited CVE list?\nthe CISA-listed CVEs that may apply, as leads for you to check.",
+                        sample, lines, note, {k for it in its for k in it}):
         return 2
     lat = Lattice()
     lat.rate_budget = RATE_WAIT_BUDGET          # a minute limit is waited out at most 5 times in a run: five times the limit in all
@@ -3231,8 +3314,10 @@ def attack_techniques(a, d: dict) -> int:
     if not codes:
         progress("[posture] no signals to explain")
         return 0
-    if not confirm_send(a, "[posture] these signal codes will be sent to lattice.namiq.io, one at a time:", [f"signal={c}" for c in codes],
-                        f"{len(codes)} request(s). A code is a fixed label, not your setting; no host name, address, port or path is sent. Each is counted anonymously."):
+    if not confirm_send(a, "signals", f"Ask which ATT&CK techniques {len(codes)} finding{'s' if len(codes) != 1 else ''} may point to?\nATT&CK technique names to read about.",
+                        ", ".join(codes[:3]) + (f" and {len(codes) - 3} more" if len(codes) > 3 else ""), [f"signal={c}" for c in codes],
+                        f"fixed labels such as {codes[0]}, not your settings, one lookup each. Never: host name, address, port, path.\n{len(codes)} request(s); namiq.io does not record who asked.",
+                        {"signal"}):
         return 2
     lat = Lattice()
     found: dict[str, list[str]] = {}
@@ -3676,6 +3761,8 @@ def _main() -> int:
     gk.add_argument("--accept-terms", action="store_true", help="the person has read the beta terms and agreed, and reads that mailbox (without this nothing is sent)")
     gk.add_argument("--force", action="store_true", help="ask even though a key is already stored")
     sub.add_parser("list"); sub.add_parser("stats")
+    co = sub.add_parser("consent", help="show the 'always' answers kept for lookups to lattice.namiq.io, or forget them")
+    co.add_argument("action", nargs="?", choices=["show", "forget"], default="show")
     il = sub.add_parser("inventory", help="show inventory.log: counts and changes per run; --share prints the important software as one block to paste into the Lattice Analyst")
     il.add_argument("-n", type=int, default=20)
     il.add_argument("--share", action="store_true", help="print a LATTICE INVENTORY v1 block (at most 150 lines): the kernel, what listens, what today's CISA list may concern, images, snaps and server software")
@@ -3735,6 +3822,7 @@ def _main() -> int:
         print("".join(f.read_text().splitlines(True)[-a.n:]) if f.exists() else "no scans logged yet", end="")
         return 0
     if a.c == "stats": print(json.dumps(stats(), indent=1)); return 0
+    if a.c == "consent": return cmd_consent(a)
     if a.c == "list":
         for f in sorted(state().values(), key=lambda x: x.get("found", "")):
             print(f"{f['ref']:<18} {f['status']:<15} listed {f.get('listed','-')} found {f.get('found','-')} closed {f.get('closed','-')}  {f.get('title','')[:50]}")
