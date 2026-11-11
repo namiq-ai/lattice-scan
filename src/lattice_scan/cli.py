@@ -1408,6 +1408,17 @@ def image_details(running: list[str]) -> dict[str, dict]:
     return out
 
 
+MACOS_STOP = ("This computer runs macOS. Host scanning reads Linux package databases and cannot see a Mac yet, so it would report nothing, and that would not mean safe.\n"
+              "These still work here: lattice-scan project <folder>, and lattice-scan enrich CVE-... (look up ids you already have).")
+
+
+def stop_on_macos() -> None:
+    """A Mac has none of the Linux sources the host scan reads, so every host comparison would say 'no match', which a reader takes as 'safe'. Stop instead (exit 3)."""
+    if sys.platform == "darwin":
+        print(MACOS_STOP, file=sys.stderr)
+        raise SystemExit(3)
+
+
 def inventory() -> dict:
     fixed = env("INVENTORY")
     if fixed:
@@ -1417,6 +1428,7 @@ def inventory() -> dict:
         inv.setdefault("imageDetails", {})
         progress("[host] inventory read from a fixed file (LATTICE_SCAN_INVENTORY), nothing collected from this machine")
         return inv
+    stop_on_macos()
     pk: dict[str, str] = {}
     manager = "dpkg"
     progress("[host] collecting installed packages ...")
@@ -1489,7 +1501,7 @@ def candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str]] | None
     basis = "product"
     if not product:
         product, basis = entry.get("title", "").lower(), "title"
-    if vendor == "linux" and product == "kernel" or "linux kernel" in product:
+    if (vendor == "linux" and product == "kernel" or "linux kernel" in product) and inv.get("family") != "macos":   # a Mac's Darwin number is not a Linux kernel number
         return f"kernel in use is {inv['kernel']}", [f"kernel {inv['kernel']}"], [inv["kernel"]]
     if product in ("node.js", "nodejs") and inv.get("node"):
         return f"Node.js {inv['node']} is installed", [f"node {inv['node']}"], [inv["node"]]
@@ -3350,6 +3362,7 @@ def feature_withdrawn(which: str) -> int:
 def cmd_posture(a) -> int:
     """What this host exposes and runs: listening ports, firewall, SSH settings, services and (--deep) processes no package owns. Read only; nothing is sent anywhere."""
     from lattice_scan import posture
+    stop_on_macos()
     deep = getattr(a, "posture_deep", False) or getattr(a, "deep", False)
     who = "root" if os.geteuid() == 0 else f"a normal user (uid {os.geteuid()})"
     progress(f"[posture] {'deep' if deep else 'quick'} scan as {who}: ports, firewall, ssh, services" + (", processes, persistence points" if deep else "")

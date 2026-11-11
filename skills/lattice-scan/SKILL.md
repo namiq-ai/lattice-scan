@@ -31,6 +31,7 @@ The tool inspects the machine Claude is running on, not a machine the user is th
 - If Claude is running in a hosted sandbox, a throwaway container, or on a different machine from the one the user asked about, say so and stop. A scan of
   the wrong machine is worse than no scan, because it reads as an answer.
 - If it is the user's own host or server, say in one line which machine it is (hostname and OS) and continue.
+- If the OS is macOS, the host scan stops (exit 3) with "This computer runs macOS ... would not mean safe". Tell the person that a Mac cannot be scanned yet; never describe it as "nothing found". `project FOLDER` and `enrich` still work on a Mac.
 - The tool needs Python 3.9 or newer and outbound HTTPS to `lattice.namiq.io`. If either is missing, say that and stop.
 
 ## 2. Run it

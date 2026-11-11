@@ -46,6 +46,9 @@ command checks what a project's files
 .B declare
 it depends on, and needs no installation on the machine it runs from.
 .SH HOST MODE
+Host mode reads Linux sources only. On macOS every host command stops with a message and exit status 3, because a Mac would otherwise show
+"no match", which does not mean safe. \fBproject\fR and \fBenrich\fR read no host and work on a Mac.
+.PP
 With one or more
 .B \-\-cve
 the host's inventory is collected (the hardware, dpkg, rpm or apk packages, snaps, running Docker images and what is inside them, kernel, Node.js) and each id is read from Lattice and matched by product name.

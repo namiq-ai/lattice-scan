@@ -1,0 +1,25 @@
+name: macos-capture
+# Manual only. Runs the read-only capture script (tools/macos-capture.py) on GitHub-hosted Macs and keeps the JSON for 14 days.
+# It reads the machine's version file, app versions and Homebrew folders; it sends nothing anywhere and changes nothing.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Apple silicon and Intel images GitHub offers; which macOS releases they carry is one of the things this run records.
+        runner: [macos-13, macos-14, macos-15]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: python3 -I tools/macos-capture.py capture-${{ matrix.runner }}.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-capture-${{ matrix.runner }}
+          path: capture-${{ matrix.runner }}.json
+          retention-days: 14
