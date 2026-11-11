@@ -14,6 +14,10 @@ Standard library only: no runtime dependency. Python 3.9 or newer. [Self-audit](
 pipx install lattice-scan                    # or: pip install lattice-scan
 ```
 
+**Platforms.** Scanning a host works on Linux (Debian and Ubuntu are tested). On a Mac the tool installs and runs, but it cannot read a Mac yet: a host scan stops with
+"This computer runs macOS ... would not mean safe" and exit 3 instead of reporting "no match". `lattice-scan project FOLDER` and `lattice-scan enrich CVE-...` work
+on a Mac. Mac support is planned.
+
 On Debian and Ubuntu, from the signed apt repository:
 
 ```bash
