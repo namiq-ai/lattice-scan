@@ -25,7 +25,7 @@ lattice-scan \- check this host, or a project's declared dependencies, against t
 \fB\-\-name\fR \fINAME\fR \fB\-\-position\fR \fITEXT\fR \fB\-\-company\fR \fITEXT\fR \fB\-\-email\fR \fIADDRESS\fR \fB\-\-purpose\fR \fITEXT\fR [\fB\-\-accept\-terms\fR] [\fB\-\-force\fR]
 .br
 .B lattice-scan
-.RB { list | impact " \fICVE\fR" | resolve " \fICVE\fR \fB\-\-status\fR \fISTATUS\fR [\fB\-\-proof\fR \fITEXT\fR] | add | stats | inventory | log }
+.RB { list | impact " \fICVE\fR" | resolve " \fICVE\fR \fB\-\-status\fR \fISTATUS\fR [\fB\-\-proof\fR \fITEXT\fR] | add | stats | consent | inventory | log }
 .SH DESCRIPTION
 .B lattice-scan
 asks the Lattice MCP server which CVEs CISA lists as exploited, and compares each with what is on one machine or declared in one project. It prints the evidence: the
@@ -131,7 +131,7 @@ Keep this run's records in the default folder even when there is no terminal. Wi
 Write every request, response and match decision to stderr and
 .IR debug.log .
 .TP
-.BR list ", " impact " \fICVE\fR, " resolve " \fICVE\fR, " add ", " stats ", " inventory ", " log
+.BR list ", " impact " \fICVE\fR, " resolve " \fICVE\fR, " add ", " stats ", " consent ", " inventory ", " log
 Read or record the host's findings. A finding is closed only by
 .B resolve
 with a status of
@@ -481,13 +481,14 @@ Respected by \fB\-\-color auto\fR.
 .SH FILES
 .TP
 .I ~/.lattice-scan/
-Host mode and \fBget\-key\fR, mode 0700, every file 0600: findings.jsonl, runs.jsonl, scan.log, inventory.json and inventory.log, seen.json, debug.log. They name this host's software. Do not commit, publish or share them.
+Host mode and \fBget\-key\fR, mode 0700, every file 0600: findings.jsonl, runs.jsonl, scan.log, inventory.json and inventory.log, seen.json, consent.json, debug.log. They name this host's software. Do not commit, publish or share them.
 The file \fBkey\fR (mode 0600), written by \fBget\-key\fR, holds a Lattice key; it is read only while no one else can read it. \fBenrich\fR and \fBproject\fR write nothing there.
 If the folder cannot be created and \fBLATTICE_SCAN_DIR\fR was not set, the run says so on one line and uses a temporary folder. If \fBLATTICE_SCAN_DIR\fR was set and cannot be used, the run stops with exit status 1 and one line naming it. \fBget\-key\fR never uses a temporary folder, because the key must outlive the run.
 .SH LIMITS
 Without a key Lattice allows a small number of calls a minute, hour and day, and says what they are in every answer (the access object). lattice\-scan remembers the per\-minute figure the server last reported (5 until it has been told otherwise) and keeps the times of its recent calls (in the user's cache folder, not in the records), so separate runs one after another space themselves out and stay under it; it prints a line when it waits. If Lattice still answers "too many requests, retry after N seconds" with N about a minute or less, it waits that long and tries again, twice at most. A run that reaches the hourly or daily limit stops, lists what it did not read, and exits 3.
 A key is for a real person (https://namiq.io/lattice/docs). The tool asks for one only through \fBget\-key\fR, with the person's own details and only after \fB\-\-accept\-terms\fR; it never opens a link from a reply.
 .SH WHAT LEAVES THE MACHINE
+Before \fB\-\-discover \-\-all\fR or \fBposture \-\-attack\fR sends anything, one question is asked on stderr: how many items, three examples, what is sent and what comes back. The answers are y (the default), n, d (show every item) and a (always). \fBa\fR is kept in consent.json for that kind of lookup and those fields only, and is used only when standard input is a terminal; \fBconsent\fR shows it and \fBconsent forget\fR removes it. \fB\-\-yes\fR sends without asking; with no terminal and no \fB\-\-yes\fR nothing is sent.
 CVE ids, the node ids Lattice returned for them, and the key if one is set. Package names, versions, file names and the inventory are never sent; matching happens locally.
 \fBrecent\fR downloads a public list: that request carries no id and nothing about this host. \fBget\-key\fR sends the name, position, company, email address and purpose it is given, after \fB\-\-accept\-terms\fR, to the key service.
 .SH EXAMPLES

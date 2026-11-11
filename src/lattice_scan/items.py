@@ -185,6 +185,11 @@ def describe(it: dict) -> str:
     return " ".join(f"{k}={it[k]}" for k in ("product", "version", "ecosystem", "os", "kind", "vendor") if k in it)
 
 
+def plain(it: dict) -> str:
+    """An item in the words a person uses: 'nginx 1.24.0', 'linux 7.0.0 (kernel)'. Only the fields of describe(), none added."""
+    return f"{it['product']} {it['version']}" + (f" ({it['kind']})" if it.get("kind") else "")
+
+
 # The posture signals (stable codes of posture.py) are sent one at a time to `graph_exposure`.
 SIGNAL = re.compile(r"^[a-z]{2,12}\.[a-z0-9]+(-[a-z0-9]+){0,4}$")
 
