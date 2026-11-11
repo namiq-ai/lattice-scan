@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.1 — 2026-11-11
 
 - Changed: on a Mac, every host command (`scan`, `--cve`, `recent`, `--discover`, `--refresh --inventory`, `posture`) now stops with a plain message and exit 3. The tool cannot read a Mac yet, and until now it would have printed "no match", which a reader takes as "safe". `project` and `enrich` read no host and still work. Reading a Mac is planned.
 - New: before it looks anything up, `--discover --all` and `posture --attack` ask one short question: how many items, three examples, what is sent and what you get back. Enter or `y` sends; `d` shows every item; `a` remembers "always" for that kind of lookup (a file in the records folder, mode 0600; it applies only at a terminal, and a release that sends more asks again). `lattice-scan consent` shows what is remembered and `lattice-scan consent forget` removes it. The question goes to stderr and a closed input means no.
