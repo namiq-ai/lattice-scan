@@ -137,19 +137,28 @@ def ask_posture(block: dict, input_fn=input, out=None) -> bool:
         return False
 
 
-def record_after_yes(inv: dict | None, items: list[dict], level: str, os_name: str, payload: dict, posture: dict | None, input_fn=input, out=None) -> dict:
+def record_after_yes(inv: dict | None, items: list[dict], level: str, os_name: str, payload: dict, posture: dict | None, input_fn=input, out=None, secrets_fn=None) -> dict:
     """What a yes to the report would send: the record, with the posture block only when the person also says yes to the second question.
     A project scan (no machine inventory) or a posture that could not be read has no second question; the record then has no posture key."""
     if inv is None:
         return payload
     if posture is None:
         return rec.build_record(inv, items, level, os_name)
+    from . import local_secrets
+    if "localSecrets" not in posture:                  # looked for only now, when the person is about to be asked; kind, place and count, never the value
+        try:
+            posture = {**posture, "localSecrets": (secrets_fn or local_secrets.find)()}
+        except Exception:  # noqa: BLE001 - a missing check must not stop the question
+            posture = {**posture, "localSecrets": []}
     block = rec.posture_block(posture)
+    note = local_secrets.notice(posture.get("localSecrets") or [])
+    if note:
+        print(note, file=out if out is not None else sys.stderr)      # shown before the question; the value is not in the posture result and never in the record
     return rec.build_record(inv, items, level, os_name, posture=posture) if ask_posture(block, input_fn, out) else rec.build_record(inv, items, level, os_name)
 
 
 def after_scan(items: list[dict], level: str, directory: Path, *, quiet: bool, fmt: str = "table", env: dict | None = None, stdin_tty: bool = False, stderr_tty: bool = False,
-               input_fn=input, out=None, enabled: bool | None = None, os_name: str | None = None, inv: dict | None = None, posture: dict | None = None) -> Path | None:
+               input_fn=input, out=None, enabled: bool | None = None, os_name: str | None = None, inv: dict | None = None, posture: dict | None = None, secrets_fn=None) -> Path | None:
     """Build the payload and the report, write the private file (unless there is no candidate), then offer a mail where allowed."""
     if not items:
         return None
@@ -160,7 +169,7 @@ def after_scan(items: list[dict], level: str, directory: Path, *, quiet: bool, f
     if should_offer(len(payload["items"]), stdin_tty=stdin_tty, stderr_tty=stderr_tty, env=env if env is not None else {}, quiet=quiet, fmt=fmt, enabled=enabled):
         first = rec.build_record(inv, items, level, os_w) if inv is not None else payload      # what a yes would send: the record when the scan has an inventory
         if offer(first, input_fn, out):
-            record_after_yes(inv, items, level, os_w, payload, posture if kind_is_host(inv) else None, input_fn, out)   # the record a send would use; nothing is sent in this version
+            record_after_yes(inv, items, level, os_w, payload, posture if kind_is_host(inv) else None, input_fn, out, secrets_fn)   # the record a send would use; nothing is sent in this version
             print("Mailing a report is not available in this version. Your report is saved at " + str(path), file=out if out is not None else sys.stderr)
     return path
 

@@ -127,7 +127,7 @@ def posture_block(p: dict) -> dict:
     ssh = {"installed": bool(ssh_in.get("installed")), "passwordauthentication": _word(st.get("passwordauthentication")),
            "permitrootlogin": _word(st.get("permitrootlogin")), "port": _word(st.get("port"))}
     out = {"scope": "root" if p.get("scope") == "root" else "user", "level": "deep" if p.get("level") == "deep" else "quick", "ports": ports, "firewall": firewall, "ssh": ssh,
-           "notRead": len(p.get("unreadable") or []), "secretsFound": len(p.get("localSecrets") or [])}
+           "notRead": len(p.get("unreadable") or []), "secretsFound": sum(_int(x.get("count", 1)) for x in (p.get("localSecrets") or []) if isinstance(x, dict))}
     if p.get("level") == "deep":
         progs = []
         for g in ((p.get("processes") or {}).get("flagged") or []):

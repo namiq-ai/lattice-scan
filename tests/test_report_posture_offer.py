@@ -12,6 +12,7 @@ ITEMS = [{"cve": "CVE-2030-0001", "product": "nginx", "version": "1.26.3-1", "ve
 INV = {"kernel": "7.0.0-1", "os": "Debian GNU/Linux 13", "manager": "dpkg", "packages": {"nginx": "1.26.3-1"}, "snaps": {}, "images": [], "imageDetails": {}, "host": {}}
 POSTURE = {"scope": "user", "level": "quick", "ports": [{"proto": "tcp", "addr": "192.0.2.5", "port": 80, "bind": "all interfaces", "process": "nginx", "package": "nginx", "where": ""}],
            "firewall": {"readable": False, "managers": []}, "ssh": {"installed": False, "settings": {}}, "unreadable": ["firewall rules (need root)"]}
+NONE = lambda: []   # noqa: E731 - the host's own history and processes are not read by these tests
 TTY = dict(stdin_tty=True, stderr_tty=True, env={}, quiet=False, fmt="table", enabled=True)
 
 
@@ -28,7 +29,7 @@ def answers(*given):
 def run(fn, **kw):
     with tempfile.TemporaryDirectory() as d:
         out = io.StringIO()
-        flow.after_scan(ITEMS, "quick", Path(d), input_fn=fn, out=out, os_name="Debian", inv=INV, posture=POSTURE, **{**TTY, **kw})
+        flow.after_scan(ITEMS, "quick", Path(d), input_fn=fn, out=out, os_name="Debian", inv=INV, posture=POSTURE, secrets_fn=NONE, **{**TTY, **kw})
     return out.getvalue()
 
 
@@ -45,13 +46,13 @@ class PostureOffer(unittest.TestCase):
         self.assertIn("Not submitted: addresses, user names, file paths, command lines,", text)
 
     def test_enter_means_no_and_the_record_has_no_posture_key(self):
-        r = flow.record_after_yes(INV, ITEMS, "quick", "Debian", {"items": ITEMS}, POSTURE, answers(""), io.StringIO())
+        r = flow.record_after_yes(INV, ITEMS, "quick", "Debian", {"items": ITEMS}, POSTURE, answers(""), io.StringIO(), secrets_fn=NONE)
         self.assertNotIn("posture", r)
         self.assertEqual(r["schema"], 2)
 
     def test_a_yes_adds_the_declared_block_and_details_show_it(self):
         out = io.StringIO()
-        r = flow.record_after_yes(INV, ITEMS, "quick", "Debian", {"items": ITEMS}, POSTURE, answers("d", "y"), out)
+        r = flow.record_after_yes(INV, ITEMS, "quick", "Debian", {"items": ITEMS}, POSTURE, answers("d", "y"), out, secrets_fn=NONE)
         self.assertEqual(r["posture"], rec.posture_block(POSTURE))      # the preview, the details and the bytes come from one block
         self.assertEqual(r["schema"], 3)
         self.assertIn('"port": 80', out.getvalue())
@@ -76,8 +77,8 @@ class PostureOffer(unittest.TestCase):
 
     def test_nothing_is_remembered_between_runs_and_nothing_is_sent_in_this_version(self):
         self.assertFalse(flow.MAIL_AVAILABLE)
-        a = flow.record_after_yes(INV, ITEMS, "quick", "Debian", {"items": ITEMS}, POSTURE, answers("y"), io.StringIO())
-        b = flow.record_after_yes(INV, ITEMS, "quick", "Debian", {"items": ITEMS}, POSTURE, answers(""), io.StringIO())
+        a = flow.record_after_yes(INV, ITEMS, "quick", "Debian", {"items": ITEMS}, POSTURE, answers("y"), io.StringIO(), secrets_fn=NONE)
+        b = flow.record_after_yes(INV, ITEMS, "quick", "Debian", {"items": ITEMS}, POSTURE, answers(""), io.StringIO(), secrets_fn=NONE)
         self.assertIn("posture", a)
         self.assertNotIn("posture", b)
 

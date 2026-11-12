@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- New: `posture` also looks for secret-looking values (a key, token or password) on the command lines of the programs it may read and in your shell history. It shows only the kind of value, the place and a count, never the value. The value is in no file, record or report, and nothing is sent. It is a lead, not a verdict: a harmless test value matches too.
+- Internal (inactive: the mail offer is still off): the scan record can carry an optional posture block (ports, firewall and SSH settings without the rules, programs no package owns) built from a declared field list, and after a yes to a mailed report the tool asks a second question about it (default No, this run only).
+
 ## 0.9.1 — 2026-11-12
 
 - Changed: a host scan matches by package identity where namiq.io's signed identity list has a row for the CVE. An installed package matches when the source package it was built from is one the row names (`openssh-client` is built from `openssh`, `libssl3` from `openssl`), on the host and inside container images. A package that only shares a word with the product is shown as `LEAD`, with no version range compared: `node-electron-to-chromium` no longer stands for Chromium. Where the list has no row (most vendor and appliance products), names decide exactly as before. The kernel and the Node runtime keep their own rule (the running kernel, not `linux-libc-dev`).
