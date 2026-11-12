@@ -76,7 +76,7 @@ Check the older software on this machine, which the recent list cannot cover, in
 With \fB\-\-discover \-\-all\fR: level 1 only, even with a key.
 .TP
 .B \-\-yes
-Send what \fB\-\-discover \-\-all\fR or \fBposture \-\-attack\fR shows without asking first (for scripts).
+Send what \fB\-\-discover \-\-all\fR, \fBposture \-\-attack\fR or the distribution-verdict question of a host scan shows, without asking first (for scripts).
 .TP
 .BI \-\-also " PACKAGE"
 With \fB\-\-discover \-\-all\fR: also send this installed package (repeatable).
@@ -462,6 +462,9 @@ Set to 1 for the same as \fB\-\-python\fR: also read Python packages installed o
 .TP
 .B LATTICE_SCAN_PYTHON_PATHS
 More virtual environments or site-packages folders to read, separated like PATH (the same as repeating \fB\-\-python\-path\fR).
+.TP
+.B LATTICE_SCAN_ITEM_VERDICT
+Set to off to never ask for the distribution's own verdict. By default a host scan whose candidates joined by package identity asks once whether to send, for those packages only, the source package name, ecosystem, version and OS release, and uses the distribution's or registry's fixed version in place of the upstream comparison (a fixed one is shown as FIXED). With no terminal nothing is sent unless \fB\-\-yes\fR is given.
 .TP
 .B LATTICE_SCAN_IDENTITIES_URL
 Where the signed list of package identities per exploited CVE is read (default https://namiq.io/lattice/identities.json when the public Lattice server is used;
