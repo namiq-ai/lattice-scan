@@ -1,5 +1,6 @@
 """The signed identity list on the client: every row of the failure table, signed by a throwaway test key. Reserved CVE ids, invented packages."""
 import base64, datetime as dt, hashlib, json, sys, tempfile, unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -134,6 +135,41 @@ class Freshness(Base):
         ids.load(self.dir, srv, T0)
         ids.load(self.dir, srv, T0 + 13 * H)
         self.assertEqual(srv.calls.count(ids.LIST_URL), 1)
+
+
+class Bundled(Base):
+    def bundle(self, d, seed=SEED):
+        import types, zlib
+        raw, m = publish(d, seed=seed)
+        mod = types.SimpleNamespace(MANIFEST=json.dumps(m), LIST=(base64.b64encode(zlib.compress(raw)).decode(),))
+        return mock.patch.dict(sys.modules, {"lattice_scan.identities_bundled": mod})
+
+    def down(self):
+        s = Server(b"", {})
+        s.down = True
+        return s
+
+    def test_unreachable_with_nothing_cached_uses_the_release_copy_and_says_how_old(self):
+        with self.bundle(doc(as_of="2099-01-01")):
+            r = ids.load(self.dir, self.down(), T0)
+        self.assertEqual((r["source"], r["generation"]), ("bundled", 5))
+        self.assertIn("bundled in this release, 2 days old", r["note"])
+
+    def test_a_release_copy_that_does_not_verify_is_not_used(self):
+        with self.bundle(doc(), seed=OTHER), self.assertRaises(ids.IdentitiesUnavailable):
+            ids.load(self.dir, self.down(), T0)
+
+    def test_a_release_copy_older_than_one_already_accepted_is_not_used(self):
+        ids.load(self.dir, Server(*publish(doc(generation=9))), T0)
+        (self.dir / ids.CACHE).write_bytes(b"damaged")
+        with self.bundle(doc(generation=5)), self.assertRaises(ids.IdentitiesUnavailable):
+            ids.load(self.dir, self.down(), T0 + H)
+
+    def test_the_shipped_copy_verifies_with_the_pinned_key(self):
+        ids.PINNED_KEYS = self._keys
+        d = ids._bundled()
+        self.assertIsNotNone(d)
+        self.assertGreater(len(d["rows"]), 100)
 
 
 class EndToEnd(Base):
