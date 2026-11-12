@@ -52,9 +52,11 @@ def _why(it: dict) -> list[str]:
     return out
 
 
-def build_report(items: list[dict], payload: dict, generated: dt.date | None = None) -> str:
+def build_report(items: list[dict], payload: dict, generated: dt.date | None = None, posture: dict | None = None) -> str:
     """`items` are the scan's candidates (cve, product, version, verdict, priority, and optionally why, listed, due, due_status, attack);
-    `payload` is scan_report.build_payload of the same items. Returns the report text; raises ValueError if a banned word got in."""
+    `payload` is scan_report.build_payload of the same items. `posture` is the host's posture reading (posture.collect): when given, a section on what listens and
+    what runs is added after "What to check". It names ports and programs, so it stays in the local file and is never part of the payload or the record.
+    Returns the report text; raises ValueError if a banned word got in."""
     day = (generated or dt.date.today()).isoformat()
     shown = [i for i in items if isinstance(i, dict) and i.get("cve")]
     by_p = {p: [i for i in shown if str(i.get("priority", "read")).lower() == p] for p in PRIORITY_ORDER}
@@ -87,21 +89,51 @@ def build_report(items: list[dict], payload: dict, generated: dt.date | None = N
     for v in dict.fromkeys(str(i.get("verdict")) for i in shown):
         ex = next(i for i in shown if str(i.get("verdict")) == v)
         lines.append(f"  - {CHECK_TEXT.get(v, CHECK_TEXT['undetermined']).format(cve=ex['cve'], product=ex.get('product', 'the package'))}")
-    lines += ["", f"5. {SECTIONS[4]}"] + [f"  - {s}" for s in SOURCES] + [f"  Read from Lattice on {day}.", "", f"6. {SECTIONS[5]}"]
+    off = 1 if posture else 0
+    masked = []
+    if posture:
+        block = posture_lines(posture)
+        masked = block[1:]                                            # the machine's own signals are quoted, not written by this report: the wording check masks them
+        lines += ["", f"5. {POSTURE_TITLE}"] + block
+    lines += ["", f"{5 + off}. {SECTIONS[4]}"] + [f"  - {s}" for s in SOURCES] + [f"  Read from Lattice on {day}.", "", f"{6 + off}. {SECTIONS[5]}"]
     if payload.get("level") == "deep":
         lines.append("A deep scan also opened local container images. Packages that this tool does not read (firmware beyond what the machine reports, software installed outside a package manager, anything not on this machine) were not checked.")
     else:
         lines.append("Quick scan: running images only; stopped images and the packages inside images were not checked. Software installed outside a package manager was not checked either.")
-    lines += ["A scan with no candidate, or a version outside a range, is not an all-clear.", "", f"7. {SECTIONS[6]}",
+    lines += ["A scan with no candidate, or a version outside a range, is not an all-clear.", "", f"{7 + off}. {SECTIONS[6]}",
               "A candidate is not a finding. A distribution can fix a flaw under an unchanged version number. CISA lists exploitation it has seen; an id it does not list may still be exploited. This report makes no claim about accuracy.", ""]
     text = "\n".join(lines)
-    check_wording(text, shown)
+    check_wording(text, shown, masked)
     return text
 
 
-def check_wording(text: str, items: list[dict] = ()) -> None:
+POSTURE_TITLE = "What listens and what runs on this machine"
+
+
+def posture_lines(d: dict) -> list[str]:
+    """The posture reading as report lines: the scope, the socket counts, the signals the posture module wrote (attention first) and what could not be read.
+    The first line is this report's own notice; the rest is quoted from the posture module. Names ports and programs: local file only."""
+    who = "root" if d.get("scope") == "root" else "a normal user"
+    ports = d.get("ports") or []
+    cnt = lambda b: len([p for p in ports if p.get("bind") == b])      # noqa: E731
+    out = ["This section names ports and programs on this machine. It stays in this file and is never sent.",
+           f"Read as {who} ({d.get('level', 'quick')}). {len(ports)} listening sockets: {cnt('all interfaces')} on all interfaces, {cnt('loopback only')} on loopback only, {cnt('one address')} on one address."]
+    obs = sorted((o for o in d.get("observations") or [] if o.get("text")), key=lambda o: 0 if o.get("level") == "attention" else 1)
+    if obs:
+        out.append("Signals for a person to read (each can be harmless; none is a verdict):")
+        out += [f"  [{o.get('level', 'note')}] {o['text']}" for o in obs]
+    else:
+        out.append("No signal was raised. That is not an all-clear.")
+    if d.get("unreadable"):
+        out.append("Not read: " + "; ".join(str(u) for u in d["unreadable"][:10]) + ". Running as root would read them; this tool never runs sudo.")
+    return out
+
+
+def check_wording(text: str, items: list[dict] = (), masked_lines: list[str] = ()) -> None:
     """Raise ValueError naming a banned word. Product names are masked first: a product called 'Safe' is not the report calling a machine safe."""
     masked = text
+    for ln in masked_lines:
+        masked = masked.replace(ln, "·")
     for it in items:
         for field in ("product", "version"):
             v = str(it.get(field, ""))

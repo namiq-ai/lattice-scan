@@ -42,3 +42,34 @@ class Dogfood(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+POSTURE = {"scope": "user", "level": "deep", "ports": [{"proto": "tcp", "port": 22, "bind": "all interfaces"}, {"proto": "tcp", "port": 5432, "bind": "loopback only"}],
+           "observations": [{"level": "note", "topic": "ports", "text": "1 port(s) listen on all interfaces: tcp/22. That is normal for a server."},
+                            {"level": "attention", "topic": "ssh", "text": "SSH accepts passwords (a safe choice only behind a firewall); it may be harmless."}],
+           "unreadable": ["firewall rules (needs root)"]}
+
+
+class PostureSection(unittest.TestCase):
+    def build(self, posture):
+        items = flow.host_items([(E1, "why", IMP)], INV)
+        return rt.build_report(items, sr.build_payload(items, "deep", "Debian"), dt.date(2026, 11, 12), posture=posture)
+
+    def test_the_section_comes_after_what_to_check_and_before_the_sources_with_the_signals_attention_first(self):
+        t = self.build(POSTURE)
+        self.assertLess(t.index("4. What to check"), t.index("5. " + rt.POSTURE_TITLE)); self.assertLess(t.index("5. " + rt.POSTURE_TITLE), t.index("6. Sources"))
+        self.assertLess(t.index("[attention]"), t.index("[note]")); self.assertIn("2 listening sockets: 1 on all interfaces, 1 on loopback only", t)
+        self.assertIn("Not read: firewall rules (needs root)", t); self.assertIn("never sent", t); self.assertIn("8. Limits", t)
+
+    def test_without_a_posture_reading_the_report_is_unchanged(self):
+        t = self.build(None)
+        self.assertNotIn(rt.POSTURE_TITLE, t); self.assertIn("7. Limits", t)
+
+    def test_the_machines_own_signal_text_is_quoted_not_judged_by_the_wording_guard_but_the_reports_own_words_still_are(self):
+        self.build(POSTURE)                                   # a signal that says 'safe' does not stop the report: it is quoted
+        with self.assertRaisesRegex(ValueError, "safe"):
+            rt.check_wording("this machine is safe", [], [])
+
+    def test_posture_never_enters_the_record(self):
+        r = rec.build_record({**INV, "posture": POSTURE, "ports": POSTURE["ports"]}, [], "deep", "Debian")
+        self.assertNotIn("22", str(r["inventory"].get("host", {}))); self.assertNotIn("SSH accepts", str(r)); self.assertNotIn("posture", r["inventory"])

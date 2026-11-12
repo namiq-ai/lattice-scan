@@ -114,13 +114,13 @@ def offer(payload: dict, input_fn=input, out=None) -> bool:   # `payload` is the
 
 
 def after_scan(items: list[dict], level: str, directory: Path, *, quiet: bool, fmt: str = "table", env: dict | None = None, stdin_tty: bool = False, stderr_tty: bool = False,
-               input_fn=input, out=None, enabled: bool | None = None, os_name: str | None = None, inv: dict | None = None) -> Path | None:
+               input_fn=input, out=None, enabled: bool | None = None, os_name: str | None = None, inv: dict | None = None, posture: dict | None = None) -> Path | None:
     """Build the payload and the report, write the private file (unless there is no candidate), then offer a mail where allowed."""
     if not items:
         return None
     os_w = os_name or _os_here()
     payload = sr.build_payload(items, level, os_w)
-    text = rt.build_report(items, payload)
+    text = rt.build_report(items, payload, posture=posture)
     path = rt.save_report(text, directory, out if not quiet else _Null())      # the local report never depends on the record or the offer
     if should_offer(len(payload["items"]), stdin_tty=stdin_tty, stderr_tty=stderr_tty, env=env if env is not None else {}, quiet=quiet, fmt=fmt, enabled=enabled):
         sendable = rec.build_record(inv, items, level, os_w) if inv is not None else payload      # what a yes would send: the record when the scan has an inventory

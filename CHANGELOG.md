@@ -3,6 +3,8 @@
 ## Unreleased
 
 - New: when a host or project scan finds at least one candidate, the tool writes a plain-text report of it to `reports/` inside the records folder (a new file each run, mode 0600) and prints one `[report] written to ...` line on stderr (not with `--quiet`). It is built on this machine from the scan result; nothing is sent. The report has the summary, the items with why, what was compared, what to check, sources, what was not covered and the limits, in that order, and never says a machine is vulnerable, safe or compromised.
+- New: a host report that has a posture reading adds a section on what listens and what runs on the machine (the socket counts, the signals the posture check raised with attention first, and what could not be read without root). It names ports and programs, so it stays in the local file and is never part of anything that could be sent.
+- Fixed: each item in the local report shows its installed version and the package that matched, and a due date is listed once.
 - Changed: the skill tells an agent that if the tool ever offers to email a report, the question is for the person: an agent never answers it, never consents on anyone's behalf and never reads or opens a mailbox.
 - Internal: the record a mailed report would carry is fixed in code and under test: the inventory the tool already writes (container image names included) and the findings, built from a declared list, never a hostname, address, port, MAC, user, path, password, process list, posture or debug data. Nothing asks to mail anything and nothing is sent in this version.
 
