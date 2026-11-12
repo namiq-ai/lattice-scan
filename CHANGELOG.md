@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- New: a host scan and `recent` end with WHAT THIS RUN COVERED: CVEs read, results by kind, the identity list used (generation, CISA date, age, and how many of CISA's CVEs it matches by package identity: about 23%; the rest by names), installed items read by source, and what a clean result does not speak for (CVEs not read, software no package database lists, Windows and network devices, and Python or Node packages when `--python` or `--node` was not given). `--format json` and `--json` carry the same object as `receipt`, counted from the same table, so the two can never disagree.
+
 - Fixed: the kernel rule no longer matches a kernel flaw when the inventory has no kernel version (an imported inventory); a real host scan always has one.
 - Changed: the corpus applies reviewed aliases, and gains a case for an inventory with no kernel version. With the browser alias (a vendor's stable build joins the browser's identity), the distribution verdict scores precision 0.86 and recall 1.00 on 12 cases (0.67 and 0.67 without it). The one remaining error is a vendor product with no identity row.
 

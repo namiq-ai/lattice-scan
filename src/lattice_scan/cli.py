@@ -1626,6 +1626,8 @@ def use_identities() -> dict:
         r = identity_list.load(cache_dir() / "identities", get)
         rows, aliases = identity_list.join_inputs(r["doc"])
         IDENTITY = {"rows": {row.cve: row for row in rows}, "aliases": aliases,
+                    "list": {"generation": r["generation"], "exploitedAsOf": r["exploitedAsOf"], "ageDays": r["ageDays"], "stale": r["stale"],
+                             "source": r["source"], "cvesWithIdentity": len(rows), "catalogueRows": r.get("kevRows")},
                     "note": f"identity list generation {r['generation']}, CISA as of {r['exploitedAsOf']}, {len(rows)} CVEs with package identities"
                             + (f" ({r['note']})" if r["note"] else "") + (" - OUT OF DATE" if r["stale"] else "")}
         progress(f"[host] {IDENTITY['note']}")
@@ -2466,6 +2468,8 @@ def structured(a, fn) -> int:
         doc["statistics"] = stats
     if RESULT.get("change"):
         doc["change"] = RESULT["change"]
+    if RESULT.get("receipt"):
+        doc["receipt"] = RESULT["receipt"]
     if jfile:
         write_private(Path(jfile), json.dumps(doc, indent=1))   # names this host's software: mode 0600
     if fmt == "json":
@@ -2624,13 +2628,16 @@ def cmd_run(a) -> int:
             + "".join(f" [{e['cve']}: {why}]" for e, why, imp in hits) + (f" not-listed={','.join(not_listed)}" if not_listed else "")
             + (" restart-required" if inv["restartRequired"] else ""))
     show_offline_banner()
-    print(f"host scan {TODAY}: {read} exploited entries read, {len(hits)} candidates (a person must read each against the installed version)")
-    withdrawn = recheck_open(inv)   # an open finding from an older, looser matcher is withdrawn, not kept open for ever
     rows += getattr(a, "extra_rows", [])   # `recent`: the feed's ids that were ruled out on this host and never sent to Lattice
+    rec = receipt(inv, rows, read)
+    RESULT["receipt"] = rec   # the JSON carries the same object the console lines below are written from
+    print(f"host scan {TODAY}: {read} exploited entries read, {len(hits)} candidates (a person must read each against the installed version)")   # wording kept: agents parse it
+    withdrawn = recheck_open(inv)   # an open finding from an older, looser matcher is withdrawn, not kept open for ever
     earlier, earlier_rows = earlier_findings({r[0] for r in rows})   # open findings not read in this run: their saved detail is printed below, from the file, with no call
     print_table(rows)
     print_table(earlier_rows, EARLIER_TITLE)
     print_withdrawn(withdrawn)
+    print_receipt(rec)
     from . import exposure as _exp
     if getattr(a, "exposed", False):
         keep = [h for h in hits if (h[2].get("exposure") or {}).get("class") in _exp.EXPOSED]
@@ -3464,6 +3471,8 @@ def cmd_recent(a) -> int:
     print_table(rows)
     print_table(earlier_rows, EARLIER_TITLE)
     print_withdrawn(withdrawn)
+    RESULT["receipt"] = receipt(inv, rows, 0)
+    print_receipt(RESULT["receipt"])
     for block in details:
         print(block)
     print_earlier(earlier)
@@ -3639,6 +3648,51 @@ def distribution_verdicts(a, lat: "Lattice", inv: dict, found: list, rows: list)
                     row[-1] = f"{imp['versionCheck']['why']} (the distribution's own fixed version)"
     if fixed:
         progress(f"[verdict] {fixed} candidate(s) are already fixed by the distribution or registry: shown as FIXED")
+
+
+def receipt(inv: dict, rows: list, read: int) -> dict:
+    """What this host scan did and did not cover, from the run itself: the one object the console summary and the JSON both come from.
+
+    results      rows by result, counted from the table that is printed (so the numbers can never disagree)
+    identityList the signed list used: generation, CISA date, age, how many of CISA's CVEs it gives package identities for; or why none was used
+    artefacts    installed items read, by source (host packages, inside images, Python, Node)
+    notCovered   what a clean result does not speak for, in plain words"""
+    results: dict = {}
+    for r in rows:
+        results[r[7]] = results.get(r[7], 0) + 1
+    st = IDENTITY or {}
+    lst = st.get("list")
+    if lst:
+        n, m = lst["cvesWithIdentity"], lst.get("catalogueRows") or 0
+        idl = {**lst, "coverage": f"{n} of {m} exploited CVEs ({round(100 * n / m) if m else 0}%) are matched by package identity; the rest by names"}
+    else:
+        idl = {"used": False, "note": st.get("note") or "no identity list for this run (matching by names)"}
+    by_source: dict = {}
+    for x in identity_artefacts(inv):
+        k = "images" if x.source.startswith("image ") else {"host-packages": "hostPackages"}.get(x.source, x.source)
+        by_source[k] = by_source.get(k, 0) + 1
+    not_covered = ["CVEs that were not read in this run (the window, the read limit, or ids not asked for)",
+                   "software the package databases do not list: hand-built programs, vendor appliances, firmware below what the machine reports",
+                   "Windows and network devices, which a Linux host scan cannot see"]
+    if "python" not in inv:
+        not_covered.append("Python packages installed by pip, uv or conda (add --python)")
+    if "nodeGlobal" not in inv:
+        not_covered.append("Node packages installed globally (add --node)")
+    return {"cvesRead": read, "results": results, "identityList": idl, "artefacts": by_source, "notCovered": not_covered}
+
+
+def print_receipt(rec: dict) -> None:
+    """The receipt as lines for a person, written only from the receipt object (the JSON carries the same object)."""
+    idl = rec["identityList"]
+    print("WHAT THIS RUN COVERED")
+    print(f"  CVEs read: {rec['cvesRead']}; results: " + (", ".join(f"{k} {v}" for k, v in sorted(rec["results"].items())) or "none"))
+    if idl.get("generation") is not None:
+        print(f"  identity list: generation {idl['generation']}, CISA as of {idl['exploitedAsOf']} ({idl['ageDays']} days{', OUT OF DATE' if idl['stale'] else ''}); {idl['coverage']}")
+    else:
+        print(f"  identity list: not used ({idl['note']})")
+    print("  installed items read: " + (", ".join(f"{k} {v}" for k, v in sorted(rec["artefacts"].items())) or "none"))
+    print("  not covered: " + "; ".join(rec["notCovered"]))
+    print()
 
 
 def cmd_all(a) -> int:
