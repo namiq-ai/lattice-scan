@@ -13,6 +13,7 @@ import json
 import sys
 from pathlib import Path
 
+from . import scan_record as rec
 from . import scan_report as sr
 from . import scan_report_text as rt
 
@@ -40,7 +41,7 @@ def host_items(hits: list, inv: dict) -> list[dict]:
         ver = next((str(inv.get("packages", {}).get(n) or inv.get("snaps", {}).get(n) or "") for n in names if inv.get("packages", {}).get(n) or inv.get("snaps", {}).get(n)), "")
         pr = imp.get("priority") or {}
         out.append({"cve": e["cve"], "product": e.get("product") or e.get("title", "")[:60], "version": ver, "verdict": (imp.get("versionCheck") or {}).get("verdict", "undetermined"),
-                    "priority": pr.get("level", "read"), "why": list(pr.get("reasons") or []), "listed": e.get("added", ""), "due": e.get("due", ""), "due_status": imp.get("dueStatus", "")})
+                    "priority": pr.get("level", "read"), "why": list(pr.get("reasons") or []), "installed": names[:10], "listed": e.get("added", ""), "due": e.get("due", ""), "due_status": imp.get("dueStatus", "")})
     return out
 
 
@@ -55,6 +56,17 @@ def project_items(results: list[dict]) -> list[dict]:
     return out
 
 
+def project_inventory(results: list[dict]) -> dict:
+    """The inventory of a project scan: the declared package names and versions, never a file name or line."""
+    pk: dict[str, str] = {}
+    for r in results:
+        for h in r.get("candidates", []):
+            for d in h.get("declared") or []:
+                if d.get("name"):
+                    pk[str(d["name"])] = str(d.get("version") or "")
+    return {"os": "project manifests", "packages": pk}
+
+
 def should_offer(n_items: int, *, stdin_tty: bool, stderr_tty: bool, env: dict, quiet: bool, fmt: str = "table", enabled: bool | None = None) -> bool:
     """Only a person at a terminal, with at least one candidate, outside CI, not quiet, in the plain table format."""
     if not (MAIL_AVAILABLE if enabled is None else enabled):
@@ -63,15 +75,23 @@ def should_offer(n_items: int, *, stdin_tty: bool, stderr_tty: bool, env: dict, 
     return n_items > 0 and stdin_tty and stderr_tty and not ci and not quiet and fmt not in ("json", "csv")
 
 
-def preview(payload: dict) -> str:
-    n = len(payload["items"])
+def preview(p: dict) -> str:
+    """What would be sent, in words. A scan record (with an inventory) or the items view alone."""
+    n = len(p["items"])
+    if "inventory" in p:
+        inv = p["inventory"]
+        return (f"A report of this scan can be mailed to you. For this run only, this would be sent: {n} finding(s) (CVE id, product, installed version, verdict, priority, reasons, dates); "
+                f"and the inventory of this machine: {len(inv['packages'])} package(s), {len(inv['snaps'])} snap(s) and {len(inv['images'])} container image name(s) "
+                f"(an image name can name an internal registry), the kernel and OS names, the hardware maker and model, and the scan level and operating-system family"
+                + (f". The record was reduced to what the findings name: {p['cut']} entr(ies) left out." if p.get("cut") else ".")
+                + "\nNothing else leaves this machine: no hostname, address, port, path, user name, process list or posture data.")
     return (f"A report of this scan can be mailed to you. For this run only, this would be sent: {n} item(s), each with its {', '.join(FIELD_NAMES[:4])}; "
             f"and for the run, the {FIELD_NAMES[4]} and the {FIELD_NAMES[5]}"
-            + (f" ({payload['cut']} lower-priority item(s) left out)." if payload.get("cut") else ".")
+            + (f" ({p['cut']} lower-priority item(s) left out)." if p.get("cut") else ".")
             + "\nNothing else leaves this machine: no hostname, address, port, path or user name.")
 
 
-def offer(payload: dict, input_fn=input, out=None) -> bool:
+def offer(payload: dict, input_fn=input, out=None) -> bool:   # `payload` is the record or the items view
     """Ask once for this run. Enter means No. 'd' shows every value that would be sent, then asks again. Nothing is remembered."""
     out = out if out is not None else sys.stderr
     print(preview(payload), file=out)
@@ -86,15 +106,17 @@ def offer(payload: dict, input_fn=input, out=None) -> bool:
 
 
 def after_scan(items: list[dict], level: str, directory: Path, *, quiet: bool, fmt: str = "table", env: dict | None = None, stdin_tty: bool = False, stderr_tty: bool = False,
-               input_fn=input, out=None, enabled: bool | None = None, os_name: str | None = None) -> Path | None:
+               input_fn=input, out=None, enabled: bool | None = None, os_name: str | None = None, inv: dict | None = None) -> Path | None:
     """Build the payload and the report, write the private file (unless there is no candidate), then offer a mail where allowed."""
     if not items:
         return None
-    payload = sr.build_payload(items, level, os_name or _os_here())
+    os_w = os_name or _os_here()
+    payload = sr.build_payload(items, level, os_w)
     text = rt.build_report(items, payload)
-    path = rt.save_report(text, directory, out if not quiet else _Null())
+    path = rt.save_report(text, directory, out if not quiet else _Null())      # the local report never depends on the record or the offer
     if should_offer(len(payload["items"]), stdin_tty=stdin_tty, stderr_tty=stderr_tty, env=env if env is not None else {}, quiet=quiet, fmt=fmt, enabled=enabled):
-        if offer(payload, input_fn, out):
+        sendable = rec.build_record(inv, items, level, os_w) if inv is not None else payload      # what a yes would send: the record when the scan has an inventory
+        if offer(sendable, input_fn, out):
             print("Mailing a report is not available in this version. Your report is saved at " + str(path), file=out if out is not None else sys.stderr)
     return path
 
