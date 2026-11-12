@@ -273,8 +273,8 @@ CVE ids, and the key if you set one. `posture` sends nothing at all, unless you 
 
 **The distribution's own verdict (asks first).** When a host scan matches packages by identity, it asks once whether to send, for each matched
 package only, its source package name, ecosystem, version and OS release (for example `brotli`, `deb`, `1.1.0-2+deb13u1`, `Debian 13`). Lattice answers
-with the distribution's or registry's own fixed version, so a Debian fix backported under an unchanged upstream number shows as `FIXED`, and a pip wheel
-that NVD's range misses shows as in range. `d` at the question lists every item; `a` remembers "always" (`lattice-scan consent forget` removes it);
+with the distribution's or registry's own fixed version, so a Debian fix backported under an unchanged upstream number shows as `FIXED`, and a package
+NVD gives no usable range for gets the registry's verdict instead of "undetermined". `d` at the question lists every item; `a` remembers "always" (`lattice-scan consent forget` removes it);
 with no terminal nothing is sent unless `--yes` is given. Unmatched packages, host name, addresses, paths and the package list are never sent. Say no,
 or set `LATTICE_SCAN_ITEM_VERDICT=off`, and the verdict stays a comparison of upstream numbers, as before.
 

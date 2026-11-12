@@ -129,9 +129,9 @@
   },
   {
    "id": "F5",
-   "mirrors": "pip-installed brotli 1.2.0 wheel, NVD range narrower than the registry fix",
+   "mirrors": "a pip wheel whose version an NVD range misses (a pattern; the brotli 1.2.0 case first taken for it is covered by a second NVD range)",
    "truth": true,
-   "why": "the registry fixed it in 1.2.1; 1.2.0 is affected although NVD's range stops at 1.1.1",
+   "why": "the registry fixed it in 1.2.1; 1.2.0 is affected although the only NVD range given here stops at 1.1.1",
    "inventory": {
     "manager": "dpkg",
     "packages": {},
