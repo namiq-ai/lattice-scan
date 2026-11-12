@@ -4,6 +4,7 @@
 
 - New: a host report that has a posture reading adds a section on what listens and what runs on the machine (the socket counts, the signals the posture check raised with attention first, and what could not be read without root). It names ports and programs, so it stays in the local file and is never part of anything that could be sent.
 - Fixed: each item in the local report shows its installed version and the package that matched, and a due date is listed once.
+- Internal: a new module, `lattice_identity.py`, joins installed items to exploited products by package identity rather than by words (ADR-LATTICE-SCAN-004). Each installed item becomes one record (product id, version, scheme, owner, source). A join is exact or through a reviewed alias; a word match is only a lead. A finding needs an identity join, a version inside a range in the item's own scheme, and a component that is not proven absent: an `openssh-client` alone no longer stands for a server-side OpenSSH flaw. Nothing uses it yet; scans behave as before until the signed identity list exists. `VENDORED.sha256` now also pins this module for graph-mcp's copy.
 
 ## 0.9.0 — 2026-11-12
 
