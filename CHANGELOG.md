@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- New: a host report that has a posture reading adds a section on what listens and what runs on the machine (the socket counts, the signals the posture check raised with attention first, and what could not be read without root). It names ports and programs, so it stays in the local file and is never part of anything that could be sent.
+- Fixed: each item in the local report shows its installed version and the package that matched, and a due date is listed once.
+
 ## 0.9.0 — 2026-11-12
 
 - New: macOS. `--cve`, `recent` and `--refresh --inventory` now read a Mac from files: the system version (and a security-improvement letter such as `(a)` if one is installed), the apps in /Applications and /System/Applications, and the Homebrew Cellar folder names. Nothing is run (`brew` never), no protected folder is opened, nothing extra is sent. A CVE that NVD files under `apple/macos` is checked against the Mac's own version; a release line Apple lists no range for, and a Mac with a letter, are "undetermined", never "fixed".
