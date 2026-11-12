@@ -140,3 +140,100 @@ class SendFlow(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FreeKey(unittest.TestCase):
+    """OCO-6073 and limits ADR D5: no key, so the terms word is typed, the same Confirm gives the key, and the key is stored and never printed."""
+    VERSION = "lattice-beta-synthetic"
+
+    def server(self, **kw):
+        s = Server(**kw)
+        base = s.__call__
+
+        def post(url, body, headers=None, timeout=30):
+            name = url.rsplit("/", 1)[-1]
+            if name == "claim" and s.claims and s.claims[0] == "confirmed":
+                s.claims.pop(0)
+                s.calls.append((name, body, headers or {}))
+                return 200, {"state": "confirmed", "token": "tok", "key": {"key": KEY, "key_id": "k_new", "tier": "trial_accepted", "expires_at": "2027-02-10"}}
+            return base(url, body, headers, timeout)
+        s.post = post
+        return s
+
+    def run_no_key(self, s, answers, **kw):
+        c, out, seq, stored = Clock(), io.StringIO(), list(answers), []
+        ok = send.send_report(RECORD, None, "0.9.2", lambda p="": seq.pop(0) if seq else "", out, post=s.post, sleep=c.sleep, clock=c, terms_version=lambda: self.VERSION,
+                              store_key=lambda k: stored.append(k) or True, interactive=kw.get("interactive", True))
+        return ok, out.getvalue(), stored
+
+    def test_the_word_agree_then_one_confirm_gives_the_key_and_sends_the_report(self):
+        s = self.server()
+        ok, text, stored = self.run_no_key(s, ["me@company.example", "agree"])
+        self.assertTrue(ok)
+        self.assertEqual(stored, [KEY])
+        self.assertNotIn(KEY, text)                                          # the key is never printed
+        self.assertIn("key id k_new, tier trial_accepted, expires 2027-02-10", text)
+        req = [c for c in s.calls if c[0] == "request"][0]
+        self.assertEqual(req[1]["terms"], {"version": self.VERSION, "typed": "agree"})
+        self.assertEqual([c[1]["address"] for c in s.calls if c[0] == "claim"][0], "me@company.example")      # the claim names its address
+        self.assertEqual(s.calls[-1][0], "submit")
+        self.assertEqual(s.calls[-1][2]["Authorization"], "Bearer " + KEY)                                  # the new key sends the record
+        self.assertIn("A mail will be sent to me@company.example.", text)
+
+    def test_anything_but_the_word_stops_before_any_request(self):
+        for typed in ("", "y", "yes", "ok", "agreed", "I agree"):
+            s = self.server()
+            ok, text, stored = self.run_no_key(s, ["me@company.example", typed])
+            self.assertFalse(ok)
+            self.assertEqual(s.calls, [])
+            self.assertEqual(stored, [])
+            self.assertIn("terms were not accepted", text)
+
+    def test_a_pipe_ci_or_agent_run_never_gets_the_question(self):
+        s = self.server()
+        ok, text, _ = self.run_no_key(s, ["me@company.example", "agree"], interactive=False)
+        self.assertFalse(ok)
+        self.assertEqual(s.calls, [])
+        self.assertNotIn("Type the word agree", text)
+
+    def test_unreadable_terms_send_nothing(self):
+        s = self.server()
+        c, out = Clock(), io.StringIO()
+        seq = ["me@company.example", "agree"]
+        ok = send.send_report(RECORD, None, "0.9.2", lambda p="": seq.pop(0), out, post=s.post, sleep=c.sleep, clock=c, terms_version=lambda: (_ for _ in ()).throw(RuntimeError("down")), interactive=True)
+        self.assertFalse(ok)
+        self.assertEqual(s.calls, [])
+
+    def test_a_refusal_with_a_reason_is_said_and_the_neutral_one_is_not(self):
+        s = self.server()
+        base = s.post
+        s.post = lambda url, body, headers=None, timeout=30: (200, {"claim": None, "message": "This organisation already holds its keys. For more, write to contact@namiq.io.", "reason": "organisation"}) if url.endswith("/request") else base(url, body, headers, timeout)
+        err = io.StringIO()
+        old, sys.stderr = sys.stderr, err
+        try:
+            ok, text, _ = self.run_no_key(s, ["me@company.example", "agree"])
+        finally:
+            sys.stderr = old
+        self.assertFalse(ok)
+        self.assertIn("already holds its keys", err.getvalue())
+        self.assertNotIn("claim", [c[0] for c in s.calls])
+
+    def test_a_key_that_cannot_be_stored_is_not_printed_either(self):
+        s = self.server()
+        c, out, seq = Clock(), io.StringIO(), ["me@company.example", "agree"]
+        ok = send.send_report(RECORD, None, "0.9.2", lambda p="": seq.pop(0), out, post=s.post, sleep=c.sleep, clock=c, terms_version=lambda: self.VERSION, store_key=lambda k: False, interactive=True)
+        self.assertTrue(ok)
+        self.assertNotIn(KEY, out.getvalue())
+        self.assertIn("could not be stored", out.getvalue())
+
+    def test_get_key_with_no_details_is_the_same_flow_and_is_off_in_this_version(self):
+        out = io.StringIO()
+        self.assertFalse(send.KEY_FLOW_AVAILABLE)
+        self.assertEqual(send.get_key_interactive(out=out), 2)
+        self.assertIn("not available in this version", out.getvalue())
+        s = self.server()
+        c, out, seq, stored = Clock(), io.StringIO(), ["me@company.example", "agree"], []
+        rc = send.get_key_interactive(lambda p="": seq.pop(0), out, post=s.post, sleep=c.sleep, clock=c, terms_version=lambda: self.VERSION, store_key=lambda k: stored.append(k) or True, interactive=True)
+        self.assertEqual((rc, stored), (0, [KEY]))
+        self.assertNotIn(KEY, out.getvalue())
+        self.assertNotIn("submit", [x[0] for x in s.calls])                      # a key only: no record is sent
