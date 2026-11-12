@@ -827,6 +827,7 @@ from lattice_scan import lattice_version as lv  # noqa: E402   # the one impleme
 from lattice_scan import lattice_identity as li  # noqa: E402   # the identity join: an installed package meets a CVE through its package identity
 from lattice_scan import identities as identity_list  # noqa: E402   # the signed list of package identities per exploited CVE
 from lattice_scan import pyenv  # noqa: E402   # Python packages installed outside the OS package manager (--python)
+from lattice_scan import nodeenv  # noqa: E402   # Node packages installed globally (--node)
 
 
 def run(cmd: list[str]) -> str:
@@ -1559,6 +1560,10 @@ def inventory() -> dict:
     if env("PYTHON") in ("1", "true", "yes"):
         python = pyenv.collect([x for x in env("PYTHON_PATHS").split(os.pathsep) if x])
         progress(f"[host] python: {sum(len(v) for v in python.values())} package(s) in {len(python)} environment(s) outside the package manager")
+    node_global = {}
+    if env("NODE") in ("1", "true", "yes"):
+        node_global = nodeenv.collect()
+        progress(f"[host] node: {sum(len(v) for v in node_global.values())} package(s) installed globally in {len(node_global)} folder(s)")
     snaps = {f[0]: f[1] for f in (l.split() for l in run(["snap", "list"]).splitlines()[1:]) if len(f) >= 2}
     progress(f"[host] snaps: {len(snaps)}")
     images = sorted({i for i in run(["docker", "ps", "--format", "{{.Image}}"]).splitlines() if i})
@@ -1576,7 +1581,7 @@ def inventory() -> dict:
     progress("[host] hardware: " + (" ".join(x for x in (host.get("manufacturer"), host.get("model"), host.get("version")) if x) or "not reported by this machine"))
     IMAGE_SCAN.clear()
     details = image_details(images)
-    inv = {"kernel": kernel, "os": osr, "manager": manager if pk else "", "host": host, "packages": pk, "sources": srcs, **({"osRelease": os_release} if os_release else {}), **({"python": python} if python else {}), "snaps": snaps, "images": images, "imageDetails": details, "node": run(["node", "-v"]).strip(),
+    inv = {"kernel": kernel, "os": osr, "manager": manager if pk else "", "host": host, "packages": pk, "sources": srcs, **({"osRelease": os_release} if os_release else {}), **({"python": python} if python else {}), **({"nodeGlobal": node_global} if node_global else {}), "snaps": snaps, "images": images, "imageDetails": details, "node": run(["node", "-v"]).strip(),
            "restartRequired": Path("/var/run/reboot-required").exists()}
     if IMAGE_SCAN:
         inv["imageScan"] = dict(IMAGE_SCAN)
@@ -1584,7 +1589,7 @@ def inventory() -> dict:
     inv["hash"] = hashlib.sha256(json.dumps({k: inv[k] for k in ("kernel", "packages", "snaps", "images", "node")}
                                             | {"host": {k: host.get(k) for k in ("manufacturer", "model", "version", "biosVersion")},
                                                "imageDetails": {r: [d.get("id"), d.get("os"), d.get("osVersion"), len(d.get("packages") or {})] for r, d in details.items()}}
-                                            | ({"python": python} if python else {}),   # absent without --python, so the hash of a plain run is unchanged
+                                            | ({"python": python} if python else {}) | ({"nodeGlobal": node_global} if node_global else {}),   # absent without the flags: a plain run's hash is unchanged
                                             sort_keys=True).encode()).hexdigest()[:12]
     return inv
 
@@ -1643,6 +1648,11 @@ def identity_artefacts(inv: dict) -> list:
         place = pyenv.label(site)
         for name, ver in sorted(pk.items()):
             arts.append(li.Artefact(lv.pid(name, "pypi"), str(ver), "pep440", "pip", "python", f"{name} (python {place})"))
+    for root, pk in sorted((inv.get("nodeGlobal") or {}).items()):   # --node: npm -g installs and their dependencies
+        for name, vers in sorted(pk.items()):
+            for ver in str(vers).split("|"):
+                if ver:
+                    arts.append(li.Artefact(lv.pid(name, "npm"), ver, "semver", "npm", "node", f"{name} (npm global)"))
     for ref, d in sorted((inv.get("imageDetails") or {}).items()):
         mgr = (d or {}).get("packageManager") or ""
         if mgr not in li.MANAGER_ECOSYSTEM:
@@ -4102,6 +4112,7 @@ def _main() -> int:
     p.add_argument("--list", action="store_true", help="with --refresh or when the inventory is shown: print every package, snap and image instead of totals")
     p.add_argument("--deep", action="store_true", help="deep inventory: open every local image, not only running ones, and list the Python/Node/Java/Ruby packages inside them (minutes). Default is quick")
     p.add_argument("--python", action="store_true", help="also read the Python packages installed outside the OS package manager (pip, uv, conda; system, user and virtual environments in the home folder). Metadata files only; nothing is run or sent")
+    p.add_argument("--node", action="store_true", help="also read Node packages installed globally (npm -g into the system, /usr/local, ~/.npm-global or nvm), with their dependencies, from package.json files only; nothing is run or sent")
     p.add_argument("--python-path", action="append", metavar="DIR", help="also read this virtual environment or site-packages folder (repeatable; implies --python)")
     p.add_argument("--refresh", action="store_true", help="collect the inventory again now and print all of it; with ids, also re-read them. Alone it makes no Lattice call")
     p.add_argument("--format", choices=["console", "json", "csv"], default=argparse.SUPPRESS, help="what to print: console (default), json or csv. The result table only; progress stays on stderr")
@@ -4191,6 +4202,8 @@ def _main() -> int:
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # a stopped run still cleans up (atexit); only SIGKILL cannot, and the next run sweeps what it left
     if getattr(a, "deep", False):
         os.environ["LATTICE_SCAN_LEVEL"] = "deep"
+    if getattr(a, "node", False):
+        os.environ["LATTICE_SCAN_NODE"] = "1"
     if getattr(a, "python", False) or getattr(a, "python_path", None):
         os.environ["LATTICE_SCAN_PYTHON"] = "1"
     if getattr(a, "python_path", None):

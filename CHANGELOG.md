@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- New: `--node` (or `LATTICE_SCAN_NODE=1`) also reads Node packages installed globally (`npm install -g` into the system prefix, /usr/local, ~/.npm-global or nvm), with the dependencies nested below them, from each `package.json` only. Nothing is run or fetched. Each joins the identity list as `npm:NAME`. Without the flag nothing is read.
+
 - Fixed: the kernel rule no longer matches a kernel flaw when the inventory has no kernel version (an imported inventory); a real host scan always has one.
 - Changed: the corpus applies reviewed aliases, and gains a case for an inventory with no kernel version. With the browser alias (a vendor's stable build joins the browser's identity), the distribution verdict scores precision 0.86 and recall 1.00 on 12 cases (0.67 and 0.67 without it). The one remaining error is a vendor product with no identity row.
 
