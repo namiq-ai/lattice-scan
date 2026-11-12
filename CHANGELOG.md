@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Internal: a new module, `lattice_identity.py`, joins installed items to exploited products by package identity rather than by words (ADR-LATTICE-SCAN-004). Each installed item becomes one record (product id, version, scheme, owner, source). A join is exact or through a reviewed alias; a word match is only a lead. A finding needs an identity join, a version inside a range in the item's own scheme, and a component that is not proven absent: an `openssh-client` alone no longer stands for a server-side OpenSSH flaw. Nothing uses it yet; scans behave as before until the signed identity list exists. `VENDORED.sha256` now also pins this module for graph-mcp's copy.
+
 ## 0.9.0 — 2026-11-12
 
 - New: macOS. `--cve`, `recent` and `--refresh --inventory` now read a Mac from files: the system version (and a security-improvement letter such as `(a)` if one is installed), the apps in /Applications and /System/Applications, and the Homebrew Cellar folder names. Nothing is run (`brew` never), no protected folder is opened, nothing extra is sent. A CVE that NVD files under `apple/macos` is checked against the Mac's own version; a release line Apple lists no range for, and a Mac with a letter, are "undetermined", never "fixed".
@@ -9,7 +13,6 @@
 - Changed: the "a scan ran" note gains one field, the operating-system family: the word `linux` or `macos`, no version, name or build. It is for counting Mac scans. The notice that explains the note is shown once more. Still off with `LATTICE_SCAN_NO_REPORT=1`. namiq.io accepts the field before any tool sends it.
 - New: when a host or project scan finds at least one candidate, the tool writes a plain-text report of it to `reports/` inside the records folder (a new file each run, mode 0600) and prints one `[report] written to ...` line on stderr (not with `--quiet`). It is built on this machine from the scan result; nothing is sent. The report has the summary, the items with why, what was compared, what to check, sources, what was not covered and the limits, in that order, and never says a machine is vulnerable, safe or compromised.
 - Changed: the skill tells an agent that if the tool ever offers to email a report, the question is for the person: an agent never answers it, never consents on anyone's behalf and never reads or opens a mailbox.
-- Internal: a new module, `lattice_identity.py`, joins installed items to exploited products by package identity rather than by words (ADR-LATTICE-SCAN-004). Each installed item becomes one record (product id, version, scheme, owner, source). A join is exact or through a reviewed alias; a word match is only a lead. A finding needs an identity join, a version inside a range in the item's own scheme, and a component that is not proven absent: an `openssh-client` alone no longer stands for a server-side OpenSSH flaw. Nothing uses it yet; scans behave as before until the signed identity list exists. `VENDORED.sha256` now also pins this module for graph-mcp's copy.
 - Internal: the record a mailed report would carry is fixed in code and under test: the inventory the tool already writes (container image names included) and the findings, built from a declared list, never a hostname, address, port, MAC, user, path, password, process list, posture or debug data. Nothing asks to mail anything and nothing is sent in this version.
 
 ## 0.8.1 — 2026-11-11
