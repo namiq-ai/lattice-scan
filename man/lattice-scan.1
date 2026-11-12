@@ -46,8 +46,9 @@ command checks what a project's files
 .B declare
 it depends on, and needs no installation on the machine it runs from.
 .SH HOST MODE
-Host mode reads Linux sources only. On macOS every host command stops with a message and exit status 3, because a Mac would otherwise show
-"no match", which does not mean safe. \fBproject\fR and \fBenrich\fR read no host and work on a Mac.
+On Linux, host mode reads the package databases. On macOS it reads the system version, the apps in /Applications and /System/Applications and the Homebrew Cellar folder names, from files only
+(\fBbrew\fR is never run). A fix is judged per macOS release; a release Apple lists no range for, or a Mac with a security\-improvement letter, is "undetermined". \fB\-\-discover \-\-all\fR,
+\fBposture\fR and \fBinventory \-\-share\fR stop on macOS with exit status 3.
 .PP
 With one or more
 .B \-\-cve

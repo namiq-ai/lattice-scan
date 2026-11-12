@@ -14,9 +14,11 @@ Standard library only: no runtime dependency. Python 3.9 or newer. [Self-audit](
 pipx install lattice-scan                    # or: pip install lattice-scan
 ```
 
-**Platforms.** Scanning a host works on Linux (Debian and Ubuntu are tested). On a Mac the tool installs and runs, but it cannot read a Mac yet: a host scan stops with
-"This computer runs macOS ... would not mean safe" and exit 3 instead of reporting "no match". `lattice-scan project FOLDER` and `lattice-scan enrich CVE-...` work
-on a Mac. Mac support is planned.
+**Platforms.** Linux (Debian and Ubuntu are tested) and macOS 12 and later. On a Mac the tool reads the operating system version, the apps in /Applications and
+/System/Applications, and the Homebrew Cellar folder names, all from files; it never runs `brew` and never opens a folder macOS protects with a permission
+dialog. For a Mac, a fix is judged per macOS release: Apple lists fixes only for the releases it still patches, so an older release, or a Mac with a
+background security improvement letter such as `(a)`, is reported as "undetermined", never as fixed. `--discover --all`, `posture` and `inventory --share` do not read a Mac yet
+and stop with a message and exit 3. macOS support is new and has been tried on hosted test machines only: treat a result as a lead, and tell us what you see.
 
 On Debian and Ubuntu, from the signed apt repository:
 

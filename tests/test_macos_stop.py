@@ -1,4 +1,4 @@
-"""On a Mac the host scan stops with a plain message (exit 3) instead of reporting 'no match', which a reader takes as 'safe'."""
+"""The parts of the host scan that cannot read a Mac yet (--discover --all, posture, inventory --share) stop with a plain message (exit 3) instead of reporting 'no match'."""
 import io
 import os
 import sys
@@ -24,15 +24,15 @@ class MacosStop(EntryBase):
         self.darwin()
         err = io.StringIO()
         with redirect_stderr(err), self.assertRaises(SystemExit) as cm:
-            cli.inventory()
+            cli.stop_on_macos()
         self.assertEqual(cm.exception.code, 3)
         self.assertIn("runs macOS", err.getvalue())
         self.assertIn("would not mean safe", err.getvalue())
-        self.assertIn("lattice-scan project", err.getvalue())
+        self.assertIn("project <folder>", err.getvalue())
 
     def test_every_host_command_stops_and_never_prints_a_result(self):
         self.darwin()
-        for argv in (("--cve", "CVE-2099-0001"), ("recent",), ("--discover", "--all", "--yes"), ("posture",), ("--refresh", "--inventory")):
+        for argv in (("--discover", "--all", "--yes"), ("posture",), ("inventory", "--share")):
             with self.subTest(argv=argv):
                 out, err = io.StringIO(), io.StringIO()
                 sys.argv = ["lattice-scan", *argv]

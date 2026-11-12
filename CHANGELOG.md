@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- New: macOS. `--cve`, `recent` and `--refresh --inventory` now read a Mac from files: the system version (and a security-improvement letter such as `(a)` if one is installed), the apps in /Applications and /System/Applications, and the Homebrew Cellar folder names. Nothing is run (`brew` never), no protected folder is opened, nothing extra is sent. A CVE that NVD files under `apple/macos` is checked against the Mac's own version; a release line Apple lists no range for, and a Mac with a letter, are "undetermined", never "fixed".
+- Changed: on a Mac, `--discover --all`, `posture` and `inventory --share` still stop with exit 3 and say what works.
+
+## Unreleased
+
 - New: when a host or project scan finds at least one candidate, the tool writes a plain-text report of it to `reports/` inside the records folder (a new file each run, mode 0600) and prints one `[report] written to ...` line on stderr (not with `--quiet`). It is built on this machine from the scan result; nothing is sent. The report has the summary, the items with why, what was compared, what to check, sources, what was not covered and the limits, in that order, and never says a machine is vulnerable, safe or compromised.
 - Internal: the data a mailed report would carry is fixed in code and under test (the CVE id, product, installed upstream version, verdict, scan level and operating-system family, and nothing else), but nothing asks to mail anything and nothing is sent in this version.
 

@@ -512,7 +512,7 @@ def queue_load() -> list[dict]:
         lines = report_queue_path().read_text().splitlines()
     except OSError:
         return out
-    limit = (dt.date.today() - dt.timedelta(days=QUEUE_DAYS)).isoformat()
+    limit = (dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=QUEUE_DAYS)).isoformat()
     for line in lines:
         try:
             row = json.loads(line)
@@ -1408,8 +1408,8 @@ def image_details(running: list[str]) -> dict[str, dict]:
     return out
 
 
-MACOS_STOP = ("This computer runs macOS. Host scanning reads Linux package databases and cannot see a Mac yet, so it would report nothing, and that would not mean safe.\n"
-              "These still work here: lattice-scan project <folder>, and lattice-scan enrich CVE-... (look up ids you already have).")
+MACOS_STOP = ("This computer runs macOS. This part of the host scan (--discover --all, posture, inventory --share) cannot see a Mac yet, so it would report nothing, and that would not mean safe.\n"
+              "These work on a Mac: lattice-scan --cve CVE-..., recent, enrich, and project <folder>. They check macOS itself, its apps and Homebrew.")
 
 
 def stop_on_macos() -> None:
@@ -1417,6 +1417,12 @@ def stop_on_macos() -> None:
     if sys.platform == "darwin":
         print(MACOS_STOP, file=sys.stderr)
         raise SystemExit(3)
+
+
+def macos_inventory(macos) -> dict:
+    inv = macos.collect(progress=progress)
+    inv["hash"] = hashlib.sha256(json.dumps({k: inv[k] for k in ("kernel", "packages", "snaps", "images", "node", "os")}, sort_keys=True).encode()).hexdigest()[:12]
+    return inv
 
 
 def inventory() -> dict:
@@ -1428,7 +1434,9 @@ def inventory() -> dict:
         inv.setdefault("imageDetails", {})
         progress("[host] inventory read from a fixed file (LATTICE_SCAN_INVENTORY), nothing collected from this machine")
         return inv
-    stop_on_macos()
+    if sys.platform == "darwin":
+        from . import macos
+        return macos_inventory(macos)
     pk: dict[str, str] = {}
     manager = "dpkg"
     progress("[host] collecting installed packages ...")
@@ -1501,6 +1509,11 @@ def candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str]] | None
     basis = "product"
     if not product:
         product, basis = entry.get("title", "").lower(), "title"
+    if inv.get("family") == "macos":
+        from . import macos
+        if macos.macos_ranges(entry):   # NVD files this CVE under apple/macos: it is about the operating system, whatever CISA's product name says
+            o = inv.get("osInfo") or {}
+            return "NVD names apple/macos for this CVE", [f"macOS {o.get('version', '')}" + (f" {o['extra']}" if o.get("extra") else "")], [o.get("version", "")]
     if (vendor == "linux" and product == "kernel" or "linux kernel" in product) and inv.get("family") != "macos":   # a Mac's Darwin number is not a Linux kernel number
         return f"kernel in use is {inv['kernel']}", [f"kernel {inv['kernel']}"], [inv["kernel"]]
     if product in ("node.js", "nodejs") and inv.get("node"):
@@ -1682,6 +1695,26 @@ def version_check(entry: dict, vers: list[str]) -> dict:
     return {"verdict": "outside-range", "why": f"{'; '.join(checked)} is outside all {len(mine)} listed range(s): " + ", ".join(fmt_range(r) for r in mine[:6])}
 
 
+def mac_version_check(entry: dict, inv: dict) -> dict:
+    """The Mac's own version against NVD's apple/macos ranges, with the release-line and security-improvement-letter rules of macos.judge."""
+    from . import macos
+    o = inv.get("osInfo") or {}
+    ranges = macos.macos_ranges(entry)
+
+    def check(version: str, rs: list[dict]) -> dict:
+        v = upstream(version)
+        if v is None:
+            return {"verdict": "undetermined", "why": f"macOS {version}: no plain version number"}
+        res = [in_range(v, r) for r in rs]
+        if any(res):
+            r = rs[res.index(True)]
+            return {"verdict": "in-range", "why": f"macOS {version} is inside {r['product']} {fmt_range(r)}"}
+        if any(x is None for x in res):
+            return {"verdict": "undetermined", "why": f"macOS {version}: some range could not be compared"}
+        return {"verdict": "outside-range", "why": f"macOS {version} is outside all {len(rs)} listed range(s): " + ", ".join(fmt_range(r) for r in rs[:6])}
+    return macos.judge(o.get("version", ""), o.get("extra", ""), ranges, check)
+
+
 def changelog_mentions(cve: str, installed: list[str], inv: dict) -> list[str]:
     """Installed Debian packages whose own changelog names this CVE: the local evidence that a distro backported the fix under an unchanged upstream number."""
     import gzip
@@ -1773,7 +1806,7 @@ def impact(entry: dict, inv: dict, installed: list[str], vers: list[str]) -> dic
         w = words(prod)
         if w and all(x in have for x in w):
             nvd.append(slug)
-    out = {"installed": installed, "nvdAlsoNames": nvd[:5], "versionCheck": version_check(entry, vers),
+    out = {"installed": installed, "nvdAlsoNames": nvd[:5], "versionCheck": mac_version_check(entry, inv) if installed and installed[0].startswith("macOS ") and inv.get("family") == "macos" else version_check(entry, vers),
            "changelogNamesCve": changelog_mentions(entry["cve"], installed, inv),
            "action": entry.get("action", "")[:400], "listed": entry["added"], "due": entry["due"]}
     if entry["added"]:
@@ -3044,6 +3077,7 @@ def cmd_share(a) -> int:
     """`inventory --share`: the host's important software as one copyable block (see share.py for the format and the rule). Nothing leaves the machine except, unless
     --no-feed, one request for namiq.io's public list, which carries no host data. The block goes to stdout alone; the guidance goes to stderr."""
     from . import posture, share
+    stop_on_macos()
     private_dir()
     inv = inventory()
     ports: list[dict] = []
@@ -3259,6 +3293,7 @@ def cmd_all(a) -> int:
     """`--discover --all`: the old software the recent list cannot cover. The items that matter on this machine (what listens or runs, well-known server software, the
     kernel) are shown, confirmed, and sent one at a time to Lattice, which answers from its graph. The exposure label is joined here, from this machine's own listeners."""
     from . import exposure, items
+    stop_on_macos()
     private_dir()
     inv = inventory()
     post = posture_data()
