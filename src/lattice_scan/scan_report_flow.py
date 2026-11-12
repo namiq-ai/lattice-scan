@@ -92,7 +92,7 @@ def preview(p: dict) -> str:
                 f"and the inventory of this machine: {len(inv['packages'])} package(s), {len(inv['snaps'])} snap(s) and {len(set(inv['images']) | set(inv.get('imageDetails', {})))} container image name(s) "
                 f"(an image name can name an internal registry), the kernel and OS names, the hardware maker and model, and the scan level and operating-system family"
                 + (f". The record was reduced to what the findings name: {p['cut']} entr(ies) left out." if p.get("cut") else ".")
-                + "\nNothing else leaves this machine: no hostname, address, port, path, user name, process list or posture data.")
+                + "\nNothing else leaves this machine: no hostname, address, port, path, user name or process list. You are asked separately about the runtime posture.")
     return (f"A report of this scan can be mailed to you. For this run only, this would be sent: {n} item(s), each with its {', '.join(FIELD_NAMES[:4])}; "
             f"and for the run, the {FIELD_NAMES[4]} and the {FIELD_NAMES[5]}"
             + (f" ({p['cut']} lower-priority item(s) left out)." if p.get("cut") else ".")
@@ -113,6 +113,41 @@ def offer(payload: dict, input_fn=input, out=None) -> bool:   # `payload` is the
         return False
 
 
+POSTURE_QUESTION = """Also include this machine's runtime posture?
+Submit for making the report:
+  - listening ports (number, protocol, program name, how widely open),
+    firewall and SSH settings (not the rules), programs no package owns
+Not submitted: addresses, user names, file paths, command lines,
+history, firewall rules, secrets.
+This lets the report cover exposure. Without it, it covers software only.
+Read with your current permissions only."""
+
+
+def ask_posture(block: dict, input_fn=input, out=None) -> bool:
+    """The second question, asked only after a yes to the report. Default No, its own details ('d' shows the block that would be sent), this run only, nothing remembered."""
+    out = out if out is not None else sys.stderr
+    print(POSTURE_QUESTION, file=out)
+    while True:
+        a = (input_fn("Include the posture? [y/N/d(etails)] ") or "").strip().lower()
+        if a in ("y", "yes"):
+            return True
+        if a in ("d", "details"):
+            print(json.dumps(block, indent=1), file=out)
+            continue
+        return False
+
+
+def record_after_yes(inv: dict | None, items: list[dict], level: str, os_name: str, payload: dict, posture: dict | None, input_fn=input, out=None) -> dict:
+    """What a yes to the report would send: the record, with the posture block only when the person also says yes to the second question.
+    A project scan (no machine inventory) or a posture that could not be read has no second question; the record then has no posture key."""
+    if inv is None:
+        return payload
+    if posture is None:
+        return rec.build_record(inv, items, level, os_name)
+    block = rec.posture_block(posture)
+    return rec.build_record(inv, items, level, os_name, posture=posture) if ask_posture(block, input_fn, out) else rec.build_record(inv, items, level, os_name)
+
+
 def after_scan(items: list[dict], level: str, directory: Path, *, quiet: bool, fmt: str = "table", env: dict | None = None, stdin_tty: bool = False, stderr_tty: bool = False,
                input_fn=input, out=None, enabled: bool | None = None, os_name: str | None = None, inv: dict | None = None, posture: dict | None = None) -> Path | None:
     """Build the payload and the report, write the private file (unless there is no candidate), then offer a mail where allowed."""
@@ -123,10 +158,16 @@ def after_scan(items: list[dict], level: str, directory: Path, *, quiet: bool, f
     text = rt.build_report(items, payload, posture=posture)
     path = rt.save_report(text, directory, out if not quiet else _Null())      # the local report never depends on the record or the offer
     if should_offer(len(payload["items"]), stdin_tty=stdin_tty, stderr_tty=stderr_tty, env=env if env is not None else {}, quiet=quiet, fmt=fmt, enabled=enabled):
-        sendable = rec.build_record(inv, items, level, os_w) if inv is not None else payload      # what a yes would send: the record when the scan has an inventory
-        if offer(sendable, input_fn, out):
+        first = rec.build_record(inv, items, level, os_w) if inv is not None else payload      # what a yes would send: the record when the scan has an inventory
+        if offer(first, input_fn, out):
+            record_after_yes(inv, items, level, os_w, payload, posture if kind_is_host(inv) else None, input_fn, out)   # the record a send would use; nothing is sent in this version
             print("Mailing a report is not available in this version. Your report is saved at " + str(path), file=out if out is not None else sys.stderr)
     return path
+
+
+def kind_is_host(inv: dict | None) -> bool:
+    """A project scan's inventory is the declared packages only (`os` is 'project manifests'); the runtime posture belongs to a host scan."""
+    return isinstance(inv, dict) and inv.get("os") != "project manifests"
 
 
 class _Null:
