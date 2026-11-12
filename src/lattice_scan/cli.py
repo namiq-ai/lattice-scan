@@ -2680,7 +2680,7 @@ def report_flow(kind: str, found, inv, a) -> None:
         items = srf.host_items(found, inv) if kind == "host" else srf.project_items(found)
         srf.after_scan(items, "deep" if getattr(a, "deep", False) else "quick", OUT / "reports", quiet=not PROGRESS, fmt=getattr(a, "format", "table") or "table",
                        env=dict(os.environ), stdin_tty=sys.stdin.isatty(), stderr_tty=sys.stderr.isatty(), inv=inv if kind == "host" else srf.project_inventory(found),
-                       posture=posture_data() if kind == "host" else None)
+                       posture=posture_data() if kind == "host" else None, key=os.environ.get("LATTICE_API_KEY"))
     except Exception as err:   # noqa: BLE001 - the scan's answer matters more than its report
         dbg(f"report: not written: {err}")
 
