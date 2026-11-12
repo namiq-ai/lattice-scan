@@ -5,7 +5,7 @@ A case is a Candidate when the matcher returns a match that is not a lead and wh
 to act on. Each case's `truth` was written by hand with its reason. Two modes are scored, so a release states both what it does and what it replaced:
 
   verdict    identity, then the consented distribution verdict: the client's real step (cli.distribution_verdicts) against a stand-in for graph_affects
-             that answers from each case's `fixes` by the server's rule (graph-mcp affects.fix_verdict, OCO-6106). What a person who says yes gets.
+             that answers from each case's `fixes` by the server's rule (graph-mcp affects.fix_verdict). What a person who says yes gets.
   identity   the signed identity list's rows are used, the version compared as upstream numbers (what a person who says no gets)
   names      no list: matching by names only (the behaviour before the identity join, 0.9.0 and earlier)
 
