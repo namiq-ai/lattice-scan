@@ -5,6 +5,8 @@ import sys, unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src")); sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tmpfold  # noqa: E402  (one temp root per test run, removed at exit)
 from lattice_scan import share  # noqa: E402
 from test_agent_entry import Entry, EntryBase, feed  # noqa: E402
 
@@ -103,7 +105,7 @@ class ShareCommand(EntryBase):
 
     def test_all_writes_a_private_file_and_never_prints_it(self):
         import os, tempfile
-        d = tempfile.mkdtemp()
+        d = tmpfold.mkdtemp()
         f = os.path.join(d, "all.txt")
         rc, out, err = self.run_cli("inventory", "--share", "--no-feed", "--all", f)
         self.assertEqual(rc, 0, err)

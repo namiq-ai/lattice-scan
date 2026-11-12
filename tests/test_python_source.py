@@ -7,6 +7,8 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tmpfold  # noqa: E402  (one temp root per test run, removed at exit)
 from lattice_scan import cli, pyenv, lattice_identity as li  # noqa: E402
 
 
@@ -20,7 +22,7 @@ def dist(site: Path, name: str, version: str, installer="pip", folder: str = "")
 
 class Reading(unittest.TestCase):
     def setUp(self):
-        self.home = Path(tempfile.mkdtemp())
+        self.home = Path(tmpfold.mkdtemp())
         p = mock.patch.object(pyenv, "system_site_dirs", lambda home=None: [])   # this machine's own /usr/local installs are not the test's (CI runners have many)
         p.start()
         self.addCleanup(p.stop)

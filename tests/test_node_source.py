@@ -7,6 +7,8 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tmpfold  # noqa: E402  (one temp root per test run, removed at exit)
 from lattice_scan import cli, nodeenv, lattice_identity as li  # noqa: E402
 
 
@@ -18,7 +20,7 @@ def pkg(folder: Path, name: str, version: str) -> Path:
 
 class Reading(unittest.TestCase):
     def setUp(self):
-        self.home = Path(tempfile.mkdtemp())
+        self.home = Path(tmpfold.mkdtemp())
         root = self.home / ".npm-global" / "lib" / "node_modules"
         cli_pkg = pkg(root / "example-cli", "example-cli", "3.1.0")
         pkg(cli_pkg / "node_modules" / "examplezip", "examplezip", "1.1.0")

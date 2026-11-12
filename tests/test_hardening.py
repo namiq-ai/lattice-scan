@@ -6,6 +6,8 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src")); sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tmpfold  # noqa: E402  (one temp root per test run, removed at exit)
 from lattice_scan import cli, manifests  # noqa: E402
 from test_image_inventory import FakeDocker, rpm_sqlite, tar_of, IMAGES  # noqa: E402
 
@@ -14,7 +16,7 @@ POM = """<project><dependencies><dependency><groupId>g</groupId><artifactId>a</a
 
 class Manifests(unittest.TestCase):
     def setUp(self):
-        self.d = Path(tempfile.mkdtemp())
+        self.d = Path(tmpfold.mkdtemp())
         manifests.SKIPPED.clear()
 
     def test_a_pom_with_entities_is_skipped_and_named(self):

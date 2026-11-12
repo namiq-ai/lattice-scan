@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tmpfold  # noqa: E402  (one temp root per test run, removed at exit)
 from lattice_scan import cli  # noqa: E402
 from test_lattice_scan import Client, Stub, lookup  # noqa: E402
 
@@ -68,7 +69,7 @@ class Context(Base):
 
     def test_json_file_is_private_and_the_console_is_unchanged(self):
         import os, stat, tempfile
-        f = Path(tempfile.mkdtemp()) / "r.json"
+        f = Path(tmpfold.mkdtemp()) / "r.json"
         rc, out, _ = self.run_cli("--json", str(f), "--cve", "CVE-2099-0001")
         self.assertIn("RESULT BY CVE", out)                                         # --json FILE adds a file; it does not change the screen
         self.assertEqual(json.loads(f.read_text())["rows"][0]["cve"], "CVE-2099-0001")

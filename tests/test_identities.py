@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tmpfold  # noqa: E402  (one temp root per test run, removed at exit)
 from lattice_scan import identities as ids, lattice_identity as li  # noqa: E402
 import ed25519_signer as signer  # noqa: E402
 
@@ -43,7 +44,7 @@ class Base(unittest.TestCase):
     def setUp(self):
         self._keys = ids.PINNED_KEYS
         ids.PINNED_KEYS = {KEY: signer.public_key(SEED).hex()}
-        self.dir = Path(tempfile.mkdtemp())
+        self.dir = Path(tmpfold.mkdtemp())
 
     def tearDown(self):
         ids.PINNED_KEYS = self._keys
@@ -78,14 +79,14 @@ class FailClosed(Base):
     def test_a_row_with_range_or_verdict_fields_refuses_the_whole_list(self):
         for field in ("ranges", "verdict", "fixed", "cvss"):
             with self.subTest(field=field), self.assertRaisesRegex(ids.IdentitiesRefused, field):
-                ids.load(Path(tempfile.mkdtemp()), Server(*publish(doc(rows=[{**ROW, field: []}]))), T0)
+                ids.load(Path(tmpfold.mkdtemp()), Server(*publish(doc(rows=[{**ROW, field: []}]))), T0)
 
     def test_malformed_ids_schema_and_size_are_refused(self):
         bad = [doc(rows=[{**ROW, "pids": ["deb:Example SSH"]}]), doc(rows=[{**ROW, "cve": "CVE-99"}]), doc(schema="lattice-identities/2"),
                doc(aliases=[{"from": "x", "to": "deb:examplessh"}])]
         for d in bad:
             with self.subTest(d=d), self.assertRaises(ids.IdentitiesRefused):
-                ids.load(Path(tempfile.mkdtemp()), Server(*publish(d)), T0)
+                ids.load(Path(tmpfold.mkdtemp()), Server(*publish(d)), T0)
         raw, m = publish(doc())
         old = ids.MAX_BYTES
         ids.MAX_BYTES = len(raw) - 1
@@ -128,7 +129,7 @@ class Freshness(Base):
         r = ids.load(self.dir, Server(*publish(doc(as_of="2098-12-20"))), T0)
         self.assertTrue(r["stale"])
         with self.assertRaisesRegex(ids.IdentitiesRefused, "days old"):
-            ids.load(Path(tempfile.mkdtemp()), Server(*publish(doc(as_of="2098-12-20"))), T0, require_fresh=True)
+            ids.load(Path(tmpfold.mkdtemp()), Server(*publish(doc(as_of="2098-12-20"))), T0, require_fresh=True)
 
     def test_an_unchanged_list_is_not_downloaded_again(self):
         srv = Server(*publish(doc()))

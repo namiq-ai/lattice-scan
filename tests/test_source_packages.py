@@ -8,6 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tmpfold  # noqa: E402  (one temp root per test run, removed at exit)
 from lattice_scan import cli, lattice_identity as li  # noqa: E402
 import test_image_inventory as img  # noqa: E402
 
@@ -69,7 +70,7 @@ class HostCollection(unittest.TestCase):
 class Images(unittest.TestCase):
     def test_rpm_sqlite_sources(self):
         import sqlite3, tempfile
-        f = tempfile.mktemp(suffix=".sqlite")
+        f = tmpfold.mktemp(suffix=".sqlite")
         con = sqlite3.connect(f)
         con.execute("CREATE TABLE Packages (hnum INTEGER PRIMARY KEY, blob BLOB)")
         con.execute("INSERT INTO Packages (blob) VALUES (?)", (rpm_header_with_source("examplessh-clients", "9.3p1", "1.el9", "examplessh-9.3p1-1.el9.src.rpm"),))
