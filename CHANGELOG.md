@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Internal (inactive: the mail offer is still off): after a yes to a mailed report the tool asks for the address (prefilled for a key holder), asks the website to mail ONE confirmation link, and waits holding the record in memory; only when the mailbox owner confirms does it send the record, then says the report arrives by email within 4 hours after a person has reviewed it. Ctrl-C, a refusal, an expiry or a timeout send nothing, and the tool writes no file for this. It needs a Lattice key (`LATTICE_API_KEY`).
+
 - New: `posture` also looks for secret-looking values (a key, token or password) on the command lines of the programs it may read and in your shell history. It shows only the kind of value, the place and a count, never the value. The value is in no file, record or report, and nothing is sent. It is a lead, not a verdict: a harmless test value matches too.
 - Internal (inactive: the mail offer is still off): the scan record can carry an optional posture block (ports, firewall and SSH settings without the rules, programs no package owns) built from a declared field list, and after a yes to a mailed report the tool asks a second question about it (default No, this run only).
 
