@@ -826,6 +826,7 @@ from lattice_scan import macos as macos_reader  # noqa: E402
 from lattice_scan import lattice_version as lv  # noqa: E402   # the one implementation of versions, ranges, product ids and the verdict ladder
 from lattice_scan import lattice_identity as li  # noqa: E402   # the identity join: an installed package meets a CVE through its package identity
 from lattice_scan import identities as identity_list  # noqa: E402   # the signed list of package identities per exploited CVE
+from lattice_scan import pyenv  # noqa: E402   # Python packages installed outside the OS package manager (--python)
 
 
 def run(cmd: list[str]) -> str:
@@ -1554,6 +1555,10 @@ def inventory() -> dict:
         except OSError:
             pass
     progress(f"[host] packages: {len(pk)} installed ({manager if pk else 'no package manager found'})")
+    python = {}
+    if env("PYTHON") in ("1", "true", "yes"):
+        python = pyenv.collect([x for x in env("PYTHON_PATHS").split(os.pathsep) if x])
+        progress(f"[host] python: {sum(len(v) for v in python.values())} package(s) in {len(python)} environment(s) outside the package manager")
     snaps = {f[0]: f[1] for f in (l.split() for l in run(["snap", "list"]).splitlines()[1:]) if len(f) >= 2}
     progress(f"[host] snaps: {len(snaps)}")
     images = sorted({i for i in run(["docker", "ps", "--format", "{{.Image}}"]).splitlines() if i})
@@ -1569,14 +1574,15 @@ def inventory() -> dict:
     progress("[host] hardware: " + (" ".join(x for x in (host.get("manufacturer"), host.get("model"), host.get("version")) if x) or "not reported by this machine"))
     IMAGE_SCAN.clear()
     details = image_details(images)
-    inv = {"kernel": kernel, "os": osr, "manager": manager if pk else "", "host": host, "packages": pk, "sources": srcs, "snaps": snaps, "images": images, "imageDetails": details, "node": run(["node", "-v"]).strip(),
+    inv = {"kernel": kernel, "os": osr, "manager": manager if pk else "", "host": host, "packages": pk, "sources": srcs, **({"python": python} if python else {}), "snaps": snaps, "images": images, "imageDetails": details, "node": run(["node", "-v"]).strip(),
            "restartRequired": Path("/var/run/reboot-required").exists()}
     if IMAGE_SCAN:
         inv["imageScan"] = dict(IMAGE_SCAN)
         atexit.register(deep_hint, inv)  # printed last, after the scan's own output
     inv["hash"] = hashlib.sha256(json.dumps({k: inv[k] for k in ("kernel", "packages", "snaps", "images", "node")}
                                             | {"host": {k: host.get(k) for k in ("manufacturer", "model", "version", "biosVersion")},
-                                               "imageDetails": {r: [d.get("id"), d.get("os"), d.get("osVersion"), len(d.get("packages") or {})] for r, d in details.items()}},
+                                               "imageDetails": {r: [d.get("id"), d.get("os"), d.get("osVersion"), len(d.get("packages") or {})] for r, d in details.items()}}
+                                            | ({"python": python} if python else {}),   # absent without --python, so the hash of a plain run is unchanged
                                             sort_keys=True).encode()).hexdigest()[:12]
     return inv
 
@@ -1631,6 +1637,10 @@ def identity_artefacts(inv: dict) -> list:
     """Artefacts for the identity join: the host's packages (source package as identity) and the packages read inside container images."""
     arts = [a for a in li.host_artefacts({"manager": inv.get("manager") or "", "packages": inv.get("packages") or {}, "sources": inv.get("sources") or {}})
             if a.source == "host-packages"]
+    for site, pk in sorted((inv.get("python") or {}).items()):   # --python: pip, uv and conda installs outside the OS package manager
+        place = pyenv.label(site)
+        for name, ver in sorted(pk.items()):
+            arts.append(li.Artefact(lv.pid(name, "pypi"), str(ver), "pep440", "pip", "python", f"{name} (python {place})"))
     for ref, d in sorted((inv.get("imageDetails") or {}).items()):
         mgr = (d or {}).get("packageManager") or ""
         if mgr not in li.MANAGER_ECOSYSTEM:
@@ -3988,6 +3998,8 @@ def _main() -> int:
     p.add_argument("--inventory", action="store_true", help="with --refresh: only collect and show the inventory, no scan and no network call")
     p.add_argument("--list", action="store_true", help="with --refresh or when the inventory is shown: print every package, snap and image instead of totals")
     p.add_argument("--deep", action="store_true", help="deep inventory: open every local image, not only running ones, and list the Python/Node/Java/Ruby packages inside them (minutes). Default is quick")
+    p.add_argument("--python", action="store_true", help="also read the Python packages installed outside the OS package manager (pip, uv, conda; system, user and virtual environments in the home folder). Metadata files only; nothing is run or sent")
+    p.add_argument("--python-path", action="append", metavar="DIR", help="also read this virtual environment or site-packages folder (repeatable; implies --python)")
     p.add_argument("--refresh", action="store_true", help="collect the inventory again now and print all of it; with ids, also re-read them. Alone it makes no Lattice call")
     p.add_argument("--format", choices=["console", "json", "csv"], default=argparse.SUPPRESS, help="what to print: console (default), json or csv. The result table only; progress stays on stderr")
     p.add_argument("--json", metavar="FILE", default=argparse.SUPPRESS, help="also write the result as JSON to FILE (mode 0600: it names this host's software)")
@@ -4076,6 +4088,10 @@ def _main() -> int:
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # a stopped run still cleans up (atexit); only SIGKILL cannot, and the next run sweeps what it left
     if getattr(a, "deep", False):
         os.environ["LATTICE_SCAN_LEVEL"] = "deep"
+    if getattr(a, "python", False) or getattr(a, "python_path", None):
+        os.environ["LATTICE_SCAN_PYTHON"] = "1"
+    if getattr(a, "python_path", None):
+        os.environ["LATTICE_SCAN_PYTHON_PATHS"] = os.pathsep.join([x for x in env("PYTHON_PATHS").split(os.pathsep) if x] + list(a.python_path))
     if getattr(a, "refresh", False):
         os.environ["LATTICE_SCAN_DEEP_CACHE"] = "off"   # --refresh opens every image again, as it says
         os.environ["LATTICE_SCAN_READ_CACHE"] = "off"   # ... and asks Lattice again

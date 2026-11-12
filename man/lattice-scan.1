@@ -5,7 +5,7 @@
 lattice-scan \- check this host, or a project's declared dependencies, against the CVEs CISA lists as exploited, through Lattice
 .SH SYNOPSIS
 .B lattice-scan
-[\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-discover\fR] [\fB\-\-format\fR \fBconsole\fR|\fBjson\fR|\fBcsv\fR] [\fB\-\-json\fR \fIFILE\fR] [\fB\-\-refresh\fR [\fB\-\-inventory\fR]] [\fB\-\-list\fR] [\fB\-\-deep\fR] [\fB\-\-again\fR] [\fB\-\-keep\fR] [\fB\-\-debug\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
+[\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-discover\fR] [\fB\-\-format\fR \fBconsole\fR|\fBjson\fR|\fBcsv\fR] [\fB\-\-json\fR \fIFILE\fR] [\fB\-\-refresh\fR [\fB\-\-inventory\fR]] [\fB\-\-list\fR] [\fB\-\-deep\fR] [\fB\-\-python\fR] [\fB\-\-python\-path\fR \fIDIR\fR]... [\fB\-\-again\fR] [\fB\-\-keep\fR] [\fB\-\-debug\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
 .br
 .B lattice-scan project
 [\fIPATH\fR...] [\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-kev\-catalogue\fR \fIFILE\fR] [\fB\-\-max\-read\fR \fIN\fR]
@@ -117,6 +117,12 @@ With \fB\-\-refresh\fR, print every installed package, snap and image. Without i
 .TP
 .B \-\-deep
 Collect a deep inventory. The default, quick, takes the hardware, the host's packages and snaps, and opens the images that containers are running (OS release and package list; about 12 seconds for 7 images). Deep also opens every other local image and lists the Python, Node, Java and Ruby packages inside every image by streaming docker export (minutes: about 6 minutes for 24 images, with a limit of 180 seconds per image after which that image is marked partial). Same as LATTICE_SCAN_LEVEL=deep. A deep inventory first prints a rough estimate, then one line per image with its number, percentage and elapsed time, and a summary; a completed one is recorded (deep.json in the records folder). After a quick inventory the tool prints one line on standard error saying how many local images were opened, how long a deep one would take and when one was last done (a repeat is suggested after 30 days). \fB\-\-quiet\fR prints none of these lines.
+.TP
+.B \-\-python
+Also read the Python packages installed outside the operating system's package manager: pip, uv and conda installs in the system and user site folders and in virtual environments (a folder holding pyvenv.cfg) in the home folder, up to three levels down. Only the metadata files those installers leave (dist-info METADATA, egg-info PKG-INFO) are read; no interpreter is started and nothing is fetched. A package the distribution installed under /usr/lib is left to dpkg or rpm. Each package joins the identity list as pypi:NAME, so a pip-installed wheel named on CISA's list is found. The folders stay in the local inventory.json. Same as LATTICE_SCAN_PYTHON=1.
+.TP
+.B \-\-python\-path \fIDIR\fR
+Also read this virtual environment or site-packages folder (repeatable; implies \fB\-\-python\fR).
 .TP
 .B \-\-again
 Read ids that were read before.
@@ -450,6 +456,12 @@ Progress is on by default. Set to 0 to turn it off, like \fB\-\-quiet\fR.
 .TP
 .B LATTICE_SCAN_FEED
 Where \fBrecent\fR reads the lists (default https://namiq.io/lattice/recent.json).
+.TP
+.B LATTICE_SCAN_PYTHON
+Set to 1 for the same as \fB\-\-python\fR: also read Python packages installed outside the OS package manager, from their metadata files only.
+.TP
+.B LATTICE_SCAN_PYTHON_PATHS
+More virtual environments or site-packages folders to read, separated like PATH (the same as repeating \fB\-\-python\-path\fR).
 .TP
 .B LATTICE_SCAN_IDENTITIES_URL
 Where the signed list of package identities per exploited CVE is read (default https://namiq.io/lattice/identities.json when the public Lattice server is used;
