@@ -1,3 +1,4 @@
-{"_comment": "Frozen result of packaging/corpus_score.py on hosts.json, and the floor the figures may not drop below. A case whose result changes fails tests/test_corpus_hosts.py and needs review: an improvement moves the floor up in the same change (a ratchet), a regression is a bug. Baseline set 2026-11-12 (0.9.1): names only 0.33/0.33, identity 0.60/0.50.",
- "floor": {"precision": 0.60, "recall": 0.50},
- "identity": {"F1": "TN", "F2": "TN", "F3": "FP", "F4": "FN", "F5": "FN", "F6": "FN", "F7": "TN", "F8": "FP", "F9": "TP", "F10": "TP", "F11": "TP"}}
+{"_comment": "Frozen result of packaging/corpus_score.py on hosts.json, and the floors the figures may not drop below. A case whose result changes fails tests/test_corpus_hosts.py and needs review: an improvement moves the floor up in the same change (a ratchet), a regression is a bug. Baselines: 2026-11-12 names only 0.33/0.33; identity 0.60/0.50; identity with the consented distribution verdict 0.83/0.83.",
+ "floor": {"identity": {"precision": 0.60, "recall": 0.50}, "verdict": {"precision": 0.83, "recall": 0.83}},
+ "identity": {"F1": "TN", "F2": "TN", "F3": "FP", "F4": "FN", "F5": "FN", "F6": "FN", "F7": "TN", "F8": "FP", "F9": "TP", "F10": "TP", "F11": "TP"},
+ "verdict": {"F1": "TN", "F2": "TN", "F3": "FP", "F4": "FN", "F5": "TP", "F6": "TP", "F7": "TN", "F8": "TN", "F9": "TP", "F10": "TP", "F11": "TP"}}

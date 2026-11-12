@@ -3628,7 +3628,7 @@ def distribution_verdicts(a, lat: "Lattice", inv: dict, found: list, rows: list)
             continue
         verdict = min((g[0] for g in got), key=lambda v: rank[v])      # one affected package is enough to keep it a candidate
         imp["versionCheckUpstream"] = imp.get("versionCheck")
-        imp["versionCheck"] = {"verdict": verdict, "why": "; ".join(g[1] for g in got)[:600], "basis": got[0][2]}
+        imp["versionCheck"] = {"verdict": verdict, "why": "; ".join(dict.fromkeys(g[1] for g in got))[:600], "basis": got[0][2]}   # one line per distinct reason
         append("findings.jsonl", {"event": "impact", "ref": e["cve"], "on": TODAY, "impact": imp})
         if verdict == "outside-range":
             fixed += 1
