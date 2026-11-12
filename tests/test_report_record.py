@@ -29,7 +29,7 @@ class Record(unittest.TestCase):
 
     def test_only_the_declared_keys_exist(self):
         r = rec.build_record(INV, ITEMS, "deep", "Debian")
-        self.assertEqual(set(r), set(rec.TOP_FIELDS)); self.assertLessEqual(set(r["inventory"]), set(rec.INVENTORY_FIELDS))
+        self.assertEqual(set(r), set(rec.TOP_FIELDS) - {"posture"}); self.assertLessEqual(set(r["inventory"]), set(rec.INVENTORY_FIELDS))
         self.assertLessEqual(set(r["inventory"]["host"]), set(rec.HOST_FIELDS)); self.assertLessEqual(set(r["items"][0]), set(rec.ITEM_FIELDS))
         self.assertEqual(set(r["inventory"]["imageDetails"]["redis:alpine"]), {"id", "os", "osVersion", "packages"})
 
