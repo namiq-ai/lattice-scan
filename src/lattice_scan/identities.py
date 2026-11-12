@@ -48,7 +48,7 @@ CACHE = "identities.json"
 _PID = re.compile(r"^(deb|apk|rpm|pypi|npm|maven|cargo|generic):[a-z0-9@:/.+_-]{1,200}$")
 _CVE = re.compile(r"^CVE-\d{4}-\d{4,7}$")
 # A row holding any of these would be carrying the data that is deliberately not published. Refuse the whole list rather than read around it.
-_FORBIDDEN = {"ranges", "range", "versions", "version", "fixed", "fixedIn", "introduced", "verdict", "cvss", "epss", "ssvc", "score", "priority"}
+_FORBIDDEN = {"ranges", "range", "versions", "version", "fixed", "fixes", "fixedIn", "introduced", "verdict", "cvss", "epss", "ssvc", "score", "priority"}
 
 
 class IdentitiesRefused(Exception):
