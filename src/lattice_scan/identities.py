@@ -9,7 +9,8 @@ Why every check fails closed. The list decides what this tool looks for and what
 copy with entries added would make it send more. So, unlike the recent-CVE feed, there is no "unsigned" fallback here:
 
     unreachable, a verified cached copy           use the cache and say so
-    unreachable, no usable copy                   IdentitiesUnavailable (the caller says the identity join could not run)
+    unreachable, nothing cached                   the copy bundled in this release, verified the same way, with its age said
+    unreachable, no usable copy at all            IdentitiesUnavailable (the caller says the identity join could not run)
     no signature, bad signature, unknown key      IdentitiesRefused; the previous cache is left as it was
     a lower generation than one already accepted  IdentitiesRefused (a replayed older copy would hide newer entries)
     larger than MAX_BYTES, wrong schema, a row with range or verdict fields, a malformed id
@@ -161,6 +162,11 @@ def load(folder: Path, get, now: dt.datetime | None = None, *, force: bool = Fal
     except (OSError, ValueError) as err:
         if cached is not None:
             return _finish(_result(cached[0], "cache", now, f"could not reach namiq.io ({str(err)[:80]}); using generation {cached[0]['generation']}"), require_fresh)
+        bundled = _bundled()
+        if bundled is not None and bundled["generation"] >= last_gen:
+            res = _result(bundled, "bundled", now)
+            res["note"] = f"could not reach namiq.io ({str(err)[:80]}); using the copy bundled in this release, {res['ageDays']} days old"
+            return _finish(res, require_fresh)
         raise IdentitiesUnavailable(f"could not read the identity list ({str(err)[:80]}) and there is no verified copy")
     if doc["generation"] < last_gen:
         raise IdentitiesRefused(f"the list is generation {doc['generation']}, older than the {last_gen} already accepted: refusing a rolled-back copy")
@@ -168,6 +174,17 @@ def load(folder: Path, get, now: dt.datetime | None = None, *, force: bool = Fal
     _write(folder / STATE, json.dumps({"generation": doc["generation"], "sha256": manifest["sha256"], "signature": manifest["signature"],
                                        "keyId": manifest.get("keyId", ""), "fetchedAt": now.timestamp()}).encode())
     return _finish(_result(doc, "network", now), require_fresh)
+
+
+def _bundled():
+    """The copy shipped in this release (identities_bundled.py), verified exactly like a download; None when absent or when it does not verify."""
+    import importlib, zlib
+    try:
+        b = importlib.import_module("lattice_scan.identities_bundled")
+        m = json.loads(b.MANIFEST)
+        return verify_document(zlib.decompress(base64.b64decode("".join(b.LIST))), m.get("signature", ""), m.get("keyId", ""), m.get("sha256"))
+    except (ImportError, ValueError, KeyError, AttributeError, zlib.error, IdentitiesRefused):
+        return None
 
 
 def _finish(res: dict, require_fresh: bool) -> dict:

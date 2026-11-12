@@ -271,6 +271,14 @@ CVE ids, and the key if you set one. `posture` sends nothing at all, unless you 
 
 **Signed list.** namiq.io signs the recent-CVE list. The tool fetches the signature and a short certificate (two static files beside `recent.json`, the same host, nothing of yours sent) and checks them with a key built into the tool: the certificate must be signed by NamiQ's root key, valid for at most 90 days and not older than the lowest serial this version accepts, and its key must have signed the exact bytes of the list. A good check prints `[feed] signature verified`. A list with no signature (for example from a self-hosted server) is read and labelled `not signed`. A wrong, expired or revoked signature or certificate stops the read with the reason, and the list is not used. You can check the same signature by hand with OpenSSL once you have the public key: `openssl pkeyutl -verify -rawin -pubin -inkey FEEDKEY.pub -sigfile recent.json.sig -in recent.json`.
 
+**Package identity list.** A host scan (`--cve`, `--discover`, `recent`) also downloads namiq.io's signed list of package identities per exploited CVE
+(`identities.json` and its manifest, at most twice a day; nothing of yours is sent, and the list carries no version data). Where the list has a row for a CVE,
+an installed package matches when its source package is one the row names (`openssh-client` is built from `openssh`; `libssl3` from `openssl`); a package that
+only shares a word with the product is shown as `LEAD`, with no range compared. Where it has no row (most vendor and appliance products), names decide as
+before. A list that is unsigned, signed by a key this version does not know, older than one already accepted, or carrying version data is refused, and
+names decide; when namiq.io cannot be reached, the last verified copy is used, or the copy bundled in the release, with its age printed.
+`LATTICE_SCAN_IDENTITIES_URL=0` turns it off. The source-package names are read from dpkg, rpm or apk and stay in the local `inventory.json`.
+
 **No network.** When Lattice or namiq.io cannot be reached, the tool does not stop. It tries once (not once per id), then answers from what an earlier run saved: the recent list and each CVE answer, at any age. The first line of the output says `OFFLINE:` and how old the saved data is, and warns past 30 days. A saved "not listed" is printed as `not listed as of DATE, not rechecked` and is never the same as clear; an id with no saved answer is listed as not read, and the exit code is 3 only for those. The "a scan ran" note is not sent then: it waits in a small file in the cache folder (50 notes at most, 30 days at most, the same three fields and the day) and goes out, oldest first and at most 10 at a time, with the next run that can reach namiq.io. A note kept this way is never sent if `LATTICE_SCAN_NO_REPORT=1`. Saved answers live in the same cache folder as before; the inventory and `posture` never needed the network.
 
 ## What it writes

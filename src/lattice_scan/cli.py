@@ -824,6 +824,8 @@ class Lattice:
 from lattice_scan import report  # noqa: E402
 from lattice_scan import macos as macos_reader  # noqa: E402
 from lattice_scan import lattice_version as lv  # noqa: E402   # the one implementation of versions, ranges, product ids and the verdict ladder
+from lattice_scan import lattice_identity as li  # noqa: E402   # the identity join: an installed package meets a CVE through its package identity
+from lattice_scan import identities as identity_list  # noqa: E402   # the signed list of package identities per exploited CVE
 
 
 def run(cmd: list[str]) -> str:
@@ -974,13 +976,35 @@ def parse_rpm_header(blob: bytes) -> dict[str, str]:
             if end < 0:
                 continue
             out[{1000: "name", 1001: "version", 1002: "release"}[tag]] = data[off:end].decode("utf-8", "replace")
+        elif tag == 1044 and typ == 6 and off < len(data):   # SOURCERPM: the source package this binary was built from
+            end = data.find(b"\0", off)
+            if end >= 0:
+                out["source"] = source_of_rpm(data[off:end].decode("utf-8", "replace"))
         elif tag == 1003 and typ == 4 and off + 4 <= len(data):
             out["epoch"] = str(struct.unpack(">I", data[off:off + 4])[0])
     return out
 
 
+def source_of_rpm(srpm: str) -> str:
+    """'openssh-9.3p1-1.el9.src.rpm' -> 'openssh'. The name is what is left after the last two dashes (version and release never hold one)."""
+    base = srpm.strip()
+    for suffix in (".src.rpm", ".nosrc.rpm"):
+        base = base.removesuffix(suffix)
+    parts = base.rsplit("-", 2)
+    return parts[0] if len(parts) == 3 and parts[0] else ""
+
+
+def rpm_sources(db: bytes) -> dict[str, str]:
+    """binary -> source package from an rpmdb.sqlite, only where they differ (see package_sources)."""
+    return {n: s for n, s in _rpm_rows(db, "source").items() if s and s != n}
+
+
 def parse_rpm_sqlite(db: bytes) -> dict[str, str]:
     """name -> [epoch:]version-release from an rpmdb.sqlite (Fedora 33+, RHEL 9+, Amazon Linux 2023, SUSE Tumbleweed). Berkeley DB and ndb databases are not read."""
+    return _rpm_rows(db, "version")
+
+
+def _rpm_rows(db: bytes, what: str) -> dict[str, str]:
     import sqlite3
     out: dict[str, str] = {}
     if not db.startswith(b"SQLite format 3"):
@@ -996,7 +1020,8 @@ def parse_rpm_sqlite(db: bytes) -> dict[str, str]:
                 for (blob,) in con.execute("SELECT blob FROM Packages LIMIT 50000"):
                     h = parse_rpm_header(bytes(blob))
                     if h.get("name") and h.get("name") != "gpg-pubkey":
-                        out[h["name"]] = (f"{h['epoch']}:" if h.get("epoch") else "") + f"{h.get('version', '')}-{h.get('release', '')}"
+                        out[h["name"]] = h.get("source", "") if what == "source" else \
+                            (f"{h['epoch']}:" if h.get("epoch") else "") + f"{h.get('version', '')}-{h.get('release', '')}"
             finally:
                 con.close()
     except (OSError, sqlite3.Error, ValueError, TypeError) as e:
@@ -1075,6 +1100,26 @@ def parse_apk_db(text: str) -> dict[str, str]:
                 v = l[2:].strip()
         if n:
             out[n] = v
+    return out
+
+
+def package_sources(text: str, kind: str) -> dict[str, str]:
+    """binary package -> the source package it was built from, read from a dpkg status file ("Source: openssh (1:9.2p1-2)") or an apk database
+    ("o:" origin), kept only where the two names differ.
+
+    Why: the exploited-CVE identity list names SOURCE packages (Debian, Alpine and Red Hat advisories do), while a host lists binaries. openssh-client
+    joins an OpenSSH flaw through its source openssh; libssl3 through openssl. Without this map only packages named like their source could join.
+    This map stays in the local inventory.json; nothing sends it."""
+    out: dict[str, str] = {}
+    for block in text.split("\n\n"):
+        if kind == "apk":
+            f = {l[:1]: l[2:].strip() for l in block.splitlines() if len(l) > 2 and l[1] == ":"}
+            name, src = f.get("P", ""), f.get("o", "")
+        else:
+            f = dict(l.split(": ", 1) for l in block.splitlines() if ": " in l and not l.startswith(" "))
+            name, src = f.get("Package", ""), f.get("Source", "").split(" ", 1)[0]
+        if name and src and src != name:
+            out[name] = src
     return out
 
 
@@ -1166,8 +1211,10 @@ def image_detail(ref: str, running: bool, lang: bool = False) -> dict | None:
     rpm = next((v for k in ("rpm", "rpm2") for v in (got.get(k) or {}).values()), b"")
     if got_text["apk"]:
         d["packages"], d["packageManager"] = parse_apk_db(got_text["apk"]), "apk"
+        d["sources"] = package_sources(got_text["apk"], "apk")
     elif got_text["dpkg"]:
         d["packages"], d["packageManager"] = parse_dpkg_status(got_text["dpkg"]), "dpkg"
+        d["sources"] = package_sources(got_text["dpkg"], "dpkg")
     elif got.get("dpkgd"):  # distroless: one control file per package
         pk: dict[str, str] = {}
         for name, raw in got["dpkgd"].items():
@@ -1179,6 +1226,7 @@ def image_detail(ref: str, running: bool, lang: bool = False) -> dict | None:
         pk = parse_rpm_sqlite(rpm)
         if pk:
             d["packages"], d["packageManager"] = pk, "rpm"
+            d["sources"] = rpm_sources(rpm)
     if langs:
         d["languages"] = langs
     if not osr and "packages" not in d and not langs:
@@ -1475,24 +1523,36 @@ def inventory() -> dict:
         from . import macos
         return macos_inventory(macos)
     pk: dict[str, str] = {}
+    srcs: dict[str, str] = {}   # binary -> source package where they differ (package_sources says why); stays in the local inventory
     manager = "dpkg"
     progress("[host] collecting installed packages ...")
-    for line in run(["dpkg-query", "-W", "-f", "${Package}\t${Version}\n"]).splitlines():
-        n, _, v = line.partition("\t")
+    for line in run(["dpkg-query", "-W", "-f", "${Package}\t${Version}\t${source:Package}\n"]).splitlines():
+        n, _, rest = line.partition("\t")
+        v, _, src = rest.partition("\t")
         if n:
             pk[n] = v
+            if src and src != n:
+                srcs[n] = src
     if not pk:  # rpm and apk hosts
         manager = "rpm"
-        for line in run(["rpm", "-qa", "--qf", "%{NAME}\t%{VERSION}-%{RELEASE}\n"]).splitlines():
-            n, _, v = line.partition("\t")
+        for line in run(["rpm", "-qa", "--qf", "%{NAME}\t%{VERSION}-%{RELEASE}\t%{SOURCERPM}\n"]).splitlines():
+            n, _, rest = line.partition("\t")
+            v, _, srpm = rest.partition("\t")
             if n:
                 pk[n] = v
+                src = source_of_rpm(srpm)
+                if src and src != n:
+                    srcs[n] = src
     if not pk:
         manager = "apk"
         for line in run(["apk", "info", "-v"]).splitlines():
             m = re.match(r"(.+?)-(\d[^-]*-r\d+)$", line)
             if m:
                 pk[m.group(1)] = m.group(2)
+        try:
+            srcs = {n: s for n, s in package_sources(Path("/lib/apk/db/installed").read_text(errors="replace"), "apk").items() if n in pk}
+        except OSError:
+            pass
     progress(f"[host] packages: {len(pk)} installed ({manager if pk else 'no package manager found'})")
     snaps = {f[0]: f[1] for f in (l.split() for l in run(["snap", "list"]).splitlines()[1:]) if len(f) >= 2}
     progress(f"[host] snaps: {len(snaps)}")
@@ -1509,7 +1569,7 @@ def inventory() -> dict:
     progress("[host] hardware: " + (" ".join(x for x in (host.get("manufacturer"), host.get("model"), host.get("version")) if x) or "not reported by this machine"))
     IMAGE_SCAN.clear()
     details = image_details(images)
-    inv = {"kernel": kernel, "os": osr, "manager": manager if pk else "", "host": host, "packages": pk, "snaps": snaps, "images": images, "imageDetails": details, "node": run(["node", "-v"]).strip(),
+    inv = {"kernel": kernel, "os": osr, "manager": manager if pk else "", "host": host, "packages": pk, "sources": srcs, "snaps": snaps, "images": images, "imageDetails": details, "node": run(["node", "-v"]).strip(),
            "restartRequired": Path("/var/run/reboot-required").exists()}
     if IMAGE_SCAN:
         inv["imageScan"] = dict(IMAGE_SCAN)
@@ -1519,6 +1579,97 @@ def inventory() -> dict:
                                                "imageDetails": {r: [d.get("id"), d.get("os"), d.get("osVersion"), len(d.get("packages") or {})] for r, d in details.items()}},
                                             sort_keys=True).encode()).hexdigest()[:12]
     return inv
+
+
+PROD_LATTICE_URL = "https://lattice.namiq.io/mcp"
+# The identity list for this run: CVE -> li.Row, the reviewed aliases, and a one-line note for the person. None until use_identities() ran; then a dict,
+# with rows None when no verified list could be had (matching then falls back to names, as before the list existed).
+IDENTITY: dict | None = None
+
+
+def identities_url() -> str:
+    """Where the identity list comes from: LATTICE_SCAN_IDENTITIES_URL, else namiq.io's when this run talks to the public Lattice server. A run pointed at
+    another Lattice server (a private deployment, a test stub) gets no list unless one is named: its catalogue may differ, and a test never reaches namiq.io."""
+    named = env("IDENTITIES_URL")
+    if named.lower() in ("0", "off", "none"):
+        return ""
+    return named or (identity_list.LIST_URL if URL == PROD_LATTICE_URL else "")
+
+
+def use_identities() -> dict:
+    """Load the signed identity list once per run (identities.py checks it and fails closed). Any failure leaves name matching in charge and says so."""
+    global IDENTITY
+    if IDENTITY is not None:
+        return IDENTITY
+    IDENTITY = {"rows": None, "aliases": {}, "note": ""}
+    url = identities_url()
+    if not url:
+        return IDENTITY
+    manifest_url = url[:-len(".json")] + ".manifest.json" if url.endswith(".json") else url + ".manifest"
+
+    def get(u: str, limit: int) -> bytes:
+        real = manifest_url if u == identity_list.MANIFEST_URL else url
+        try:
+            return http_get_bytes(real, "the identity list", limit, mark=False)
+        except LatticeError as e:   # identities.load treats OSError as "unreachable": the verified cache, if any, is used
+            raise OSError(str(e))
+
+    try:
+        r = identity_list.load(cache_dir() / "identities", get)
+        rows, aliases = identity_list.join_inputs(r["doc"])
+        IDENTITY = {"rows": {row.cve: row for row in rows}, "aliases": aliases,
+                    "note": f"identity list generation {r['generation']}, CISA as of {r['exploitedAsOf']}, {len(rows)} CVEs with package identities"
+                            + (f" ({r['note']})" if r["note"] else "") + (" - OUT OF DATE" if r["stale"] else "")}
+        progress(f"[host] {IDENTITY['note']}")
+    except (identity_list.IdentitiesRefused, identity_list.IdentitiesUnavailable) as e:
+        IDENTITY["note"] = f"identity list not used ({e}); matching by names only"
+        progress(f"[host] {IDENTITY['note']}")
+    return IDENTITY
+
+
+def identity_artefacts(inv: dict) -> list:
+    """Artefacts for the identity join: the host's packages (source package as identity) and the packages read inside container images."""
+    arts = [a for a in li.host_artefacts({"manager": inv.get("manager") or "", "packages": inv.get("packages") or {}, "sources": inv.get("sources") or {}})
+            if a.source == "host-packages"]
+    for ref, d in sorted((inv.get("imageDetails") or {}).items()):
+        mgr = (d or {}).get("packageManager") or ""
+        if mgr not in li.MANAGER_ECOSYSTEM:
+            continue
+        for a in li.host_artefacts({"manager": mgr, "packages": d.get("packages") or {}, "sources": d.get("sources") or {}}):
+            if a.source == "host-packages" and not a.name.startswith("."):
+                arts.append(a._replace(source=f"image {ref}", name=f"{a.name} (image {ref})"))
+    return arts
+
+
+def identity_match(entry: dict, inv: dict):
+    """The identity verdict on one CISA entry, or None when the list has no row for it (names decide, as before).
+
+    ("join", (why, installed, versions))   a package's identity is one the row names: the match
+    ("absent", reason)                    it joins, but the component the row names is proven not installed: no match
+    ("none", "")                          the row exists and nothing installed has its identity: a name match on a host package is only a lead
+    """
+    st = IDENTITY or {}
+    row = (st.get("rows") or {}).get(entry.get("cve", ""))
+    if row is None or inv.get("family") == "macos" or inv.get("os") == "project manifests":
+        return None
+    arts = identity_artefacts(inv)
+    joins = li.join(arts, [row], st.get("aliases") or {})
+    if not joins:
+        return ("none", "")
+    binaries = li.installed_binaries(arts)
+    kept, gone = [], ""
+    for j in joins:
+        reason = li.component_absent(row, j, binaries)
+        if reason:
+            gone = gone or reason
+        else:
+            kept.append(j)
+    if not kept:
+        return ("absent", gone)
+    names = sorted({j.artefact.name for j in kept})
+    via = "; ".join(sorted({j.via for j in kept}))
+    return ("join", (f"package identity: {via}", [f"{j.artefact.name} {j.artefact.version}" for j in sorted(kept, key=lambda j: j.artefact.name)],
+                     sorted({j.artefact.version for j in kept}) if names else []))
 
 
 def stems(name: str) -> set[str]:
@@ -1537,6 +1688,40 @@ def words(s: str) -> set[str]:
 
 
 def candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str]] | None:
+    """The match for one CISA entry: by package identity where the signed identity list has a row for the CVE, by names otherwise.
+
+    Where the list has a row, an installed package whose (source) identity the row names is the match, and a name match on a host package that does
+    not join is kept only as a lead (entry["matchBasis"] = "lead"): that is how openssh-client stopped matching every OpenSSH server flaw by its name, and
+    how libssl3 now meets an OpenSSL flaw it never matched by name. A name match on a snap, an image or the hardware stays as it was: the list does not
+    describe those. Where the list has no row (most vendor and appliance products), names decide exactly as before.
+    """
+    entry.pop("matchBasis", None)
+    vendor, product = entry.get("vendor", "").lower(), entry.get("product", "").lower()
+    if (vendor == "linux" and product == "kernel" or "linux kernel" in product) or product in ("node.js", "nodejs"):
+        # The running kernel (uname) and the node runtime are what these flaws are in. Debian's "linux" source also builds linux-libc-dev, bpftool and
+        # the perf tools, whose versions say nothing about the kernel that is running; name_candidate's own rules for these two are kept.
+        m = name_candidate(entry, inv)
+        if m:
+            entry["matchBasis"] = "names"
+        return m
+    ident = identity_match(entry, inv)
+    if ident is not None and ident[0] == "join":
+        entry["matchBasis"] = "identity"
+        return ident[1]
+    if ident is not None and ident[0] == "absent":
+        dbg(f"   match {entry.get('cve')}: {ident[1]}; not a candidate")
+        entry["matchBasis"] = "component-absent"
+        return None
+    m = name_candidate(entry, inv)
+    if m and ident is not None and all(i.split(" ", 1)[0] in (inv.get("packages") or {}) for i in m[1]):
+        entry["matchBasis"] = "lead"
+        return (m[0] + "; a name match only: the identity list names other packages for this CVE", m[1], m[2])
+    if m:
+        entry["matchBasis"] = "names"
+    return m
+
+
+def name_candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str]] | None:
     """(why, what is installed that matches, their raw version strings) for an entry that might touch the host, or None. Name-level only: it never reads a version range.
 
     Lattice now gives CISA's vendor_project and product without a key, so every distinctive product word must be installed. The title is the fallback
@@ -1851,9 +2036,14 @@ def impact(entry: dict, inv: dict, installed: list[str], vers: list[str]) -> dic
         w = words(prod)
         if w and all(x in have for x in w):
             nvd.append(slug)
-    out = {"installed": installed, "nvdAlsoNames": nvd[:5], "versionCheck": mac_version_check(entry, inv) if inv.get("family") == "macos" and macos_reader.apple_parts(entry, inv) else version_check(entry, vers),
+    vc = mac_version_check(entry, inv) if inv.get("family") == "macos" and macos_reader.apple_parts(entry, inv) else version_check(entry, vers)
+    if entry.get("matchBasis") == "lead":   # candidate() kept a name match the identity list does not support: no range is compared
+        vc = {"verdict": "lead", "why": "the installed package only shares a name with the product; the identity list names other packages for this CVE, so its version says nothing"}
+    out = {"installed": installed, "nvdAlsoNames": nvd[:5], "versionCheck": vc,
            "changelogNamesCve": changelog_mentions(entry["cve"], installed, inv),
            "action": entry.get("action", "")[:400], "listed": entry["added"], "due": entry["due"]}
+    if entry.get("matchBasis"):
+        out["matchBasis"] = entry["matchBasis"]
     if entry["added"]:
         out["daysSinceListed"] = (day - dt.date.fromisoformat(entry["added"])).days
     if entry["due"]:
@@ -2293,6 +2483,7 @@ def cmd_run(a) -> int:
         return 2
     floor = (dt.date.fromisoformat(TODAY) - dt.timedelta(days=WINDOW)).isoformat()
     inv = getattr(a, "inv", None) or inventory()
+    use_identities()
     dbg(f"inventory: os={inv['os']!r} kernel={inv['kernel']} packages={len(inv['packages'])} snaps={len(inv['snaps'])} images={len(inv['images'])} "
         f"node={inv.get('node') or '-'} hash={inv['hash']} restartRequired={inv['restartRequired']}")
     dbg(f"inventory kernel={inv['kernel']} node={inv.get('node') or '-'} images={inv['images']}")
@@ -2356,8 +2547,9 @@ def cmd_run(a) -> int:
                      f"{len(inv['images'])} container image names and the kernel ({inv['kernel'] or 'unknown'}) ...")
             m = candidate(e, inv)
             progress(f"{tag}  " + (f"CANDIDATE: {m[0]}" if m else "no installed package, snap, image or kernel matches the product"))
-            rows.append([cve, *cells(e), ("RECORDED" if cve in known else "CANDIDATE") if m else "unmatch",
-                         m[0] if m else "no package, snap, image or kernel matches"])
+            rows.append([cve, *cells(e), ("RECORDED" if cve in known else "LEAD" if e.get("matchBasis") == "lead" else "CANDIDATE") if m else "unmatch",
+                         m[0] if m else ("no package, snap, image or kernel matches" if e.get("matchBasis") != "component-absent"
+                                         else "its package is installed, but not the component the flaw is in")])
             if m and cve in known:
                 imp = with_exposure(impact(e, inv, m[1], m[2]), m[1], inv)
                 add_context(lat, e, imp, None if a.refresh else state()[cve].get("impact"))
@@ -3169,6 +3361,7 @@ def cmd_recent(a) -> int:
         print(f"stopped: {err}", file=sys.stderr)
         return 3
     inv = inventory()
+    use_identities()
     if getattr(a, "refresh", False):   # --refresh: collect again, show it, log it, then run the scan on it
         refresh_inventory(inv, full=getattr(a, "list", False))
     rows: list[list[str]] = []

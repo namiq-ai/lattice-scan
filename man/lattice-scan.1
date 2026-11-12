@@ -451,6 +451,11 @@ Progress is on by default. Set to 0 to turn it off, like \fB\-\-quiet\fR.
 .B LATTICE_SCAN_FEED
 Where \fBrecent\fR reads the lists (default https://namiq.io/lattice/recent.json).
 .TP
+.B LATTICE_SCAN_IDENTITIES_URL
+Where the signed list of package identities per exploited CVE is read (default https://namiq.io/lattice/identities.json when the public Lattice server is used;
+none otherwise). Its manifest is read beside it. A copy that is unsigned, signed by an unknown key, older than one already accepted or carrying version data
+is refused, and matching falls back to package names. Set to 0 to match by names only.
+.TP
 .B LATTICE_SCAN_KEY_URL
 The key service \fBget\-key\fR asks (default https://namiq.io/api/v1/lattice/agent-keys).
 .TP
