@@ -55,7 +55,7 @@ class Queue(unittest.TestCase):
         with mock.patch.object(cli, "NET_DOWN", True), mock.patch.object(socket, "socket", side_effect=AssertionError("connection")):
             self.assertFalse(cli.report_run("recent", 0))
         self.assertEqual(GOT, [])
-        self.assertEqual(self.queue(), [{"command": "recent", "result": "ok", "lookups": "1-5", "day": day()}])
+        self.assertEqual(self.queue(), [{"command": "recent", "result": "ok", "lookups": "1-5", "day": day(), **({"os": cli.os_family()} if cli.os_family() else {})}])
         self.assertEqual(stat.S_IMODE(cli.report_queue_path().stat().st_mode), 0o600)
 
     def test_the_next_online_run_sends_the_kept_notes_oldest_first_then_its_own(self):

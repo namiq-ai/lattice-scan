@@ -8,7 +8,7 @@ CANDIDATE when a product word in the entry matches an installed package, snap, c
 host: a person reads the affected range against the installed version, then records the outcome with `resolve`.
 
 What leaves the machine: CVE ids, and the key if you have one. The inventory (package names, versions) is never sent; matching happens here.
-After a run that read anything it also reports that a scan ran: the command, how it ended and a band for the number of reads, never a host, package, CVE id or path. Off: LATTICE_SCAN_NO_REPORT=1 (README, 'What leaves the machine').
+After a run that read anything it also reports that a scan ran: the command, how it ended, a band for the number of reads and linux or macos, never a host, package, CVE id or path. Off: LATTICE_SCAN_NO_REPORT=1 (README, 'What leaves the machine').
 Records live in ~/.lattice-scan (or LATTICE_SCAN_DIR), mode 0700, because they name the host's packages. Never commit or publish them.
 
   lattice-scan --cve CVE-2026-1234 --cve-file ids.txt   check these ids (works keyless; ~1 lookup per id)
@@ -486,11 +486,21 @@ def lookup_band(n: int) -> str:
     return "0" if n <= 0 else "1-5" if n <= 5 else "6-20" if n <= 20 else "21-100" if n <= 100 else "100+"
 
 
+def os_family() -> str | None:
+    """'linux' or 'macos', the operating-system family and nothing more (no version, name or build); None on anything else, and then nothing is sent."""
+    return "macos" if sys.platform == "darwin" else "linux" if sys.platform.startswith("linux") else None
+
+
 def report_body(command: str, rc: int) -> dict:
-    """The whole of what a run reports, and nothing else: the command, how it ended, and how many reads it made, in a band. No host name, no package, no
-    CVE id, no path, no address, no key. The version and the day come from the user agent and the server clock; the server derives the caller's daily hash."""
-    return {"command": command if command in REPORT_COMMANDS else "other", "result": "ok" if rc == 0 else "matched" if rc == 1 else "stopped" if rc == 3 else "failed",
+    """The whole of what a run reports, and nothing else: the command, how it ended, how many reads it made in a band, and the operating-system family (linux or
+    macos). No host name, no package, no CVE id, no path, no address, no key, no OS version. The version and the day come from the user agent and the server clock;
+    the server derives the caller's daily hash."""
+    body = {"command": command if command in REPORT_COMMANDS else "other", "result": "ok" if rc == 0 else "matched" if rc == 1 else "stopped" if rc == 3 else "failed",
             "lookups": lookup_band(LOOKUPS)}
+    fam = os_family()
+    if fam:
+        body["os"] = fam
+    return body
 
 
 REPORT_COMMANDS = ("scan", "recent", "project", "posture", "enrich", "all", "inventory", "get-key")
@@ -506,7 +516,7 @@ def report_queue_path() -> Path:
 
 
 def queue_load() -> list[dict]:
-    """The events waiting to be sent: only the four known fields, only well-formed rows, none older than QUEUE_DAYS."""
+    """The events waiting to be sent: only the known fields (the four, and the os family if it is linux or macos), only well-formed rows, none older than QUEUE_DAYS."""
     out: list[dict] = []
     try:
         lines = report_queue_path().read_text().splitlines()
@@ -517,6 +527,8 @@ def queue_load() -> list[dict]:
         try:
             row = json.loads(line)
             ev = {k: str(row[k]) for k in ("command", "result", "lookups", "day")}
+            if row.get("os") in ("linux", "macos"):
+                ev["os"] = row["os"]
         except (ValueError, KeyError, TypeError):
             continue
         if ev["command"] in REPORT_COMMANDS + ("other",) and ev["day"] >= limit and ev["result"] in ("ok", "matched", "stopped", "failed") \
@@ -549,7 +561,7 @@ def post_report(body: dict, timeout: float) -> bool:
 
 def report_run(command: str, rc: int, timeout: float = 3.0) -> bool:
     """Say that a scan ran, with store-and-forward: when namiq.io cannot be reached, the note is kept in a small local file
-    (50 events at most, 30 days at most, only the same three fields and the UTC day) and sent with the next run that is online, oldest first.
+    (50 events at most, 30 days at most, only the same fields and the UTC day) and sent with the next run that is online, oldest first.
     Best effort: it never changes the exit code, waits at most `timeout` seconds in all, follows no redirect, and is silent on any failure."""
     if not report_enabled():
         return False
@@ -585,11 +597,11 @@ def report_run(command: str, rc: int, timeout: float = 3.0) -> bool:
 
 def note_report_once() -> None:
     """The first run tells the person what is reported and how to stop it, once per user (a marker beside the pace file)."""
-    marker = cache_dir() / "run-report-noted"
+    marker = cache_dir() / "run-report-noted-2"   # -2: the note gained a field (the OS family), so everyone is told again once
     try:
         if marker.exists():
             return
-        progress("[report] after a scan, lattice-scan tells namiq.io that a scan ran: the command, how it ended and how many reads it made, in a band (for example 6-20). "
+        progress("[report] after a scan, lattice-scan tells namiq.io that a scan ran: the command, how it ended, how many reads it made, in a band (for example 6-20), and whether this is Linux or macOS (that word only, no version). "
                  "Never a host name, package, CVE id, path or address. Offline, the note waits in a small local file and is sent with the next online run. To stop it: LATTICE_SCAN_NO_REPORT=1. Details: README, 'What leaves the machine'.")
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.touch()
