@@ -18,9 +18,9 @@ from __future__ import annotations
 import re
 from typing import Iterable, Mapping, NamedTuple, Optional, Sequence
 
-try:                                    # inside the lattice_scan package
-    from lattice_scan.lattice_version import in_range, pid as make_pid, verdict as range_verdict
-except ImportError:                     # vendored next to lattice_version.py in another project
+try:                                    # inside a package (lattice_scan, or graph_mcp where it is vendored), beside lattice_version.py
+    from .lattice_version import in_range, pid as make_pid, verdict as range_verdict
+except ImportError:                     # loaded as a top-level module next to lattice_version.py
     from lattice_version import in_range, pid as make_pid, verdict as range_verdict  # type: ignore[no-redef]
 
 # Strongest first. Only the first two can make a Candidate (AD-7).
