@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- New: when a host or project scan finds at least one candidate, the tool writes a plain-text report of it to `reports/` inside the records folder (a new file each run, mode 0600) and prints one `[report] written to ...` line on stderr (not with `--quiet`). It is built on this machine from the scan result; nothing is sent. The report has the summary, the items with why, what was compared, what to check, sources, what was not covered and the limits, in that order, and never says a machine is vulnerable, safe or compromised.
+- Internal: the data a mailed report would carry is fixed in code and under test (the CVE id, product, installed upstream version, verdict, scan level and operating-system family, and nothing else), but nothing asks to mail anything and nothing is sent in this version.
+
 ## 0.8.1 — 2026-11-11
 
 - Changed: on a Mac, every host command (`scan`, `--cve`, `recent`, `--discover`, `--refresh --inventory`, `posture`) now stops with a plain message and exit 3. The tool cannot read a Mac yet, and until now it would have printed "no match", which a reader takes as "safe". `project` and `enrich` read no host and still work. Reading a Mac is planned.
