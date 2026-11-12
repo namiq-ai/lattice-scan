@@ -5,7 +5,7 @@
 lattice-scan \- check this host, or a project's declared dependencies, against the CVEs CISA lists as exploited, through Lattice
 .SH SYNOPSIS
 .B lattice-scan
-[\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-discover\fR] [\fB\-\-format\fR \fBconsole\fR|\fBjson\fR|\fBcsv\fR] [\fB\-\-json\fR \fIFILE\fR] [\fB\-\-refresh\fR [\fB\-\-inventory\fR]] [\fB\-\-list\fR] [\fB\-\-deep\fR] [\fB\-\-python\fR] [\fB\-\-python\-path\fR \fIDIR\fR]... [\fB\-\-again\fR] [\fB\-\-keep\fR] [\fB\-\-debug\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
+[\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-discover\fR] [\fB\-\-format\fR \fBconsole\fR|\fBjson\fR|\fBcsv\fR] [\fB\-\-json\fR \fIFILE\fR] [\fB\-\-refresh\fR [\fB\-\-inventory\fR]] [\fB\-\-list\fR] [\fB\-\-deep\fR] [\fB\-\-python\fR] [\fB\-\-python\-path\fR \fIDIR\fR]... [\fB\-\-node\fR] [\fB\-\-again\fR] [\fB\-\-keep\fR] [\fB\-\-debug\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
 .br
 .B lattice-scan project
 [\fIPATH\fR...] [\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-kev\-catalogue\fR \fIFILE\fR] [\fB\-\-max\-read\fR \fIN\fR]
@@ -120,6 +120,9 @@ Collect a deep inventory. The default, quick, takes the hardware, the host's pac
 .TP
 .B \-\-python
 Also read the Python packages installed outside the operating system's package manager: pip, uv and conda installs in the system and user site folders and in virtual environments (a folder holding pyvenv.cfg) in the home folder, up to three levels down. Only the metadata files those installers leave (dist-info METADATA, egg-info PKG-INFO) are read; no interpreter is started and nothing is fetched. A package the distribution installed under /usr/lib is left to dpkg or rpm. Each package joins the identity list as pypi:NAME, so a pip-installed wheel named on CISA's list is found. The folders stay in the local inventory.json. Same as LATTICE_SCAN_PYTHON=1.
+.TP
+.B \-\-node
+Also read the Node packages installed globally (npm install \-g into the system prefix, /usr/local, ~/.npm\-global or an nvm\-managed Node), with the dependencies nested below them, from each package.json only; nothing is run and nothing is fetched. Each joins the identity list as npm:NAME. A project's own node_modules is read by \fBproject\fR, from its lockfile. Same as LATTICE_SCAN_NODE=1.
 .TP
 .B \-\-python\-path \fIDIR\fR
 Also read this virtual environment or site-packages folder (repeatable; implies \fB\-\-python\fR).
@@ -459,6 +462,9 @@ Where \fBrecent\fR reads the lists (default https://namiq.io/lattice/recent.json
 .TP
 .B LATTICE_SCAN_PYTHON
 Set to 1 for the same as \fB\-\-python\fR: also read Python packages installed outside the OS package manager, from their metadata files only.
+.TP
+.B LATTICE_SCAN_NODE
+Set to 1 for the same as \fB\-\-node\fR.
 .TP
 .B LATTICE_SCAN_PYTHON_PATHS
 More virtual environments or site-packages folders to read, separated like PATH (the same as repeating \fB\-\-python\-path\fR).
