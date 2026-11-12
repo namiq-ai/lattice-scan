@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## 0.9.2 — 2026-11-12
+
+- New: a host scan and `recent` end with WHAT THIS RUN COVERED: CVEs read, results by kind, the identity list used (generation, CISA date, age, and how many of CISA's CVEs it matches by package identity: about 23%; the rest by names), installed items read by source, and what a clean result does not speak for (CVEs not read, software no package database lists, Windows and network devices, and Python or Node packages when `--python` or `--node` was not given). `--format json` and `--json` carry the same object as `receipt`, counted from the same table, so the two can never disagree.
 - Internal (inactive: the mail offer and the terminal key flow are still off): a person with no key who asks for a mailed report types the word `agree` to the beta terms, proves the mailbox with one mail, and the same Confirm gives them a free key. The key is created when the waiting tool claims it, stored in the private key file and never printed or mailed. `lattice-scan get-key` with no details does the same for a key alone. An agent keeps `get-key --accept-terms` with the person's details and never answers `agree`.
 
 - New: `--node` (or `LATTICE_SCAN_NODE=1`) also reads Node packages installed globally (`npm install -g` into the system prefix, /usr/local, ~/.npm-global or nvm), with the dependencies nested below them, from each `package.json` only. Nothing is run or fetched. Each joins the identity list as `npm:NAME`. Without the flag nothing is read.
