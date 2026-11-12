@@ -21,6 +21,9 @@ def dist(site: Path, name: str, version: str, installer="pip", folder: str = "")
 class Reading(unittest.TestCase):
     def setUp(self):
         self.home = Path(tempfile.mkdtemp())
+        p = mock.patch.object(pyenv, "system_site_dirs", lambda home=None: [])   # this machine's own /usr/local installs are not the test's (CI runners have many)
+        p.start()
+        self.addCleanup(p.stop)
 
     def test_a_virtual_environment_in_home_is_found_with_its_packages(self):
         venv = self.home / "work" / "env1"
