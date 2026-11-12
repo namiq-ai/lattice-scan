@@ -33,15 +33,23 @@ def _os_here() -> str:
     return sr.os_family(info.get("ID", ""), info.get("ID_LIKE", ""), platform.system())
 
 
+def _split_installed(entry: str, inv: dict) -> tuple[str, str]:
+    """The scan's matched-package strings carry the version ('libbrotli1 1.2.0-3ubuntu0.1', 'kernel 7.0.0-41'): split on the first space, and fall back to the inventory."""
+    name, _, ver = str(entry).partition(" ")
+    ver = ver.strip() or str(inv.get("packages", {}).get(name) or inv.get("snaps", {}).get(name) or "")
+    return name, ver
+
+
 def host_items(hits: list, inv: dict) -> list[dict]:
-    """From the host scan's (entry, why, impact) tuples. The product is CISA's product name; the version is the installed package's own."""
+    """From the host scan's (entry, why, impact) tuples. The product is CISA's product name; the name and version are the matched package's own."""
     out = []
     for e, _why, imp in hits:
-        names = list(imp.get("installed") or [])
-        ver = next((str(inv.get("packages", {}).get(n) or inv.get("snaps", {}).get(n) or "") for n in names if inv.get("packages", {}).get(n) or inv.get("snaps", {}).get(n)), "")
+        parts = [_split_installed(n, inv) for n in (imp.get("installed") or [])]
         pr = imp.get("priority") or {}
-        out.append({"cve": e["cve"], "product": e.get("product") or e.get("title", "")[:60], "version": ver, "verdict": (imp.get("versionCheck") or {}).get("verdict", "undetermined"),
-                    "priority": pr.get("level", "read"), "why": list(pr.get("reasons") or []), "installed": names[:10], "listed": e.get("added", ""), "due": e.get("due", ""), "due_status": imp.get("dueStatus", "")})
+        out.append({"cve": e["cve"], "product": e.get("product") or e.get("title", "")[:60], "version": next((v for _, v in parts if v), ""),
+                    "verdict": (imp.get("versionCheck") or {}).get("verdict", "undetermined"),
+                    "priority": pr.get("level", "read"), "why": list(pr.get("reasons") or []), "installed": [n for n, _ in parts][:10],
+                    "matched": [f"{n} {v}".strip() for n, v in parts][:5], "listed": e.get("added", ""), "due": e.get("due", ""), "due_status": imp.get("dueStatus", "")})
     return out
 
 
@@ -81,7 +89,7 @@ def preview(p: dict) -> str:
     if "inventory" in p:
         inv = p["inventory"]
         return (f"A report of this scan can be mailed to you. For this run only, this would be sent: {n} finding(s) (CVE id, product, installed version, verdict, priority, reasons, dates); "
-                f"and the inventory of this machine: {len(inv['packages'])} package(s), {len(inv['snaps'])} snap(s) and {len(inv['images'])} container image name(s) "
+                f"and the inventory of this machine: {len(inv['packages'])} package(s), {len(inv['snaps'])} snap(s) and {len(set(inv['images']) | set(inv.get('imageDetails', {})))} container image name(s) "
                 f"(an image name can name an internal registry), the kernel and OS names, the hardware maker and model, and the scan level and operating-system family"
                 + (f". The record was reduced to what the findings name: {p['cut']} entr(ies) left out." if p.get("cut") else ".")
                 + "\nNothing else leaves this machine: no hostname, address, port, path, user name, process list or posture data.")

@@ -41,6 +41,8 @@ SOURCES = ("CISA Known Exploited Vulnerabilities catalog (which ids are listed, 
 
 def _why(it: dict) -> list[str]:
     out = [str(w) for w in (it.get("why") or []) if str(w).strip()]
+    if it.get("due"):                                       # the due line below carries the date and the status: do not list the same fact twice
+        out = [w for w in out if "patch-due date" not in w]
     if it.get("listed"):
         out.append(f"listed by CISA on {it['listed']}")
     if it.get("due"):
@@ -72,6 +74,8 @@ def build_report(items: list[dict], payload: dict, generated: dt.date | None = N
             n += 1
             lines.append(f"  {n}. {it['cve']}  {it.get('product', '')} {it.get('version', '')}".rstrip())
             lines.append(f"     version check: {it.get('verdict', 'undetermined')}: {VERDICT_TEXT.get(str(it.get('verdict')), VERDICT_TEXT['undetermined'])}")
+            if it.get("matched"):
+                lines.append("     matched: " + "; ".join(str(m) for m in it["matched"][:5]))
             lines += [f"     why: {w}" for w in _why(it)]
     if not shown:
         lines.append("No candidate was found by this scan. That is not an all-clear: see what was not covered.")
