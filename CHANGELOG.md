@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 — 2026-11-12
 
 - New: macOS. `--cve`, `recent` and `--refresh --inventory` now read a Mac from files: the system version (and a security-improvement letter such as `(a)` if one is installed), the apps in /Applications and /System/Applications, and the Homebrew Cellar folder names. Nothing is run (`brew` never), no protected folder is opened, nothing extra is sent. A CVE that NVD files under `apple/macos` is checked against the Mac's own version; a release line Apple lists no range for, and a Mac with a letter, are "undetermined", never "fixed".
 - Changed: a CVE is mapped to a Mac by NVD's own product names: `apple/macos` is the system, and any other `apple/<name>` counts when an app of that name is installed (Safari, Xcode). iOS, iPadOS, watchOS, tvOS, visionOS and the old OS X names are skipped. Only a range that belongs to the Mac's own release line is compared; an upper-only range such as "before 15.3" belongs to line 15 and is not applied to line 14.
