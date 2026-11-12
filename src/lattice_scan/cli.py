@@ -1781,7 +1781,8 @@ def name_candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str]] |
         parts = macos.apple_parts(entry, inv)   # NVD files this CVE under apple/macos (the system) or apple/<an installed app>
         if parts:
             return "NVD names " + ", ".join(f"apple/{p['name']}" for p in parts) + " for this CVE", [p["label"] for p in parts], [p["version"] for p in parts]
-    if (vendor == "linux" and product == "kernel" or "linux kernel" in product) and inv.get("family") != "macos":   # a Mac's Darwin number is not a Linux kernel number
+    if (vendor == "linux" and product == "kernel" or "linux kernel" in product) and inv.get("family") != "macos" and inv.get("kernel"):
+        # a Mac's Darwin number is not a Linux kernel number; an inventory with no kernel version (an imported one) has no running kernel to match
         return f"kernel in use is {inv['kernel']}", [f"kernel {inv['kernel']}"], [inv["kernel"]]
     if product in ("node.js", "nodejs") and inv.get("node"):
         return f"Node.js {inv['node']} is installed", [f"node {inv['node']}"], [inv["node"]]

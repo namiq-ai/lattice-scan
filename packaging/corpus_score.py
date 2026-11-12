@@ -91,7 +91,8 @@ def predict(case: dict, mode: str) -> tuple:
             comp = r.get("component")
             rows[c["entry"]["cve"]] = li.Row(c["entry"]["cve"], tuple(r["pids"]), li.Component(comp["role"], tuple(comp["binaries"])) if comp else None, "corpus")
     saved = cli.IDENTITY
-    cli.IDENTITY = {"rows": rows if mode in ("identity", "verdict") else None, "aliases": {}, "note": "corpus"}
+    aliases = {k: v for c in cases() for k, v in (c.get("aliases") or {}).items()} if mode in ("identity", "verdict") else {}
+    cli.IDENTITY = {"rows": rows if mode in ("identity", "verdict") else None, "aliases": aliases, "note": "corpus"}
     try:
         inv = {**BASE_INV, **case["inventory"]}
         e = {"title": "", "added": "2099-01-02", "due": "2099-01-23", "action": "", "affected": [], **case["entry"]}

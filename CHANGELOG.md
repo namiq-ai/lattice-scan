@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fixed: the kernel rule no longer matches a kernel flaw when the inventory has no kernel version (an imported inventory); a real host scan always has one.
+- Changed: the corpus applies reviewed aliases, and gains a case for an inventory with no kernel version. With the browser alias (a vendor's stable build joins the browser's identity), the distribution verdict scores precision 0.86 and recall 1.00 on 12 cases (0.67 and 0.67 without it). The one remaining error is a vendor product with no identity row.
+
 - Changed: the corpus also scores the consented distribution verdict: the client's real step against a stand-in that answers from each case's fixed-version data by the server's rule. With it, precision 0.83 and recall 0.83 (without it 0.60 and 0.50; names only 0.33 and 0.33). The pip wheel, the bundled library and the backported fix now come out right; a vendor product with no identity row and a browser without an alias are still wrong. The release notes must carry both figures. A reason repeated by several matched packages is printed once.
 
 - New: the distribution's own verdict, after consent. When a host scan matches packages by identity, it asks once whether to send, for those packages only, the source package name, ecosystem, version and OS release (for example `brotli`, `deb`, `1.1.0-2+deb13u1`, `Debian 13`), and uses Lattice's answer from the distribution's or registry's own fixed version instead of comparing upstream numbers with NVD's range. A fix a distribution backported under an unchanged upstream number is shown as `FIXED`, not `CANDIDATE`; a pip wheel that NVD's range misses becomes in range. The upstream comparison is kept beside it in the record. With no terminal nothing is sent unless `--yes`; `LATTICE_SCAN_ITEM_VERDICT=off` never asks. An OS release (ID and VERSION_ID) is now read from /etc/os-release for this.

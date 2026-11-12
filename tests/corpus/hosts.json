@@ -1,5 +1,5 @@
 {
- "_comment": "Host fixtures for the precision and recall gate. Every name is invented and every CVE id is reserved (CVE-2099-*). Each case is one exploited CVE against one synthetic host; `truth` is what a careful person would conclude, written by hand with the reason, and is never derived from the tool. `row` is the identity-list row for the CVE (null: the list has none). Each case mirrors a real case seen on a maintainer host on 2026-11-12, named in `mirrors`. `fixes` is what the server's private index holds for the CVE (per-release fixed versions, OSV's shape); the `verdict` mode answers from it the way graph_affects does.",
+ "_comment": "Host fixtures for the precision and recall gate. Every name is invented and every CVE id is reserved (CVE-2099-*). Each case is one exploited CVE against one synthetic host; `truth` is what a careful person would conclude, written by hand with the reason, and is never derived from the tool. `row` is the identity-list row for the CVE (null: the list has none). Each case mirrors a real case seen on a maintainer host on 2026-11-12, named in `mirrors`. `fixes` is what the server's private index holds for the CVE (per-release fixed versions, OSV's shape); the `verdict` mode answers from it the way graph_affects does. `aliases` are reviewed Alias Table entries (installed pid -> product pid) in force for that case.",
  "cases": [
   {
    "id": "F1",
@@ -99,7 +99,7 @@
    "id": "F4",
    "mirrors": "google-chrome-stable below the fix",
    "truth": true,
-   "why": "the vendor's browser build is the product, below its fixed version; it needs a reviewed alias to join",
+   "why": "the vendor's browser build is the product, below its fixed version; it needs a reviewed alias to join; the vendor's stable build is the same browser, so a reviewed alias joins it",
    "inventory": {
     "manager": "dpkg",
     "packages": {
@@ -122,6 +122,9 @@
     "pids": [
      "deb:exampleium"
     ]
+   },
+   "aliases": {
+    "deb:examplegiant-browser-stable": "deb:exampleium"
    }
   },
   {
@@ -415,6 +418,30 @@
      "fixed": "140.0-1"
     }
    ]
+  },
+  {
+   "id": "F12",
+   "mirrors": "an imported inventory with no kernel version",
+   "truth": false,
+   "why": "no running kernel is known, so a kernel flaw cannot be matched to it",
+   "inventory": {
+    "manager": "dpkg",
+    "kernel": "",
+    "packages": {},
+    "sources": {}
+   },
+   "entry": {
+    "cve": "CVE-2099-1012",
+    "vendor": "Linux",
+    "product": "Kernel",
+    "ranges": [
+     {
+      "product": "linux/linux_kernel",
+      "end_excluding": "6.2"
+     }
+    ]
+   },
+   "row": null
   }
  ]
 }
