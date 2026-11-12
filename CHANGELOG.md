@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- New: the host matcher is scored on a synthetic corpus of 11 cases, each mirroring a real case (client-only OpenSSH, a word match on a JavaScript package, a vendor product with no identity row, a browser without an alias, a pip wheel, a bundled library, a backported fix, a library built from the product's source, a package inside an image). `python3 packaging/corpus_score.py` prints precision and recall with names only (the matching before 0.9.1: 0.33 and 0.33) and with the identity join (0.60 and 0.50), and each case's result. A test fails when a result changes or the figures drop below the recorded floor, and the release workflow refuses notes that do not state the figures. The cases it still gets wrong are listed, not hidden.
+
 - New: `posture` also looks for secret-looking values (a key, token or password) on the command lines of the programs it may read and in your shell history. It shows only the kind of value, the place and a count, never the value. The value is in no file, record or report, and nothing is sent. It is a lead, not a verdict: a harmless test value matches too.
 - Internal (inactive: the mail offer is still off): the scan record can carry an optional posture block (ports, firewall and SSH settings without the rules, programs no package owns) built from a declared field list, and after a yes to a mailed report the tool asks a second question about it (default No, this run only).
 
