@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- New: a host scan and `recent` end with WHAT THIS RUN COVERED: CVEs read, results by kind, the identity list used (generation, CISA date, age, and how many of CISA's CVEs it matches by package identity: about 23%; the rest by names), installed items read by source, and what a clean result does not speak for (CVEs not read, software no package database lists, Windows and network devices, and Python or Node packages when `--python` or `--node` was not given). `--format json` and `--json` carry the same object as `receipt`, counted from the same table, so the two can never disagree.
 - New: `--node` (or `LATTICE_SCAN_NODE=1`) also reads Node packages installed globally (`npm install -g` into the system prefix, /usr/local, ~/.npm-global or nvm), with the dependencies nested below them, from each `package.json` only. Nothing is run or fetched. Each joins the identity list as `npm:NAME`. Without the flag nothing is read.
 
 - Fixed: the kernel rule no longer matches a kernel flaw when the inventory has no kernel version (an imported inventory); a real host scan always has one.
