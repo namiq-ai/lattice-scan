@@ -1,0 +1,60 @@
+{
+ "_comment": "Host fixtures for the precision and recall gate. Every name is invented and every CVE id is reserved (CVE-2099-*). Each case is one exploited CVE against one synthetic host; `truth` is what a careful person would conclude, written by hand with the reason, and is never derived from the tool. `row` is the identity-list row for the CVE (null: the list has none). Each case mirrors a real case seen on a maintainer host on 2026-11-12, named in `mirrors`.",
+ "cases": [
+  {"id": "F1", "mirrors": "openssh-client only, sshd flaw", "truth": false, "why": "the flaw is in the server daemon; only the client package is installed",
+   "inventory": {"manager": "dpkg", "packages": {"examplessh-client": "1:9.2p1-2"}, "sources": {"examplessh-client": "examplessh"}},
+   "entry": {"cve": "CVE-2099-1001", "vendor": "Exampleorg", "product": "Examplessh", "ranges": [{"product": "exampleorg/examplessh", "end_excluding": "10.0"}]},
+   "row": {"pids": ["deb:examplessh"], "component": {"role": "server", "binaries": ["examplessh-server"]}}},
+
+  {"id": "F2", "mirrors": "node-electron-to-chromium against a Chromium flaw", "truth": false, "why": "a JavaScript lookup table that holds the browser's name, not the browser",
+   "inventory": {"manager": "dpkg", "packages": {"node-electron-to-exampleium": "1.4.0-1"}, "sources": {}},
+   "entry": {"cve": "CVE-2099-1002", "vendor": "Examplegiant", "product": "Exampleium", "ranges": [{"product": "examplegiant/exampleium", "end_excluding": "140.0"}]},
+   "row": {"pids": ["deb:exampleium"]}},
+
+  {"id": "F3", "mirrors": "networkd-dispatcher against SAP Web Dispatcher", "truth": false, "why": "a systemd helper that shares one word with an unrelated vendor product; the list has no row for vendor products",
+   "inventory": {"manager": "dpkg", "packages": {"exampled-dispatcher": "2.2.4-1"}, "sources": {}},
+   "entry": {"cve": "CVE-2099-1003", "vendor": "Examplesap", "product": "Web Dispatcher", "ranges": []},
+   "row": null},
+
+  {"id": "F4", "mirrors": "google-chrome-stable below the fix", "truth": true, "why": "the vendor's browser build is the product, below its fixed version; it needs a reviewed alias to join",
+   "inventory": {"manager": "dpkg", "packages": {"examplegiant-browser-stable": "139.0.1-1"}, "sources": {}},
+   "entry": {"cve": "CVE-2099-1004", "vendor": "Examplegiant", "product": "Exampleium V8", "ranges": [{"product": "examplegiant/exampleium", "end_excluding": "140.0"}]},
+   "row": {"pids": ["deb:exampleium"]}},
+
+  {"id": "F5", "mirrors": "pip-installed brotli 1.2.0 wheel, NVD range narrower than the registry fix", "truth": true, "why": "the registry fixed it in 1.2.1; 1.2.0 is affected although NVD's range stops at 1.1.1",
+   "inventory": {"manager": "dpkg", "packages": {}, "sources": {}, "python": {"/home/example/env1/lib/python3.12/site-packages": {"examplezip": "1.2.0"}}},
+   "entry": {"cve": "CVE-2099-1005", "vendor": "Exampleco", "product": "Examplezip", "ranges": [{"product": "exampleco/examplezip", "start_including": "1.1.0", "end_excluding": "1.1.1"}]},
+   "row": {"pids": ["pypi:examplezip", "deb:examplezip"]}},
+
+  {"id": "F6", "mirrors": "Node.js bundling Brotli (Debian lists nodejs as affected)", "truth": true, "why": "the distribution says this runtime package carries the vulnerable library and is unfixed in this release",
+   "inventory": {"manager": "dpkg", "packages": {"examplenode": "22.1.0+dfsg-1"}, "sources": {}},
+   "entry": {"cve": "CVE-2099-1006", "vendor": "Exampleco", "product": "Examplezip", "ranges": [{"product": "exampleco/examplezip", "start_including": "1.1.0", "end_excluding": "1.1.1"}]},
+   "row": {"pids": ["deb:examplezip", "deb:examplenode"]}},
+
+  {"id": "F7", "mirrors": "many installed packages, none of them the product", "truth": false, "why": "nothing installed is the product or ships it",
+   "inventory": {"manager": "dpkg", "packages": {"acl": "2.3.2-2", "bash": "5.2.37-1", "coreutils": "9.5-1", "curl": "8.11.1-1", "tar": "1.35-2", "zlib1g": "1:1.3.dfsg-3"}, "sources": {"zlib1g": "zlib"}},
+   "entry": {"cve": "CVE-2099-1007", "vendor": "Examplegear", "product": "Exampleappliance OS", "ranges": [{"product": "examplegear/exampleappliance_os", "end_excluding": "7.4"}]},
+   "row": null},
+
+  {"id": "F8", "mirrors": "Debian revision that backports the fix under the same upstream number", "truth": false, "why": "the distribution fixed it in 1.1.0-2+deb13u1; the upstream number still reads 1.1.0",
+   "inventory": {"manager": "dpkg", "os": "Debian GNU/Linux 13 (trixie)", "packages": {"libexamplezip1": "1.1.0-2+deb13u1"}, "sources": {"libexamplezip1": "examplezip"}},
+   "entry": {"cve": "CVE-2099-1008", "vendor": "Exampleco", "product": "Examplezip", "ranges": [{"product": "exampleco/examplezip", "start_including": "1.1.0", "end_excluding": "1.1.1"}]},
+   "row": {"pids": ["deb:examplezip"]}},
+
+  {"id": "F9", "mirrors": "libssl3 against an OpenSSL flaw", "truth": true, "why": "the library is built from the product's source and is below the fix",
+   "inventory": {"manager": "dpkg", "packages": {"libexssl3": "3.0.11-1"}, "sources": {"libexssl3": "examplessl"}},
+   "entry": {"cve": "CVE-2099-1009", "vendor": "Examplessl", "product": "Examplessl", "ranges": [{"product": "examplessl/examplessl", "start_including": "3.0.0", "end_excluding": "3.0.12"}]},
+   "row": {"pids": ["deb:examplessl"]}},
+
+  {"id": "F10", "mirrors": "openssh-server installed, sshd flaw", "truth": true, "why": "the server package is installed and below the fix",
+   "inventory": {"manager": "dpkg", "packages": {"examplessh-client": "1:9.2p1-2", "examplessh-server": "1:9.2p1-2"}, "sources": {"examplessh-client": "examplessh", "examplessh-server": "examplessh"}},
+   "entry": {"cve": "CVE-2099-1010", "vendor": "Exampleorg", "product": "Examplessh", "ranges": [{"product": "exampleorg/examplessh", "end_excluding": "10.0"}]},
+   "row": {"pids": ["deb:examplessh"], "component": {"role": "server", "binaries": ["examplessh-server"]}}},
+
+  {"id": "F11", "mirrors": "chromium-common inside a running image", "truth": true, "why": "the browser package is inside the image, below the fix",
+   "inventory": {"manager": "dpkg", "packages": {}, "sources": {}, "images": ["exampleorg/app:1"],
+                 "imageDetails": {"exampleorg/app:1": {"packageManager": "dpkg", "packages": {"exampleium-common": "139.0-1"}, "sources": {"exampleium-common": "exampleium"}}}},
+   "entry": {"cve": "CVE-2099-1011", "vendor": "Examplegiant", "product": "Exampleium", "ranges": [{"product": "examplegiant/exampleium", "end_excluding": "140.0"}]},
+   "row": {"pids": ["deb:exampleium"]}}
+ ]
+}

@@ -1563,9 +1563,11 @@ def inventory() -> dict:
     progress(f"[host] snaps: {len(snaps)}")
     images = sorted({i for i in run(["docker", "ps", "--format", "{{.Image}}"]).splitlines() if i})
     progress(f"[host] container images running (names only): {len(images)}")
-    osr = ""
+    osr, os_release = "", ""
     try:
-        osr = next((l.split("=", 1)[1].strip('"') for l in Path("/etc/os-release").read_text().splitlines() if l.startswith("PRETTY_NAME=")), "")
+        rel = parse_os_release(Path("/etc/os-release").read_text())
+        osr = rel.get("PRETTY_NAME", "")
+        os_release = release_name(rel.get("ID", ""), rel.get("VERSION_ID", ""))   # "Debian 13": what the distribution verdict is keyed by
     except OSError:
         pass
     kernel = run(["uname", "-r"]).strip()
@@ -1574,7 +1576,7 @@ def inventory() -> dict:
     progress("[host] hardware: " + (" ".join(x for x in (host.get("manufacturer"), host.get("model"), host.get("version")) if x) or "not reported by this machine"))
     IMAGE_SCAN.clear()
     details = image_details(images)
-    inv = {"kernel": kernel, "os": osr, "manager": manager if pk else "", "host": host, "packages": pk, "sources": srcs, **({"python": python} if python else {}), "snaps": snaps, "images": images, "imageDetails": details, "node": run(["node", "-v"]).strip(),
+    inv = {"kernel": kernel, "os": osr, "manager": manager if pk else "", "host": host, "packages": pk, "sources": srcs, **({"osRelease": os_release} if os_release else {}), **({"python": python} if python else {}), "snaps": snaps, "images": images, "imageDetails": details, "node": run(["node", "-v"]).strip(),
            "restartRequired": Path("/var/run/reboot-required").exists()}
     if IMAGE_SCAN:
         inv["imageScan"] = dict(IMAGE_SCAN)
@@ -1679,7 +1681,39 @@ def identity_match(entry: dict, inv: dict):
     names = sorted({j.artefact.name for j in kept})
     via = "; ".join(sorted({j.via for j in kept}))
     return ("join", (f"package identity: {via}", [f"{j.artefact.name} {j.artefact.version}" for j in sorted(kept, key=lambda j: j.artefact.name)],
-                     sorted({j.artefact.version for j in kept}) if names else []))
+                     sorted({j.artefact.version for j in kept}) if names else []), [j.artefact for j in kept])
+
+
+# CVE -> the installed artefacts that joined it by identity in this run (candidate() fills it); the distribution verdict asks about exactly these.
+JOINED: dict = {}
+ITEM_ECOSYSTEMS = ("deb", "apk", "rpm", "pypi", "npm", "cargo")   # maven ids hold a colon, which an item may not carry
+_ITEM_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")      # the server's lattice-item/1 rules: nothing that carries a host, path or URL
+_ITEM_VERSION = re.compile(r"^[0-9A-Za-z.+~:_-]{1,64}$")
+_ITEM_OS = re.compile(r"^[A-Za-z][A-Za-z0-9 ._-]{0,31}$")
+
+
+def release_name(os_id: str, version_id: str) -> str:
+    """"debian", "13" -> "Debian 13"; "" when either is missing or unusual. The release a distribution's own fixed versions are kept by."""
+    name = f"{os_id.strip().capitalize()} {version_id.strip()}".strip()
+    return name if os_id and version_id and _ITEM_OS.fullmatch(name) else ""
+
+
+def verdict_item(a: "li.Artefact", inv: dict) -> dict | None:
+    """The lattice-item/1 for one joined artefact: its package identity's name, ecosystem and version, and the release it came from. None when it
+    cannot be sent under the item rules (a Maven id, an odd version): the upstream comparison then stands for it."""
+    eco, _, name = a.pid.partition(":")
+    if eco not in ITEM_ECOSYSTEMS or not _ITEM_NAME.fullmatch(name) or not _ITEM_VERSION.fullmatch(a.version or ""):
+        return None
+    it = {"product": name, "ecosystem": eco, "version": a.version, "kind": "package"}
+    if eco in ("deb", "apk", "rpm"):
+        if a.source.startswith("image "):
+            d = (inv.get("imageDetails") or {}).get(a.source[6:]) or {}
+            osn = release_name(str(d.get("os") or ""), str(d.get("osVersion") or ""))
+        else:
+            osn = inv.get("osRelease") or ""
+        if osn:
+            it["os"] = osn
+    return it
 
 
 def stems(name: str) -> set[str]:
@@ -1717,6 +1751,7 @@ def candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str]] | None
     ident = identity_match(entry, inv)
     if ident is not None and ident[0] == "join":
         entry["matchBasis"] = "identity"
+        JOINED[entry.get("cve", "")] = ident[2]
         return ident[1]
     if ident is not None and ident[0] == "absent":
         dbg(f"   match {entry.get('cve')}: {ident[1]}; not a candidate")
@@ -2576,6 +2611,7 @@ def cmd_run(a) -> int:
                 else:   # another run recorded it a moment ago
                     again_hits.append((e, why, imp))
             seen.add(cve)
+        distribution_verdicts(a, lat, inv, hits + again_hits, rows)
     except LatticeError as err:
         write_private(seen_f, json.dumps(sorted(seen)))
         scanlog(f"STOPPED after {read} read, {len(hits)} candidates: {err}")
@@ -3538,6 +3574,72 @@ def confirm_send(a, kind: str, ask: str, sample: str, lines: list[str], note: st
 VERDICT_ORDER = {"in-range": 0, "undetermined": 1, "outside-range": 2}
 
 
+def distribution_verdicts(a, lat: "Lattice", inv: dict, found: list, rows: list) -> None:
+    """For candidates that joined by package identity, ask Lattice for the distribution's or registry's own verdict, after consent, and use it.
+
+    Only the packages that joined a CVE on the identity list are sent, one at a time: the source package's name, its ecosystem, its version and the release
+    (for example `brotli`, `deb`, `1.1.0-2+deb13u1`, `Debian 13`). Never a host name, path, address or the package list. Without consent, or when an item is
+    not answered, the upstream comparison stands and the person is told so. A verdict from the distribution's own fixed version replaces it; the upstream
+    one is kept beside it (versionCheckUpstream). A candidate the distribution fixed is shown as FIXED, not CANDIDATE."""
+    want = [(e, imp) for e, _why, imp in found if e.get("matchBasis") == "identity" and JOINED.get(e["cve"])]
+    if not want or env("ITEM_VERDICT", "on").lower() in ("0", "off", "no"):
+        return
+    per_cve, unique = {}, {}
+    for e, _imp in want:
+        its = [it for it in (verdict_item(x, inv) for x in JOINED[e["cve"]]) if it]
+        per_cve[e["cve"]] = its
+        for it in its:
+            unique.setdefault(tuple(sorted(it.items())), it)
+    items_ = list(unique.values())
+    if not items_:
+        return
+    n = len(items_)
+    lines = [" ".join(f"{k}={v}" for k, v in sorted(it.items())) for it in items_]
+    sample = ", ".join(f"{it['product']} {it['version']}" + (f" ({it['os']})" if it.get("os") else "") for it in items_[:3]) + (f" and {n - 3} more" if n > 3 else "")
+    note = (f"for each of the {n} package(s) that matched a CVE here: its name, ecosystem, version and OS release. Never: host name, addresses, ports, paths, "
+            "user names, your package list.\nnamiq.io does not record who asked; it only counts lookups.")
+    asked = "Ask Lattice whether your distribution or registry has already fixed {} matched package{}?\nthe distribution's own verdict instead of a comparison of upstream numbers.".format(n, "s" if n != 1 else "")
+    fields = {k for it in items_ for k in it}
+    if not getattr(a, "yes", False) and not sys.stdin.isatty() and not consent_remembered("items:verdict", tuple(sorted(fields))):
+        progress(f"[verdict] {n} matched package(s) were not sent for the distribution's verdict (no terminal to ask on; --yes sends them). "
+                 "Their verdicts compare upstream numbers.")
+        return
+    if not confirm_send(a, "items:verdict", asked, sample, lines, note, fields):
+        progress("[verdict] not sent: the verdicts compare upstream numbers, which a distribution's backported fix can make look unfixed.")
+        return
+    answers = {}
+    for k, (key, it) in enumerate(unique.items(), 1):
+        progress(f"[verdict {k}/{n}] {it['product']} {it['version']}" + (f" ({it['os']})" if it.get("os") else ""))
+        try:
+            ans = lat.call("graph_affects", **it)
+        except LatticeError as err:
+            progress(f"[verdict] stopped after {k - 1} of {n}: {clean(str(err))}; the rest keep the upstream comparison")
+            break
+        answers[key] = [r for r in (ans.get("results") or []) if isinstance(r, dict) and r.get("basis") in ("distribution", "registry")]
+    rank = {"in-range": 0, "undetermined": 1, "outside-range": 2}
+    fixed = 0
+    for e, imp in want:
+        got = []
+        for it in per_cve.get(e["cve"], []):
+            for r in answers.get(tuple(sorted(it.items())), []):
+                if r.get("cve") == e["cve"] and r.get("verdict") in rank:
+                    got.append((r["verdict"], f"{it['product']} {it['version']}: {clean(str(r.get('why') or ''))}", r.get("basis")))
+        if not got:
+            continue
+        verdict = min((g[0] for g in got), key=lambda v: rank[v])      # one affected package is enough to keep it a candidate
+        imp["versionCheckUpstream"] = imp.get("versionCheck")
+        imp["versionCheck"] = {"verdict": verdict, "why": "; ".join(g[1] for g in got)[:600], "basis": got[0][2]}
+        append("findings.jsonl", {"event": "impact", "ref": e["cve"], "on": TODAY, "impact": imp})
+        if verdict == "outside-range":
+            fixed += 1
+            for row in rows:
+                if row and row[0] == e["cve"] and row[-2] in ("CANDIDATE", "RECORDED"):
+                    row[-2] = "FIXED"
+                    row[-1] = f"{imp['versionCheck']['why']} (the distribution's own fixed version)"
+    if fixed:
+        progress(f"[verdict] {fixed} candidate(s) are already fixed by the distribution or registry: shown as FIXED")
+
+
 def cmd_all(a) -> int:
     """`--discover --all`: the old software the recent list cannot cover. The items that matter on this machine (what listens or runs, well-known server software, the
     kernel) are shown, confirmed, and sent one at a time to Lattice, which answers from its graph. The exposure label is joined here, from this machine's own listeners."""
@@ -3988,7 +4090,7 @@ def _main() -> int:
     p.add_argument("--monthly", dest="period", action="store_const", const="monthly", help="with --discover: the last thirty days")
     p.add_argument("--open", dest="period", action="store_const", const="open", help="with --discover: exploited CVEs older than a week but within thirty days, overdue first")
     p.add_argument("--all", dest="all_index", action="store_true", help="with --discover: check the older software on this machine. The items that matter (what listens or runs, well-known server software, the kernel) are shown, confirmed, and sent one at a time to Lattice")
-    p.add_argument("--yes", action="store_true", help="send what --all or posture --attack shows without asking first (for scripts)")
+    p.add_argument("--yes", action="store_true", help="send what --all, posture --attack or the distribution-verdict question shows without asking first (for scripts)")
     p.add_argument("--quick", action="store_true", help="with --discover --all: level 1 only (this machine, image operating systems, what listens or runs), even with a key")
     p.add_argument("--also", action="append", metavar="PACKAGE", help="with --discover --all: also send this installed package (repeatable)")
     p.add_argument("--max-items", type=int, default=None, help="with --discover --all: most items to send (default 25 without a key, 200 with one)")
