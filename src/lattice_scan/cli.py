@@ -2691,7 +2691,7 @@ def report_flow(kind: str, found, inv, a) -> None:
         items = srf.host_items(found, inv) if kind == "host" else srf.project_items(found)
         srf.after_scan(items, "deep" if getattr(a, "deep", False) else "quick", OUT / "reports", quiet=not PROGRESS, fmt=getattr(a, "format", "table") or "table",
                        env=dict(os.environ), stdin_tty=sys.stdin.isatty(), stderr_tty=sys.stderr.isatty(), inv=inv if kind == "host" else srf.project_inventory(found),
-                       posture=posture_data() if kind == "host" else None, key=os.environ.get("LATTICE_API_KEY"))
+                       posture=posture_data() if kind == "host" else None, key=KEY or None, terms_version=terms_version, store_key=store_key_file)
     except Exception as err:   # noqa: BLE001 - the scan's answer matters more than its report
         dbg(f"report: not written: {err}")
 
@@ -3861,9 +3861,28 @@ def terms_version() -> str:
     return clean(str(v))
 
 
+def store_key_file(key: str) -> bool:
+    """Write a key to the private key file (mode 0600). Never prints it. False when there is nothing to write."""
+    if not key:
+        return False
+    private_dir(keep=True)
+    fd = os.open(OUT / "key", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(key + "\n")
+    os.chmod(OUT / "key", 0o600)
+    return True
+
+
 def cmd_get_key(a) -> int:
     """Ask for a Lattice key on behalf of a real person who gave these details and agreed to the terms. The key goes to a private file and is never printed."""
     terms_page = "https://namiq.io/lattice/docs"
+    given = [f for f in ("name", "position", "company", "email", "purpose") if getattr(a, f, None)]
+    if not given and not a.accept_terms:      # no details: the person-at-a-terminal flow (limits ADR D5)
+        from . import scan_report_send as srs
+        return srs.get_key_interactive(terms_version=terms_version, store_key=store_key_file)
+    if len(given) < 5:
+        print("get-key with details needs all of --name --position --company --email --purpose (an agent acting for a person), or no details at all for the interactive flow at a terminal.", file=sys.stderr)
+        return 2
     plan = f"for {a.name} ({a.position}, {a.company}), confirmation email to {a.email}"
     if not a.accept_terms:
         print(f"Not sent. A key would be requested {plan}.\n"
@@ -4183,7 +4202,7 @@ def _main() -> int:
     en.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
     gk = sub.add_parser("get-key", help="request a Lattice key for a real person who has read the terms and gave these details; the key is stored, never printed")
     for flag in ("name", "position", "company", "email", "purpose"):
-        gk.add_argument(f"--{flag}", required=True, help=f"the person's {flag}" if flag != "purpose" else "what the key will be used for, one or two sentences (at least 20 characters)")
+        gk.add_argument(f"--{flag}", help=f"the person's {flag}" if flag != "purpose" else "what the key will be used for, one or two sentences (at least 20 characters)")
     gk.add_argument("--accept-terms", action="store_true", help="the person has read the beta terms and agreed, and reads that mailbox (without this nothing is sent)")
     gk.add_argument("--force", action="store_true", help="ask even though a key is already stored")
     sub.add_parser("list"); sub.add_parser("stats")

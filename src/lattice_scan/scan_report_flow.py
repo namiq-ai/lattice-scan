@@ -159,7 +159,7 @@ def record_after_yes(inv: dict | None, items: list[dict], level: str, os_name: s
 
 
 def after_scan(items: list[dict], level: str, directory: Path, *, quiet: bool, fmt: str = "table", env: dict | None = None, stdin_tty: bool = False, stderr_tty: bool = False,
-               input_fn=input, out=None, enabled: bool | None = None, os_name: str | None = None, inv: dict | None = None, posture: dict | None = None, secrets_fn=None, post=None, key: str | None = None) -> Path | None:
+               input_fn=input, out=None, enabled: bool | None = None, os_name: str | None = None, inv: dict | None = None, posture: dict | None = None, secrets_fn=None, post=None, key: str | None = None, terms_version=None, store_key=None, interactive=None) -> Path | None:
     """Build the payload and the report, write the private file (unless there is no candidate), then offer a mail where allowed."""
     if not items:
         return None
@@ -173,7 +173,7 @@ def after_scan(items: list[dict], level: str, directory: Path, *, quiet: bool, f
             sendable = record_after_yes(inv, items, level, os_w, payload, posture if kind_is_host(inv) else None, input_fn, out, secrets_fn)
             if post is not None or MAIL_AVAILABLE:
                 from . import __version__
-                send.send_report(sendable, key, __version__, input_fn, out, post=post or send.default_post)
+                send.send_report(sendable, key, __version__, input_fn, out, post=post or send.default_post, terms_version=terms_version, store_key=store_key, interactive=interactive)
             else:
                 print("Mailing a report is not available in this version. Your report is saved at " + str(path), file=out if out is not None else sys.stderr)
     return path

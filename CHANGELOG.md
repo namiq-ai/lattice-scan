@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Internal (inactive: the mail offer and the terminal key flow are still off): a person with no key who asks for a mailed report types the word `agree` to the beta terms, proves the mailbox with one mail, and the same Confirm gives them a free key. The key is created when the waiting tool claims it, stored in the private key file and never printed or mailed. `lattice-scan get-key` with no details does the same for a key alone. An agent keeps `get-key --accept-terms` with the person's details and never answers `agree`.
+
 - New: `--node` (or `LATTICE_SCAN_NODE=1`) also reads Node packages installed globally (`npm install -g` into the system prefix, /usr/local, ~/.npm-global or nvm), with the dependencies nested below them, from each `package.json` only. Nothing is run or fetched. Each joins the identity list as `npm:NAME`. Without the flag nothing is read.
 
 - Fixed: the kernel rule no longer matches a kernel flaw when the inventory has no kernel version (an imported inventory); a real host scan always has one.
