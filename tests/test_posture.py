@@ -5,6 +5,8 @@ import json, os, shutil, sys, tempfile, unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tmpfold  # noqa: E402  (one temp root per test run, removed at exit)
 from lattice_scan import posture  # noqa: E402
 
 ROOTS = []   # the temporary trees of this module; removed once, at the end (an implicit clean-up of a TemporaryDirectory is a ResourceWarning)
@@ -19,7 +21,7 @@ class Fake:
     """A tree under a temporary folder that posture reads as if it were /."""
 
     def __init__(self):
-        self.root = Path(tempfile.mkdtemp())
+        self.root = Path(tmpfold.mkdtemp())
         ROOTS.append(self.root)
         self.calls = []
 

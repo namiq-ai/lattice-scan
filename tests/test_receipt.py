@@ -5,6 +5,8 @@ import json, re, sys, tempfile, unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src")); sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tmpfold  # noqa: E402  (one temp root per test run, removed at exit)
 from lattice_scan import cli  # noqa: E402
 from test_lattice_scan import Client  # noqa: E402
 
@@ -15,7 +17,7 @@ class Receipt(unittest.TestCase):
     setUp, tearDown, run_cli = Client.setUp, Client.tearDown, Client.run_cli
 
     def test_the_console_and_the_json_report_the_same_counts(self):
-        f = Path(tempfile.mkdtemp()) / "r.json"
+        f = Path(tmpfold.mkdtemp()) / "r.json"
         rc, out, _ = self.run_cli("--cve", "CVE-2099-0001,CVE-2099-9999", "--json", str(f))   # one run: the console text and the JSON file
         self.assertIn("WHAT THIS RUN COVERED", out)
         line = next(l for l in out.splitlines() if l.strip().startswith("CVEs read:"))

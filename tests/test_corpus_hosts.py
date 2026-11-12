@@ -6,7 +6,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "packaging"))
-os.environ.setdefault("LATTICE_SCAN_DIR", tempfile.mkdtemp())   # the matcher may write a debug line; never into the user's records
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tmpfold  # noqa: E402  (one temp root per test run, removed at exit)
+os.environ.setdefault("LATTICE_SCAN_DIR", tmpfold.mkdtemp())   # the matcher may write a debug line; never into the user's records
 import corpus_score  # noqa: E402
 
 EXPECTED = json.loads((ROOT / "tests" / "corpus" / "hosts-expected.json").read_text())

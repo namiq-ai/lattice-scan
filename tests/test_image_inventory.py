@@ -6,6 +6,8 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tmpfold  # noqa: E402  (one temp root per test run, removed at exit)
 from lattice_scan import cli  # noqa: E402
 
 ALPINE_OS = 'NAME="Alpine Linux"\nID=alpine\nVERSION_ID=3.21.3\nPRETTY_NAME="Alpine Linux v3.21"\n'
@@ -186,7 +188,7 @@ def rpm_header(name, version, release, epoch=None):
 
 def rpm_sqlite(rows):
     import sqlite3, os
-    f = tempfile.mktemp(suffix=".sqlite")
+    f = tmpfold.mktemp(suffix=".sqlite")
     con = sqlite3.connect(f)
     con.execute("CREATE TABLE Packages (hnum INTEGER PRIMARY KEY, blob BLOB)")
     for r in rows:
@@ -430,7 +432,7 @@ class Progress(unittest.TestCase):
     def test_quick_hint_names_the_gap_the_time_and_the_command(self):
         import contextlib
         inv = {"imageScan": {"level": "quick", "local": 24, "opened": 7, "deepSeconds": 330}}
-        d = Path(tempfile.mkdtemp())
+        d = Path(tmpfold.mkdtemp())
         err = io.StringIO()
         with mock.patch.object(cli, "OUT", d), mock.patch.object(cli, "PROGRESS", True), contextlib.redirect_stderr(err):
             cli.deep_hint(inv)
@@ -459,7 +461,7 @@ class Progress(unittest.TestCase):
         self.assertEqual(err.getvalue(), "")
 
     def test_a_complete_deep_scan_is_recorded_and_an_incomplete_one_is_not(self):
-        d = Path(tempfile.mkdtemp())
+        d = Path(tmpfold.mkdtemp())
         with mock.patch.object(cli, "OUT", d), mock.patch.object(cli, "image_languages", lambda cid: ({}, True)):
             collect(lang="all", level="deep")
             self.assertEqual(json.loads((d / "deep.json").read_text())["images"], 3)

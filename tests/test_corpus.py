@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tmpfold  # noqa: E402  (one temp root per test run, removed at exit)
 from lattice_scan import cli  # noqa: E402
 from test_lattice_scan import Client, Stub, lookup  # noqa: E402
 
@@ -18,7 +19,7 @@ class Corpus(unittest.TestCase):
     tearDown = Client.tearDown
 
     def pairs(self, project: Path):
-        out = Path(tempfile.mkdtemp()) / "r.json"
+        out = Path(tmpfold.mkdtemp()) / "r.json"
         sys.argv = ["lattice-scan", "project", str(project), "--kev-catalogue", str(CORPUS / "catalogue.json"), "--json", str(out), "--quiet"]
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             rc = cli.main()

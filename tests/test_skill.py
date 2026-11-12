@@ -5,6 +5,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tmpfold  # noqa: E402  (one temp root per test run, removed at exit)
 from lattice_scan import __version__  # noqa: E402
 
 SKILL = ROOT / "skills/lattice-scan/SKILL.md"
@@ -36,7 +38,7 @@ class Bundle(unittest.TestCase):
     def test_the_bundled_script_imports_and_runs_its_lazy_modules(self):
         import subprocess
         for argv in (["--version"], ["inventory", "--share", "--no-feed", "--max-lines", "10"]):
-            r = subprocess.run([sys.executable, str(PYZ), *argv], capture_output=True, text=True, timeout=120, env={**os.environ, "LATTICE_SCAN_DIR": tempfile.mkdtemp()})
+            r = subprocess.run([sys.executable, str(PYZ), *argv], capture_output=True, text=True, timeout=120, env={**os.environ, "LATTICE_SCAN_DIR": tmpfold.mkdtemp()})
             self.assertNotIn("ImportError", r.stderr, f"{argv}: {r.stderr[-300:]}")
             self.assertEqual(r.returncode, 0, f"{argv}: {r.stderr[-300:]}")
 

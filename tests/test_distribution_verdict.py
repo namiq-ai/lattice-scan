@@ -7,6 +7,8 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tmpfold  # noqa: E402  (one temp root per test run, removed at exit)
 from lattice_scan import cli, lattice_identity as li  # noqa: E402
 
 ROWS = {"CVE-2099-0001": li.Row("CVE-2099-0001", ("deb:examplezip", "apk:examplezip"), None, "osv-debian"),
@@ -45,7 +47,7 @@ def server(args):
 
 class Verdict(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.mkdtemp()
+        self.tmp = tmpfold.mkdtemp()
         for p in (mock.patch.object(cli, "OUT", Path(self.tmp)), mock.patch.object(cli, "IDENTITY", {"rows": ROWS, "aliases": {}, "note": ""}),
                   mock.patch.object(cli, "JOINED", {}), mock.patch.object(cli, "PROGRESS", True), mock.patch.dict(os.environ, {"LATTICE_SCAN_ITEM_VERDICT": ""})):
             p.start()

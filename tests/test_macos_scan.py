@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tmpfold  # noqa: E402  (one temp root per test run, removed at exit)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from lattice_scan import cli, macos   # noqa: E402
 
@@ -22,7 +23,7 @@ ENTRY = {"cve": "CVE-2099-0100", "vendor": "Apple", "product": "Multiple Product
 
 
 def tree(version="14.7.4", extra="", apps=None, brew=None):
-    root = tempfile.mkdtemp()
+    root = tmpfold.mkdtemp()
     sv = Path(root) / "System/Library/CoreServices"
     sv.mkdir(parents=True)
     d = {"ProductName": "macOS", "ProductVersion": version, "ProductBuildVersion": "23H420"}
@@ -88,7 +89,7 @@ class ReadAMac(unittest.TestCase):
         self.assertEqual(macos.read_os(tree("15.3"))["extra"], "")
 
     def test_a_mac_without_the_version_file_reads_nothing_and_says_so(self):
-        self.assertEqual(macos.read_os(tempfile.mkdtemp()), {})
+        self.assertEqual(macos.read_os(tmpfold.mkdtemp()), {})
 
 
 class Verdicts(unittest.TestCase):
