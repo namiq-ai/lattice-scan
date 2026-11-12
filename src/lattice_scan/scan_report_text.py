@@ -124,5 +124,5 @@ def save_report(text: str, directory: Path, out=None, now: dt.datetime | None = 
             p = d / f"report-{stamp}-{i}.txt"
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         fh.write(text)
-    print(f"Report written: {p}", file=out if out is not None else sys.stderr)
+    print(f"[report] written to {p}", file=out if out is not None else sys.stderr)
     return p

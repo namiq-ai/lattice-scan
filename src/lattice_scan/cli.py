@@ -2353,7 +2353,19 @@ def cmd_run(a) -> int:
         print("COVERAGE: listeners and services were read; running programs and persistence entries that no package owns were not (they cannot be matched by name; posture --deep lists them)."
               + ("" if cov["firewallRead"] else " Firewall rules were not read: needs root."))
     snapshot_report(posture_data(), inv["hash"])
+    report_flow("host", hits + again_hits, inv, a)
     return fail_on_exit(getattr(a, "fail_on", "never"), [imp for _, _, imp in hits + again_hits])
+
+
+def report_flow(kind: str, found, inv, a) -> None:
+    """The local report file, and the offer to mail it where the report ADR allows (scan_report_flow). Never breaks a scan: the report is extra."""
+    try:
+        from . import scan_report_flow as srf
+        items = srf.host_items(found, inv) if kind == "host" else srf.project_items(found)
+        srf.after_scan(items, "deep" if getattr(a, "deep", False) else "quick", OUT / "reports", quiet=not PROGRESS, fmt=getattr(a, "format", "table") or "table",
+                       env=dict(os.environ), stdin_tty=sys.stdin.isatty(), stderr_tty=sys.stderr.isatty())
+    except Exception as err:   # noqa: BLE001 - the scan's answer matters more than its report
+        dbg(f"report: not written: {err}")
 
 
 PROJECT_EPILOG = """\
@@ -2664,6 +2676,7 @@ def cmd_project(a) -> int:
         report.emit(report.console(results, TODAY, tool, report.width_for(a.width), report.use_color(a.color, sys.stdout), outputs={"csv": a.csv, "json": a.json}), None)
     if stopped:
         print(f"stopped: {stopped}", file=sys.stderr)
+    report_flow("project", results, None, a)
     bad = [h for r in results for h in r["candidates"] if (a.fail_on == "candidate") or (a.fail_on == "in-range" and h["versionCheck"]["verdict"] == "in-range")]
     return 1 if (bad and a.fail_on != "never") else (3 if stopped else 0)
 
