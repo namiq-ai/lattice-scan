@@ -469,7 +469,7 @@ Pretend today is this YYYY\-MM\-DD (tests, reproducing a report).
 Set to 1 by our own test runs: the user agent reads \fBlattice\-scan/\fR\fIversion\fR \fB(test)\fR so the website's counts leave them out.
 .TP
 .B LATTICE_SCAN_NO_REPORT
-Set to 1 to send nothing when a run ends and to keep nothing for later. By default a run that read from Lattice reports that a scan ran (kept in a small local file and sent with the next online run when namiq.io cannot be reached): the command, how it ended and a band for the number of reads, never a host, package, CVE id, path, address or key. It is always off when \fBLATTICE_URL\fR or the feed address is not namiq.io.
+Set to 1 to send nothing when a run ends and to keep nothing for later. By default a run that read from Lattice reports that a scan ran (kept in a small local file and sent with the next online run when namiq.io cannot be reached): the command, how it ended, a band for the number of reads and the operating\-system family (linux or macos, no version), never a host, package, CVE id, path, address or key. It is always off when \fBLATTICE_URL\fR or the feed address is not namiq.io.
 .TP
 .B LATTICE_SCAN_RUN_URL
 Where the run report goes (tests). Any value other than the default switches the report off.
