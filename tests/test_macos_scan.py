@@ -1,4 +1,5 @@
 """Reading a Mac from files, and judging the Mac's own version against NVD's apple/macos ranges (release lines, security-improvement letters)."""
+import json
 import os
 import plistlib
 import subprocess
@@ -40,6 +41,29 @@ def tree(version="14.7.4", extra="", apps=None, brew=None):
 
 def mac(root):
     return macos.collect(root)
+
+
+SAMPLE_HW = {"machine_name": "MacBook Pro", "machine_model": "Mac15,6", "chip_type": "Apple M3 Pro", "boot_rom_version": "10151.101.3", "serial_number": "C02XXXXXXXXX",
+             "platform_UUID": "00000000-0000-0000-0000-000000000000", "provisioning_UDID": "UDID-SHOULD-NOT-APPEAR", "model_number": "MRX33LL/A", "number_processors": "proc 11:5:6"}
+
+
+class Hardware(unittest.TestCase):
+    def test_only_the_allow_listed_fields_are_kept(self):
+        h = cli.parse_mac_hardware(SAMPLE_HW)
+        self.assertEqual((h["manufacturer"], h["model"], h["chip"], h["biosVersion"]), ("Apple", "Mac15,6", "Apple M3 Pro", "10151.101.3"))
+        text = json.dumps(h)
+        for secret in ("C02XXXXXXXXX", "UUID", "UDID", "MRX33LL", "proc 11"):
+            self.assertNotIn(secret, text)
+
+    def test_an_answer_that_is_not_the_overview_gives_nothing(self):
+        self.assertEqual(cli.parse_mac_hardware({}), {})
+        with mock.patch.object(cli, "run", return_value="not json"):
+            self.assertEqual(cli.mac_hardware(), {})
+
+    def test_the_command_is_the_mini_overview_and_nothing_else(self):
+        with mock.patch.object(cli, "run", return_value=json.dumps({"SPHardwareDataType": [SAMPLE_HW]})) as r:
+            self.assertEqual(cli.mac_hardware()["model"], "Mac15,6")
+        r.assert_called_once_with(["system_profiler", "SPHardwareDataType", "-json", "-detailLevel", "mini"])
 
 
 class ReadAMac(unittest.TestCase):
@@ -96,6 +120,28 @@ class Verdicts(unittest.TestCase):
 
     def test_the_letter_does_not_hide_an_in_range_mac(self):
         self.assertEqual(self.verdict("14.7.4", extra="(a)")["verdict"], "in-range")
+
+    def test_a_range_with_only_an_upper_bound_belongs_to_its_own_line(self):
+        e = dict(ENTRY, ranges=[{"product": "apple/macos", "end_excluding": "15.3"}])
+        self.assertEqual(cli.mac_version_check(e, mac(tree("15.2")))["verdict"], "in-range")
+        v = cli.mac_version_check(e, mac(tree("14.7.9")))   # NVD's literal "everything before 15.3" is not credited to line 14
+        self.assertEqual(v["verdict"], "undetermined")
+
+    def test_before_15_0_belongs_to_line_14_not_15(self):
+        e = dict(ENTRY, ranges=[{"product": "apple/macos", "end_excluding": "15.0"}])
+        self.assertEqual(cli.mac_version_check(e, mac(tree("14.1")))["verdict"], "in-range")
+        self.assertEqual(cli.mac_version_check(e, mac(tree("15.1")))["verdict"], "undetermined")
+
+    def test_an_installed_apple_app_is_checked_against_its_own_nvd_ranges(self):
+        e = dict(ENTRY, ranges=[{"product": "apple/safari", "end_excluding": "17.2"}, {"product": "apple/iphone_os", "end_excluding": "17.2"}])
+        old = mac(tree("14.7.4", apps={"Safari": "17.1"}))
+        self.assertEqual(cli.candidate(e, old)[1], ["safari 17.1"])
+        self.assertEqual(cli.mac_version_check(e, old)["verdict"], "in-range")
+        self.assertEqual(cli.mac_version_check(e, mac(tree("14.7.4", apps={"Safari": "17.2"})))["verdict"], "outside-range")
+
+    def test_an_entry_for_other_apple_systems_only_is_not_a_candidate(self):
+        e = dict(ENTRY, ranges=[{"product": "apple/iphone_os", "end_excluding": "17.2"}, {"product": "apple/watchos", "end_excluding": "10.2"}, {"product": "apple/mac_os_x", "end_excluding": "10.15.7"}])
+        self.assertIsNone(cli.candidate(e, mac(tree("14.7.4", apps={"Safari": "17.1"}))))
 
     def test_a_cve_with_no_apple_macos_range_is_not_a_macos_candidate(self):
         e = dict(ENTRY, ranges=[RANGES[3]], product="Safari")

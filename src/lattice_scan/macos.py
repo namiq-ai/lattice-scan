@@ -93,33 +93,80 @@ def collect(root: str = "", progress=lambda s: None) -> dict:
             "host": {}, "packages": pk, "snaps": {}, "images": [], "imageDetails": {}, "node": "", "restartRequired": False, "appsUnread": unread}
 
 
+def _line_of(v) -> tuple[int | None, bool]:
+    """(release line, whole-number bound) of a range bound such as '14.7.5' or '15.0'."""
+    parts = str(v).split(".")
+    try:
+        nums = [int(x) for x in parts]
+    except ValueError:
+        return None, False
+    return (nums[0] if nums[0] >= 11 else None), all(n == 0 for n in nums[1:])
+
+
+def span(r: dict) -> set[int]:
+    """The macOS release lines one NVD range belongs to. A range with both bounds covers the lines between them; a range with only an upper bound belongs to the line of
+    that bound alone (NVD's literal 'everything before' is not credited to older lines: Apple fixes each line on its own, ADR MA-7); one with only a lower bound,
+    to that line. 'Before 15.0' belongs to line 14."""
+    lo = r.get("start_including") or r.get("start_excluding")
+    hi = r.get("end_excluding") or r.get("end_including")
+    lo_l = _line_of(lo)[0] if lo else None
+    hi_l, whole = _line_of(hi) if hi else (None, False)
+    if hi_l is not None and r.get("end_excluding") and whole:
+        hi_l = hi_l - 1 if hi_l - 1 >= 11 else None
+    if lo_l is not None and hi_l is not None:
+        return set(range(lo_l, max(lo_l, hi_l) + 1))
+    one = lo_l if lo_l is not None else hi_l
+    return {one} if one is not None else set()
+
+
 def covered_lines(ranges: list[dict]) -> set[int]:
-    """Release lines Apple names a range for: the line of each range's lower bound, or of its upper bound when it has no lower one."""
+    """Release lines Apple names a range for."""
     out: set[int] = set()
     for r in ranges:
-        for k in ("start_including", "start_excluding", "end_excluding", "end_including"):
-            if r.get(k):
-                ln = release_line(str(r[k]))
-                if ln:
-                    out.add(ln)
+        out |= span(r)
     return out
 
 
-def macos_ranges(entry: dict) -> list[dict]:
-    return [r for r in entry.get("ranges", []) if r.get("product", "").lower() == "apple/macos"]
+def ranges_for(ranges: list[dict], line: int | None) -> list[dict]:
+    return [r for r in ranges if line is not None and line in span(r)]
+
+
+NOT_ON_A_MAC = {"iphone_os", "ipados", "watchos", "tvos", "visionos", "mac_os_x", "mac_os", "os_x"}   # NVD names for other systems; mac_os_x is OS X 10.x, below the supported range
+
+
+def apple_parts(entry: dict, inv: dict) -> list[dict]:
+    """What on this Mac an Apple CVE is about, from NVD's own product names (no hand-kept list of Apple's product wording, which varies: 'Multiple Products',
+    'iOS, iPadOS, and macOS', 'WebKit'). apple/macos means the operating system; any other apple/<name> counts when an app of that name is installed (apple/safari:
+    the Safari app). iOS, iPadOS, watchOS, tvOS, visionOS and the old OS X names are skipped: they are not on this Mac."""
+    o = inv.get("osInfo") or {}
+    by: dict[str, list[dict]] = {}
+    for r in entry.get("ranges", []):
+        vendor, _, name = str(r.get("product", "")).lower().partition("/")
+        if vendor == "apple" and name and name not in NOT_ON_A_MAC:
+            by.setdefault(name, []).append(r)
+    out = []
+    for name, rs in sorted(by.items()):
+        if name == "macos":
+            if o.get("version"):
+                out.append({"name": "macos", "label": f"macOS {o['version']}" + (f" {o['extra']}" if o.get("extra") else ""), "version": o["version"], "extra": o.get("extra", ""), "ranges": rs, "os": True})
+            continue
+        app = name.replace("_", " ")
+        if app in (inv.get("packages") or {}):
+            out.append({"name": name, "label": f"{app} {inv['packages'][app]}", "version": inv["packages"][app], "extra": "", "ranges": rs, "os": False})
+    return out
 
 
 def judge(version: str, extra: str, ranges: list[dict], check) -> dict:
-    """The verdict for the Mac's own version. `check(version, ranges)` is the ordinary range comparison. Two rules on top (ADR MA-7, MA-8): a release line with
-    no listed range is 'undetermined', never 'outside' (Apple lists fixes only for the lines it still patches); and when a security-improvement letter is
-    installed, 'outside the range' cannot be concluded, because the letter may or may not carry the fix."""
-    res = check(version, ranges)
+    """The verdict for the Mac's own version. `check(version, ranges)` is the ordinary range comparison. Two rules on top (ADR MA-7, MA-8): only ranges that belong to
+    the Mac's own release line are compared, and a line with none is 'undetermined', never 'outside' (Apple lists fixes only for the lines it still patches); and
+    when a security-improvement letter is installed, 'outside the range' cannot be concluded, because the letter may or may not carry the fix."""
     ln = release_line(version)
-    if res["verdict"] == "outside-range":
-        if ln is None or ln not in covered_lines(ranges):
-            return {"verdict": "undetermined", "why": f"macOS {version}: Apple lists no range for release {ln if ln else '?'} of this CVE; that is not shown as fixed. " + res["why"]}
-        if extra:
-            return {"verdict": "undetermined", "why": f"macOS {version} {extra}: a background security improvement is installed, so 'fixed in the base version' cannot be concluded. " + res["why"]}
+    mine = ranges_for(ranges, ln)
+    if not mine:
+        return {"verdict": "undetermined", "why": f"macOS {version}: Apple lists no range for release {ln if ln else '?'} of this CVE; that is not shown as fixed"}
+    res = check(version, mine)
+    if res["verdict"] == "outside-range" and extra:
+        return {"verdict": "undetermined", "why": f"macOS {version} {extra}: a background security improvement is installed, so 'fixed in the base version' cannot be concluded. " + res["why"]}
     return res
 
 

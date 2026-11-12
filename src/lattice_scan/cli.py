@@ -810,6 +810,7 @@ class Lattice:
 
 
 from lattice_scan import report  # noqa: E402
+from lattice_scan import macos as macos_reader  # noqa: E402
 from lattice_scan import lattice_version as lv  # noqa: E402   # the one implementation of versions, ranges, product ids and the verdict ladder
 
 
@@ -1419,8 +1420,32 @@ def stop_on_macos() -> None:
         raise SystemExit(3)
 
 
+MAC_HARDWARE_KEYS = ("machine_name", "machine_model", "chip_type", "boot_rom_version", "os_loader_version")   # the only fields read; serial number, UUIDs and the rest are never kept
+
+
+def mac_hardware() -> dict:
+    """The Mac's model and chip, from the hardware overview only (system_profiler SPHardwareDataType, mini detail: no dialog, about half a second). Only the
+    allow-listed fields are taken from its answer, so a serial number or UUID in it is dropped here and never reaches the inventory."""
+    out = run(["system_profiler", "SPHardwareDataType", "-json", "-detailLevel", "mini"])
+    try:
+        d = json.loads(out)["SPHardwareDataType"][0]
+    except (ValueError, KeyError, IndexError, TypeError):
+        return {}
+    return parse_mac_hardware(d)
+
+
+def parse_mac_hardware(d: dict) -> dict:
+    g = {k: str(d.get(k) or "") for k in MAC_HARDWARE_KEYS}
+    if not g["machine_model"]:
+        return {}
+    return {"manufacturer": "Apple", "model": g["machine_model"], "version": g["machine_name"], "family": g["machine_name"], "chip": g["chip_type"],
+            "biosVersion": g["boot_rom_version"] or g["os_loader_version"]}
+
+
 def macos_inventory(macos) -> dict:
     inv = macos.collect(progress=progress)
+    inv["host"] = mac_hardware()
+    progress("[host] hardware: " + (" ".join(x for x in (inv["host"].get("model"), inv["host"].get("chip")) if x) or "not reported by this machine"))
     inv["hash"] = hashlib.sha256(json.dumps({k: inv[k] for k in ("kernel", "packages", "snaps", "images", "node", "os")}, sort_keys=True).encode()).hexdigest()[:12]
     return inv
 
@@ -1511,9 +1536,9 @@ def candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str]] | None
         product, basis = entry.get("title", "").lower(), "title"
     if inv.get("family") == "macos":
         from . import macos
-        if macos.macos_ranges(entry):   # NVD files this CVE under apple/macos: it is about the operating system, whatever CISA's product name says
-            o = inv.get("osInfo") or {}
-            return "NVD names apple/macos for this CVE", [f"macOS {o.get('version', '')}" + (f" {o['extra']}" if o.get("extra") else "")], [o.get("version", "")]
+        parts = macos.apple_parts(entry, inv)   # NVD files this CVE under apple/macos (the system) or apple/<an installed app>
+        if parts:
+            return "NVD names " + ", ".join(f"apple/{p['name']}" for p in parts) + " for this CVE", [p["label"] for p in parts], [p["version"] for p in parts]
     if (vendor == "linux" and product == "kernel" or "linux kernel" in product) and inv.get("family") != "macos":   # a Mac's Darwin number is not a Linux kernel number
         return f"kernel in use is {inv['kernel']}", [f"kernel {inv['kernel']}"], [inv["kernel"]]
     if product in ("node.js", "nodejs") and inv.get("node"):
@@ -1696,23 +1721,31 @@ def version_check(entry: dict, vers: list[str]) -> dict:
 
 
 def mac_version_check(entry: dict, inv: dict) -> dict:
-    """The Mac's own version against NVD's apple/macos ranges, with the release-line and security-improvement-letter rules of macos.judge."""
+    """The Mac's own version, and the version of each Apple app NVD names, against NVD's ranges; the system by release line and security-improvement letter
+    (macos.judge). One verdict for the entry: in-range if any part is, else undetermined if any is, else outside-range."""
     from . import macos
-    o = inv.get("osInfo") or {}
-    ranges = macos.macos_ranges(entry)
 
     def check(version: str, rs: list[dict]) -> dict:
         v = upstream(version)
         if v is None:
-            return {"verdict": "undetermined", "why": f"macOS {version}: no plain version number"}
+            return {"verdict": "undetermined", "why": f"{version}: no plain version number"}
         res = [in_range(v, r) for r in rs]
         if any(res):
             r = rs[res.index(True)]
-            return {"verdict": "in-range", "why": f"macOS {version} is inside {r['product']} {fmt_range(r)}"}
+            return {"verdict": "in-range", "why": f"{version} is inside {r['product']} {fmt_range(r)}"}
         if any(x is None for x in res):
-            return {"verdict": "undetermined", "why": f"macOS {version}: some range could not be compared"}
-        return {"verdict": "outside-range", "why": f"macOS {version} is outside all {len(rs)} listed range(s): " + ", ".join(fmt_range(r) for r in rs[:6])}
-    return macos.judge(o.get("version", ""), o.get("extra", ""), ranges, check)
+            return {"verdict": "undetermined", "why": f"{version}: some range could not be compared"}
+        return {"verdict": "outside-range", "why": f"{version} is outside all {len(rs)} listed range(s): " + ", ".join(fmt_range(r) for r in rs[:6])}
+    results = []
+    for p in macos.apple_parts(entry, inv):
+        results.append(macos.judge(p["version"], p["extra"], p["ranges"], check) if p["os"] else check(p["version"], p["ranges"]))
+    if not results:
+        return {"verdict": "undetermined", "why": "no Apple product in this entry is installed here"}
+    for want in ("in-range", "undetermined"):
+        hit = next((r for r in results if r["verdict"] == want), None)
+        if hit:
+            return hit
+    return results[0]
 
 
 def changelog_mentions(cve: str, installed: list[str], inv: dict) -> list[str]:
@@ -1806,7 +1839,7 @@ def impact(entry: dict, inv: dict, installed: list[str], vers: list[str]) -> dic
         w = words(prod)
         if w and all(x in have for x in w):
             nvd.append(slug)
-    out = {"installed": installed, "nvdAlsoNames": nvd[:5], "versionCheck": mac_version_check(entry, inv) if installed and installed[0].startswith("macOS ") and inv.get("family") == "macos" else version_check(entry, vers),
+    out = {"installed": installed, "nvdAlsoNames": nvd[:5], "versionCheck": mac_version_check(entry, inv) if inv.get("family") == "macos" and macos_reader.apple_parts(entry, inv) else version_check(entry, vers),
            "changelogNamesCve": changelog_mentions(entry["cve"], installed, inv),
            "action": entry.get("action", "")[:400], "listed": entry["added"], "due": entry["due"]}
     if entry["added"]:
