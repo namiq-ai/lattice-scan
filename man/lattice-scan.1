@@ -1,6 +1,6 @@
 .\" SPDX-License-Identifier: Apache-2.0
 .\" Copyright 2026 NamiQ LLC
-.TH LATTICE-SCAN 1 "November 2026" "lattice-scan 0.8.1" "User Commands"
+.TH LATTICE-SCAN 1 "November 2026" "lattice-scan 0.9.0" "User Commands"
 .SH NAME
 lattice-scan \- check this host, or a project's declared dependencies, against the CVEs CISA lists as exploited, through Lattice
 .SH SYNOPSIS
@@ -46,8 +46,9 @@ command checks what a project's files
 .B declare
 it depends on, and needs no installation on the machine it runs from.
 .SH HOST MODE
-Host mode reads Linux sources only. On macOS every host command stops with a message and exit status 3, because a Mac would otherwise show
-"no match", which does not mean safe. \fBproject\fR and \fBenrich\fR read no host and work on a Mac.
+On Linux, host mode reads the package databases. On macOS it reads the system version, the apps in /Applications and /System/Applications and the Homebrew Cellar folder names, from files only
+(\fBbrew\fR is never run). A fix is judged per macOS release; a release Apple lists no range for, or a Mac with a security\-improvement letter, is "undetermined". \fB\-\-discover \-\-all\fR,
+\fBposture\fR and \fBinventory \-\-share\fR stop on macOS with exit status 3.
 .PP
 With one or more
 .B \-\-cve
@@ -469,7 +470,7 @@ Pretend today is this YYYY\-MM\-DD (tests, reproducing a report).
 Set to 1 by our own test runs: the user agent reads \fBlattice\-scan/\fR\fIversion\fR \fB(test)\fR so the website's counts leave them out.
 .TP
 .B LATTICE_SCAN_NO_REPORT
-Set to 1 to send nothing when a run ends and to keep nothing for later. By default a run that read from Lattice reports that a scan ran (kept in a small local file and sent with the next online run when namiq.io cannot be reached): the command, how it ended and a band for the number of reads, never a host, package, CVE id, path, address or key. It is always off when \fBLATTICE_URL\fR or the feed address is not namiq.io.
+Set to 1 to send nothing when a run ends and to keep nothing for later. By default a run that read from Lattice reports that a scan ran (kept in a small local file and sent with the next online run when namiq.io cannot be reached): the command, how it ended, a band for the number of reads and the operating\-system family (linux or macos, no version), never a host, package, CVE id, path, address or key. It is always off when \fBLATTICE_URL\fR or the feed address is not namiq.io.
 .TP
 .B LATTICE_SCAN_RUN_URL
 Where the run report goes (tests). Any value other than the default switches the report off.

@@ -35,11 +35,15 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -W error::ResourceWarning -m unittest tests.test_macos_stop tests.test_project -v
-      - name: host scan stops with exit 3 on a Mac
+      - name: the Mac is read, and the parts that cannot read it yet stop
         run: |
           export PYTHONPATH=src
           python -m lattice_scan.cli --version
-          rc=0; python -m lattice_scan.cli --cve CVE-2021-44228 2> stop.txt || rc=$?
+          # reading this Mac: no network, nothing sent; must name macOS and list apps
+          python -m lattice_scan.cli --refresh --inventory 2> read.err | tee read.out
+          grep -q "macOS" read.out && grep -q "apps read" read.err
+          # posture is not built for a Mac yet: it must stop with exit 3
+          rc=0; python -m lattice_scan.cli posture 2> stop.txt || rc=$?
           cat stop.txt
           test "$rc" = 3 && grep -q "runs macOS" stop.txt
 

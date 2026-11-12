@@ -31,7 +31,7 @@ The tool inspects the machine Claude is running on, not a machine the user is th
 - If Claude is running in a hosted sandbox, a throwaway container, or on a different machine from the one the user asked about, say so and stop. A scan of
   the wrong machine is worse than no scan, because it reads as an answer.
 - If it is the user's own host or server, say in one line which machine it is (hostname and OS) and continue.
-- If the OS is macOS, the host scan stops (exit 3) with "This computer runs macOS ... would not mean safe". Tell the person that a Mac cannot be scanned yet; never describe it as "nothing found". `project FOLDER` and `enrich` still work on a Mac.
+- If the OS is macOS, the tool reads the system version, the apps and the Homebrew folder names (not `brew`), and judges the macOS version per release line. A Mac on a release Apple no longer lists fixes for, or with a security-improvement letter, comes back "undetermined": say so, never "fixed" or "clean". `--discover --all`, `posture` and `inventory --share` stop on a Mac (exit 3, with a message): say that part is not available there. macOS support is new; call a result a lead.
 - The tool needs Python 3.9 or newer and outbound HTTPS to `lattice.namiq.io`. If either is missing, say that and stop.
 
 ## 2. Run it
