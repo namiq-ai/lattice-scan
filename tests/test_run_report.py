@@ -105,3 +105,17 @@ class SwitchedOff(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OsFamily(unittest.TestCase):
+    def test_the_note_carries_only_the_family_word(self):
+        for plat, want in (("linux", "linux"), ("darwin", "macos")):
+            with mock.patch.object(cli.sys, "platform", plat):
+                self.assertEqual(cli.report_body("scan", 0)["os"], want)
+        with mock.patch.object(cli.sys, "platform", "win32"):
+            self.assertNotIn("os", cli.report_body("scan", 0))   # any other system sends no os field at all
+        self.assertEqual(set(cli.report_body("scan", 0)), {"command", "result", "lookups", "os"})
+
+    def test_a_kept_note_keeps_only_a_valid_family(self):
+        cli.queue_save([{"command": "scan", "result": "ok", "lookups": "0", "day": cli.dt.datetime.now(cli.dt.timezone.utc).date().isoformat(), "os": "macOS 15.3"}])
+        self.assertNotIn("os", cli.queue_load()[0])
