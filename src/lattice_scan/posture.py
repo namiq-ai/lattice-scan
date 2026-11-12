@@ -489,6 +489,8 @@ def observe(d: dict) -> list[dict]:
         active.append("nftables rules")
     if "iptables" in fw and fw["iptables"].get("rules"):
         active.append("iptables rules")
+    for f in d.get("localSecrets") or []:
+        add("attention", "secrets", f"{f['kind']} seen in {f['where']} ({f['count']}). The value is not shown, stored or sent. It may be a harmless test value; if it is real, rotate it and remove it from your history.", "secret.local")
     if wide:
         names = sorted({f"{p['proto']}/{p['port']}" for p in wide if not (p["proto"] == "udp" and p["port"] >= 32768)}, key=lambda x: (x.split("/")[0], int(x.split("/")[1])))
         add("note", "ports", f"{len(names)} port(s) listen on all interfaces: {', '.join(names[:12])}{' ...' if len(names) > 12 else ''}. That is normal for a server; it matters when the firewall does not limit who can connect.", "listen.all-interfaces")
@@ -545,7 +547,7 @@ def observe(d: dict) -> list[dict]:
     return obs
 
 
-def collect(deep: bool = False, base: str = "/", euid: int | None = None, runner=None) -> dict:
+def collect(deep: bool = False, base: str = "/", euid: int | None = None, runner=None, secrets: bool = False) -> dict:
     h = Host(base, euid, runner)
     owners = Owners(h)
     images = docker_images(h)
@@ -566,6 +568,12 @@ def collect(deep: bool = False, base: str = "/", euid: int | None = None, runner
                 d[name] = fn()
             except Exception as e:  # noqa: BLE001
                 d.setdefault("errors", []).append(f"{name}: {type(e).__name__}")
+    if secrets and base == "/":                      # only the posture command asks for it: the exposure labels of a scan have no use for it
+        try:
+            from . import local_secrets
+            d["localSecrets"] = local_secrets.find()      # kind, place and count only: the value is dropped when it is matched and is in no file, record or report
+        except Exception as e:  # noqa: BLE001 - a missing check must not hide the posture
+            d.setdefault("errors", []).append(f"local secrets: {type(e).__name__}")
     d["packageManager"] = owners.manager or "none found"
     d["unreadable"] = sorted(h.unreadable)
     d["observations"] = observe(d)

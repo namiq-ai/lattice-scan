@@ -29,7 +29,7 @@ class Record(unittest.TestCase):
 
     def test_only_the_declared_keys_exist(self):
         r = rec.build_record(INV, ITEMS, "deep", "Debian")
-        self.assertEqual(set(r), set(rec.TOP_FIELDS)); self.assertLessEqual(set(r["inventory"]), set(rec.INVENTORY_FIELDS))
+        self.assertEqual(set(r), set(rec.TOP_FIELDS) - {"posture"}); self.assertLessEqual(set(r["inventory"]), set(rec.INVENTORY_FIELDS))
         self.assertLessEqual(set(r["inventory"]["host"]), set(rec.HOST_FIELDS)); self.assertLessEqual(set(r["items"][0]), set(rec.ITEM_FIELDS))
         self.assertEqual(set(r["inventory"]["imageDetails"]["redis:alpine"]), {"id", "os", "osVersion", "packages"})
 
@@ -83,7 +83,7 @@ class Preview(unittest.TestCase):
         from lattice_scan import scan_report_flow as flow
         t = flow.preview(rec.build_record(INV, ITEMS, "quick", "Debian"))
         self.assertIn("2 package(s), 1 snap(s) and 2 container image name(s)", t); self.assertIn("1 finding(s)", t); self.assertIn("internal registry", t)
-        self.assertIn("no hostname, address, port, path, user name, process list or posture data", t)
+        self.assertIn("no hostname, address, port, path, user name or process list", t); self.assertIn("asked separately about the runtime posture", t)
 
     def test_d_shows_exactly_the_record_that_would_be_sent(self):
         import io

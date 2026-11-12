@@ -3664,7 +3664,7 @@ def cmd_posture(a) -> int:
     who = "root" if os.geteuid() == 0 else f"a normal user (uid {os.geteuid()})"
     progress(f"[posture] {'deep' if deep else 'quick'} scan as {who}: ports, firewall, ssh, services" + (", processes, persistence points" if deep else "")
              + ("" if os.geteuid() == 0 else "; what needs root will be listed, not guessed"))
-    d = posture.collect(deep=deep)
+    d = posture.collect(deep=deep, secrets=True)
     rc = 0
     if getattr(a, "attack", False):
         rc = attack_techniques(a, d)
