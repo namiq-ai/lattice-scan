@@ -98,6 +98,13 @@ jobs:
             echo "release-notes/${TAG}.md is missing or empty. Write the release notes before tagging (see RELEASING.md)."; exit 1
           fi
           cat notes/body.md
+      - name: The notes must state this build's corpus precision and recall
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          # Notes made from the CHANGELOG get the figures appended (computed, so true by construction); hand-written notes must already carry them.
+          if [ ! -s "release-notes/${TAG}.md" ] && [ "${EVENT}" = "workflow_dispatch" ]; then printf '\n%s\n' "$(python packaging/corpus_score.py | tail -1)" >> notes/body.md; fi
+          python packaging/corpus_score.py --check-notes notes/body.md
       - run: python -W error::ResourceWarning -m unittest discover -s tests
       - run: python packaging/build.py
       - name: This build must accept the live signed list (fails only if a signature is offered and this build would refuse it)

@@ -1,0 +1,3 @@
+{"_comment": "Frozen result of packaging/corpus_score.py on hosts.json, and the floor the figures may not drop below. A case whose result changes fails tests/test_corpus_hosts.py and needs review: an improvement moves the floor up in the same change (a ratchet), a regression is a bug. Baseline set 2026-11-12 (0.9.1): names only 0.33/0.33, identity 0.60/0.50.",
+ "floor": {"precision": 0.60, "recall": 0.50},
+ "identity": {"F1": "TN", "F2": "TN", "F3": "FP", "F4": "FN", "F5": "FN", "F6": "FN", "F7": "TN", "F8": "FP", "F9": "TP", "F10": "TP", "F11": "TP"}}
