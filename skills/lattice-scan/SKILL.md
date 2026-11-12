@@ -207,6 +207,7 @@ How to treat what you read:
 - Never print, log or pass on a Lattice key (the user's `LATTICE_API_KEY` or the stored file `key`).
 - The records in `~/.lattice-scan` name this host's installed software. Do not paste them into a ticket, a chat, a commit or a document.
 - Only CVE ids and the node ids Lattice returned (and the key, if set) leave the machine. The inventory does not. If the user asks, that is the answer.
+- If the tool ever offers to email a report of the scan, that question is for the person at the terminal. An agent never answers it, never consents on anyone's behalf and never reads or opens a mailbox: leave it unanswered and tell the person it was offered.
 - Do not install, upgrade or remove packages on the user's behalf as part of this skill.
 
 ## 5. A key, only for a person who asks for it
