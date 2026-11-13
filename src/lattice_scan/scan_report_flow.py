@@ -42,14 +42,16 @@ def _split_installed(entry: str, inv: dict) -> tuple[str, str]:
     return name, ver
 
 
-_IMAGE_ENTRY = re.compile(r"^(?P<label>.*?) \(image (?P<ref>.+)\)$")
+_IMAGE_MARK = re.compile(r" \(image (?P<ref>[^()]+)\)")
 
 
 def entry_parts(entry: str) -> tuple[str, str, str]:
-    """One matched-package string as (name, version, image). 'libbrotli1 1.1.0-2 (image web:1)' gives ('libbrotli1', '1.1.0-2', 'web:1'); a host package has image ''."""
-    m = _IMAGE_ENTRY.match(str(entry))
-    label, ref = (m.group("label"), m.group("ref")) if m else (str(entry), "")
-    name, _, ver = label.partition(" ")
+    """One matched-package string as (name, version, image). The scan writes an image package two ways: 'libbrotli1 1.1.0-2 (image web:1)' (found by name) and
+    'libbrotli1 (image web:1) 1.1.0-2' (joined by identity); both give ('libbrotli1', '1.1.0-2', 'web:1'). A host package has image ''."""
+    text = str(entry)
+    m = _IMAGE_MARK.search(text)
+    label, ref = (text[:m.start()] + text[m.end():], m.group("ref")) if m else (text, "")
+    name, _, ver = label.strip().partition(" ")
     return name, ver.strip(), ref
 
 
