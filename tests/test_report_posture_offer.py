@@ -75,8 +75,7 @@ class PostureOffer(unittest.TestCase):
             flow.after_scan(ITEMS, "quick", Path(d), input_fn=fn, out=io.StringIO(), os_name="Debian", inv=INV, posture=None, **TTY)
         self.assertEqual(len(fn.asked), 1)
 
-    def test_nothing_is_remembered_between_runs_and_nothing_is_sent_in_this_version(self):
-        self.assertFalse(flow.MAIL_AVAILABLE)
+    def test_nothing_is_remembered_between_runs(self):
         a = flow.record_after_yes(INV, ITEMS, "quick", "Debian", {"items": ITEMS}, POSTURE, answers("y"), io.StringIO(), secrets_fn=NONE)
         b = flow.record_after_yes(INV, ITEMS, "quick", "Debian", {"items": ITEMS}, POSTURE, answers(""), io.StringIO(), secrets_fn=NONE)
         self.assertIn("posture", a)

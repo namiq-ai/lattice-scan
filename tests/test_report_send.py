@@ -3,6 +3,7 @@
 """The record is sent only after the mailbox is proved; the tool waits holding it in memory, and any stop sends nothing. Synthetic data and a fake server."""
 import io, os, sys, tempfile, unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from lattice_scan import scan_report_flow as flow  # noqa: E402
@@ -122,7 +123,7 @@ class SendFlow(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("not accepted", text)
 
-    def test_the_offer_runs_the_whole_sequence_only_when_a_sender_is_wired_and_never_in_this_version_otherwise(self):
+    def test_the_offer_runs_the_whole_sequence_only_when_a_sender_is_wired_and_never_with_the_mail_switch_off_otherwise(self):
         answers = iter(["y", "n", "me@example.org"])          # report yes, posture no, address
         s = Server()
         with tempfile.TemporaryDirectory() as d:
@@ -131,9 +132,8 @@ class SendFlow(unittest.TestCase):
                             posture={"scope": "user", "level": "quick", "ports": [], "firewall": {"readable": False, "managers": []}, "ssh": {"installed": False, "settings": {}}},
                             enabled=True, secrets_fn=lambda: [], post=s, key=KEY)
         self.assertEqual(s.names()[0:2], ["address", "request"])
-        self.assertFalse(flow.MAIL_AVAILABLE)
         out = io.StringIO()
-        with tempfile.TemporaryDirectory() as d:
+        with mock.patch.object(flow, "MAIL_AVAILABLE", False), tempfile.TemporaryDirectory() as d:
             flow.after_scan(ITEMS, "quick", Path(d), stdin_tty=True, stderr_tty=True, env={}, quiet=False, input_fn=lambda p="": "y", out=out, os_name="Debian", enabled=True)
         self.assertIn("not available in this version", out.getvalue())
 

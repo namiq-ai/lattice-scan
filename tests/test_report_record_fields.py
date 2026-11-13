@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 NamiQ LLC
 """The accuracy fields of a scan record: which container image or the host holds each package, the installed versions, how each match was made, whether a changelog
-names the CVE, the distribution's status and the run's coverage. They are switched off in released clients (`REPORT_FIELDS_AVAILABLE`); these tests prove the record is
+names the CVE, the distribution's status and the run's coverage. They are on together with the mailed report (`REPORT_FIELDS_AVAILABLE`); these tests prove the record is
 unchanged while it is off and that every field stays inside fixed lists when it is on. Synthetic data only."""
 import io, json, sys, tempfile, unittest
 from pathlib import Path
@@ -35,8 +35,11 @@ class On(unittest.TestCase):
 
 
 class Off(unittest.TestCase):
-    def test_the_switch_is_off_in_this_build(self):
-        self.assertIs(rec.REPORT_FIELDS_AVAILABLE, False)
+    """With the switch off (as in 0.9.4 and earlier) the record and the offer are what earlier versions built."""
+    def setUp(self):
+        p = mock.patch.object(rec, "REPORT_FIELDS_AVAILABLE", False)
+        p.start()
+        self.addCleanup(p.stop)
 
     def test_the_record_is_byte_identical_whatever_the_items_carry(self):
         plain = json.dumps(record(), sort_keys=True)
@@ -312,3 +315,14 @@ class CliHelpers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Shipped(unittest.TestCase):
+    """The two switches are one decision: the report is made from the fields, so neither is on without the other."""
+    def test_the_fields_and_the_mailed_report_are_on_together(self):
+        self.assertEqual(rec.REPORT_FIELDS_AVAILABLE, flow.MAIL_AVAILABLE)
+        self.assertTrue(flow.MAIL_AVAILABLE)
+
+    def test_the_key_flow_for_a_person_with_no_key_stays_off(self):
+        from lattice_scan import scan_report_send as send
+        self.assertFalse(send.KEY_FLOW_AVAILABLE)

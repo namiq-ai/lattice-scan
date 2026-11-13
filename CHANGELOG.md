@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- New: the emailed report is a trial feature until 31 December 2026. After a scan with at least one candidate, a person at a terminal is asked once whether to send a report by email; Enter means No, `d` shows every value that would be sent. The report is made from six more fields in the record (which asset a package is on, the distribution's own status, how a match was made, whether the changelog names the CVE, per-package versions, what the run covered), so they are sent with a yes and without them no report is made. The distribution check is covered by the same yes. Nothing is asked in a script, in CI, with `--quiet`, with `--format json|csv`, or after the trial ends; an agent never answers it. The terminal flow that gives a person with no key a free key stays off.
+
 ## 0.9.4 — 2026-11-13
 
 - Internal (inactive: the report fields are switched off, `REPORT_FIELDS_AVAILABLE` is False, and the mail offer is still off): the scan record can carry six more fields for a report (which asset a package is on, the distribution's own status, how a match was made, whether the changelog names the CVE, per-package versions, and what the run covered). With the switch off the record is byte-identical to 0.9.3 and the validator refuses the new fields. Nothing a person sees or sends changes in this release.
