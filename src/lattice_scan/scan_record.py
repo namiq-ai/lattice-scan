@@ -37,9 +37,9 @@ MAX_PORTS = 300
 MAX_PROGRAMS = 100
 MAX_STR = 300
 
-# Report accuracy fields (an accepted change to the field list). The client sends none of them until this is switched on, together with the service that accepts them:
-# with it False the record is byte-identical to what earlier versions built, and check_record refuses the new fields.
-REPORT_FIELDS_AVAILABLE = False
+# Report accuracy fields (an accepted change to the field list). They are on together with the mailed report (`scan_report_flow.MAIL_AVAILABLE`): the report is made from them.
+# With it False the record is byte-identical to what earlier versions built, and check_record refuses the new fields.
+REPORT_FIELDS_AVAILABLE = True
 ITEM_FIELDS_NEW = ("assets", "distro", "basis", "changelog", "installedVersions")
 TOP_FIELDS_NEW = ("coverage",)
 ASSET_HOST = "host"

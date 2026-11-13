@@ -3,12 +3,12 @@
 """What happens at the end of a scan: the local report file, and the once-per-run offer to have it mailed (OCO-6054 to OCO-6057, epic OCO-6045).
 
 The local report is always built from the scan result and written to a private file when there is at least one candidate. The
-OFFER to mail it is not shipped yet: sending needs the mailbox proof and the gates of the report ADR, so `MAIL_AVAILABLE` is False
-and no question is asked until that path exists. The offer logic is here, tested, so it can be switched on with that path.
-Nothing in this module talks to the network.
+OFFER to mail it is made to a person at a terminal during the trial (`REPORT_TRIAL_END`), and only when the report accuracy fields are on too: the report is made from
+them, so the two switches are one decision (`MAIL_AVAILABLE` and `scan_record.REPORT_FIELDS_AVAILABLE`). Nothing in this module talks to the network.
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import re
 import sys
@@ -19,7 +19,8 @@ from . import scan_report_send as send
 from . import scan_report as sr
 from . import scan_report_text as rt
 
-MAIL_AVAILABLE = False      # set True only with the Confirm path of the report ADR (D2); until then the tool never asks to mail anything
+MAIL_AVAILABLE = True       # the Confirm path of the report ADR (D2); the offer is made only while the trial runs
+REPORT_TRIAL_END = dt.date(2026, 12, 31)   # the report is a trial feature up to and including this day (UTC); after it this version makes no offer
 FIELD_NAMES = ("CVE id", "product", "installed upstream version", "verdict", "scan level", "operating-system family")
 
 
@@ -150,12 +151,19 @@ def project_inventory(results: list[dict]) -> dict:
     return {"os": "project manifests", "packages": pk}
 
 
-def should_offer(n_items: int, *, stdin_tty: bool, stderr_tty: bool, env: dict, quiet: bool, fmt: str = "table", enabled: bool | None = None) -> bool:
-    """Only a person at a terminal, with at least one candidate, outside CI, not quiet, in the plain table format."""
-    if not (MAIL_AVAILABLE if enabled is None else enabled):
+def trial_open(today: dt.date | None = None) -> bool:
+    return (today or dt.datetime.now(dt.timezone.utc).date()) <= REPORT_TRIAL_END
+
+
+def should_offer(n_items: int, *, stdin_tty: bool, stderr_tty: bool, env: dict, quiet: bool, fmt: str = "table", enabled: bool | None = None, today: dt.date | None = None) -> bool:
+    """Only a person at a terminal, with at least one candidate, outside CI, not quiet, in the plain table format, while the trial runs."""
+    if not (MAIL_AVAILABLE if enabled is None else enabled) or not trial_open(today):
         return False
     ci = str(env.get("CI", "")).strip().lower() not in ("", "0", "false")
     return n_items > 0 and stdin_tty and stderr_tty and not ci and not quiet and fmt not in ("json", "csv")
+
+
+TRIAL_LINE = f"The emailed report is a trial feature until {REPORT_TRIAL_END.day} {REPORT_TRIAL_END.strftime('%B %Y')}.\n"
 
 
 def preview(p: dict) -> str:
@@ -163,18 +171,18 @@ def preview(p: dict) -> str:
     n = len(p["items"])
     if "inventory" in p:
         inv = p["inventory"]
-        return (f"A report of this scan can be mailed to you. For this run only, this would be sent: {n} finding(s) (CVE id, product, installed version, verdict, priority, reasons, dates); "
+        return (TRIAL_LINE + f"A report of this scan can be mailed to you. For this run only, this would be sent: {n} finding(s) (CVE id, product, installed version, verdict, priority, reasons, dates); "
                 f"and the inventory of this machine: {len(inv['packages'])} package(s), {len(inv['snaps'])} snap(s) and {len(set(inv['images']) | set(inv.get('imageDetails', {})))} container image name(s) "
                 f"(an image name can name an internal registry), the kernel and OS names, the hardware maker and model, and the scan level and operating-system family"
                 + (f". The record was reduced to what the findings name: {p['cut']} entr(ies) left out." if p.get("cut") else ".")
                 + "\nNothing else leaves this machine: no hostname, address, port, path, user name or process list. You are asked separately about the runtime posture.")
-    return (f"A report of this scan can be mailed to you. For this run only, this would be sent: {n} item(s), each with its {', '.join(FIELD_NAMES[:4])}; "
+    return (TRIAL_LINE + f"A report of this scan can be mailed to you. For this run only, this would be sent: {n} item(s), each with its {', '.join(FIELD_NAMES[:4])}; "
             f"and for the run, the {FIELD_NAMES[4]} and the {FIELD_NAMES[5]}"
             + (f" ({p['cut']} lower-priority item(s) left out)." if p.get("cut") else ".")
             + "\nNothing else leaves this machine: no hostname, address, port, path or user name.")
 
 
-FIELDS_NOTE = ("Each finding also says which container image or the host holds the package, the installed versions, how it was matched (identity list, name, "
+FIELDS_NOTE = ("These details are needed to make the report; without them no report is made. Each finding also says which container image or the host holds the package, the installed versions, how it was matched (identity list, name, "
                "version range) and whether a package changelog names the CVE; the report states what this run covered and did not check (counts and fixed words).")
 
 
