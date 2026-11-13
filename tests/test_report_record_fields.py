@@ -176,6 +176,17 @@ class HostItems(On):
         self.assertEqual(flow.entry_parts("libfoo1 1.1.0-2"), ("libfoo1", "1.1.0-2", ""))
         self.assertEqual(flow.entry_parts("kernel 7.0.0-1"), ("kernel", "7.0.0-1", ""))
 
+    def test_an_identity_joined_image_package_keeps_its_image_out_of_the_version(self):
+        self.assertEqual(flow.entry_parts(f"libfoo1 (image {IMG}) 1.0.0-1"), ("libfoo1", "1.0.0-1", IMG))
+        self.assertEqual(flow.entry_parts(f"libfoo1 (image {IMG})"), ("libfoo1", "", IMG))
+
+    def test_assets_and_versions_for_the_identity_join_format(self):
+        hit = ({"cve": "CVE-2030-0001", "product": "Foo", "added": "2030-01-01", "due": "2030-01-22"}, "why",
+               {"installed": ["libfoo1 1.1.0-2", f"libfoo1 (image {IMG}) 1.0.0-1"], "versionCheck": {"verdict": "in-range"}, "matchBasis": "identity"})
+        it = flow.host_items([hit], INV)[0]
+        self.assertEqual(it["assets"], ["host", IMG])
+        self.assertEqual(it["installedVersions"], ["1.1.0-2", "1.0.0-1"])
+
     def test_assets_versions_basis_and_changelog(self):
         it = flow.host_items([self.HIT], INV)[0]
         self.assertEqual(it["assets"], ["host", IMG, "host"])
