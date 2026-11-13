@@ -2,11 +2,21 @@
 
 ## Unreleased
 
+## 0.9.3 — 2026-11-12
+
+- New: a Node runtime bundled inside another package (Playwright's `driver/node`, a vendored `node` binary) is found with `--python` or `--node` and checked against NVD's Node.js ranges. The version is read from the release address the official build carries as plain text (`nodejs.org/download/release/vX.Y.Z`); the file is never run, only files named `node` that start like an executable are read, at a few fixed places inside the folders those flags already read (at most 40 files). A Node installed from the distribution's own `nodejs` package is left to that package's verdict, since it uses the system's libraries. On the host this was found on, it was the only exploited exposure every other reader missed: Node 24.17.0 inside a pip-installed Playwright, below the fix in 24.22.1 (CVE-2026-111497).
+- New: WHAT THIS RUN COVERED says why each undetermined result is undetermined (release not covered by the distribution's data, kernel, matched by name only, no version range, still being investigated), and names the data the run used (graph snapshot and index date). `--format json` carries the same as `receipt.undetermined` and `receipt.data`; each `versionCheck` carries the server's `reason` code when it gives one.
+- Changed: a product word found only inside a longer package name is a `LEAD`, not a candidate (Ivanti "Pulse" no longer matches `libcanberra-pulse`); so is a vendor word inside another package's name. When the identity list is in use, a `lib…` package that matches a CVE by name only is a lead too: a real library CVE (Brotli, libwebp) has an identity row and matches through it first. With no list (offline, a self-hosted server) the library name still counts.
+- Changed: the bundled identity list is generation 8 (411 rows), and now carries Debian and Ubuntu package names from the distributions' own security data.
+- Changed: the corpus case for a word inside a longer package name is now a correct non-match: precision 1.00, recall 1.00 on 12 cases with the distribution verdict (0.80 and 0.67 without it).
+- Internal (inactive: the mail offer and the terminal key flow are still off): a person with no key who asks for a mailed report types the word `agree` to the beta terms, proves the mailbox with one mail, and the same Confirm gives them a free key. The key is created when the waiting tool claims it, stored in the private key file and never printed or mailed. `lattice-scan get-key` with no details does the same for a key alone. An agent keeps `get-key --accept-terms` with the person's details and never answers `agree`.
+
+- Fixed: the documented brotli example. NVD lists a second range (1.2.0 up to 1.2.1) that covers the 1.2.0 wheel, so it is not a version NVD misses; the README, the 0.9.2 notes and a corpus case now say so. The real example of the registry's verdict helping is Pillow 12.3.0 against CVE-2023-4863.
+- Internal: the tests use one temporary folder per run and remove it at the end; a test refuses `tempfile.mkdtemp` anywhere else in tests/.
+
 ## 0.9.2 — 2026-11-12
 
 - New: a host scan and `recent` end with WHAT THIS RUN COVERED: CVEs read, results by kind, the identity list used (generation, CISA date, age, and how many of CISA's CVEs it matches by package identity: about 23%; the rest by names), installed items read by source, and what a clean result does not speak for (CVEs not read, software no package database lists, Windows and network devices, and Python or Node packages when `--python` or `--node` was not given). `--format json` and `--json` carry the same object as `receipt`, counted from the same table, so the two can never disagree.
-- Internal (inactive: the mail offer and the terminal key flow are still off): a person with no key who asks for a mailed report types the word `agree` to the beta terms, proves the mailbox with one mail, and the same Confirm gives them a free key. The key is created when the waiting tool claims it, stored in the private key file and never printed or mailed. `lattice-scan get-key` with no details does the same for a key alone. An agent keeps `get-key --accept-terms` with the person's details and never answers `agree`.
-
 - New: `--node` (or `LATTICE_SCAN_NODE=1`) also reads Node packages installed globally (`npm install -g` into the system prefix, /usr/local, ~/.npm-global or nvm), with the dependencies nested below them, from each `package.json` only. Nothing is run or fetched. Each joins the identity list as `npm:NAME`. Without the flag nothing is read.
 
 - Fixed: the kernel rule no longer matches a kernel flaw when the inventory has no kernel version (an imported inventory); a real host scan always has one.
