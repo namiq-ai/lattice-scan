@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.9.4 — 2026-11-13
+
+- Internal (inactive: the report fields are switched off, `REPORT_FIELDS_AVAILABLE` is False, and the mail offer is still off): the scan record can carry six more fields for a report (which asset a package is on, the distribution's own status, how a match was made, whether the changelog names the CVE, per-package versions, and what the run covered). With the switch off the record is byte-identical to 0.9.3 and the validator refuses the new fields. Nothing a person sees or sends changes in this release.
+- Fixed (inactive until the fields are switched on): a package inside a container image that joined by package identity is now reported with its image, not as a host package.
+
 ## 0.9.3 — 2026-11-12
 
 - New: a Node runtime bundled inside another package (Playwright's `driver/node`, a vendored `node` binary) is found with `--python` or `--node` and checked against NVD's Node.js ranges. The version is read from the release address the official build carries as plain text (`nodejs.org/download/release/vX.Y.Z`); the file is never run, only files named `node` that start like an executable are read, at a few fixed places inside the folders those flags already read (at most 40 files). A Node installed from the distribution's own `nodejs` package is left to that package's verdict, since it uses the system's libraries. On the host this was found on, it was the only exploited exposure every other reader missed: Node 24.17.0 inside a pip-installed Playwright, below the fix in 24.22.1 (CVE-2026-111497).
