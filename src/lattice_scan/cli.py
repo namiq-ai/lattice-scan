@@ -834,6 +834,7 @@ from lattice_scan import lattice_identity as li  # noqa: E402   # the identity j
 from lattice_scan import identities as identity_list  # noqa: E402   # the signed list of package identities per exploited CVE
 from lattice_scan import pyenv  # noqa: E402   # Python packages installed outside the OS package manager (--python)
 from lattice_scan import nodeenv  # noqa: E402   # Node packages installed globally (--node)
+from lattice_scan import scan_record  # noqa: E402   # the record a report request would send, and the switch for its accuracy fields
 
 
 def run(cmd: list[str]) -> str:
@@ -2801,18 +2802,29 @@ def cmd_run(a) -> int:
         print("COVERAGE: listeners and services were read; running programs and persistence entries that no package owns were not (they cannot be matched by name; posture --deep lists them)."
               + ("" if cov["firewallRead"] else " Firewall rules were not read: needs root."))
     snapshot_report(posture_data(), inv["hash"])
-    report_flow("host", hits + again_hits, inv, a)
+    report_flow("host", hits + again_hits, inv, a, lat)
     return fail_on_exit(getattr(a, "fail_on", "never"), [imp for _, _, imp in hits + again_hits])
 
 
-def report_flow(kind: str, found, inv, a) -> None:
+def report_flow(kind: str, found, inv, a, lat=None) -> None:
     """The local report file, and the offer to mail it where the report ADR allows (scan_report_flow). Never breaks a scan: the report is extra."""
     try:
         from . import scan_report_flow as srf
-        items = srf.host_items(found, inv) if kind == "host" else srf.project_items(found)
+        host = kind == "host"
+        extra: dict = {}
+        if host and scan_record.REPORT_FIELDS_AVAILABLE:          # the accuracy fields: switched off in released clients until the maintainers turn them on
+            plan = distro_plan(found, inv)
+            if plan and all(e["cve"] in DISTRO_ANSWERS for e, _imp in plan[0]):
+                plan = None                                         # answered earlier in this run, with its own yes: nothing is asked again
+            extra = {"coverage": report_coverage(inv), "distro_pending": len(plan[3]) if plan else 0}
+            if plan is not None and lat is not None:
+                extra["distro_fn"] = lambda: distro_by_artefact(plan[0], inv, ask_distro(lat, plan[2]))
+        items = srf.host_items(found, inv, changelog_checked if scan_record.REPORT_FIELDS_AVAILABLE else None) if host else srf.project_items(found)
+        if host and scan_record.REPORT_FIELDS_AVAILABLE and DISTRO_ANSWERS:
+            items = srf.merge_distro(items, DISTRO_ANSWERS)       # answered earlier in this run with its own yes
         srf.after_scan(items, "deep" if getattr(a, "deep", False) else "quick", OUT / "reports", quiet=not PROGRESS, fmt=getattr(a, "format", "table") or "table",
-                       env=dict(os.environ), stdin_tty=sys.stdin.isatty(), stderr_tty=sys.stderr.isatty(), inv=inv if kind == "host" else srf.project_inventory(found),
-                       posture=posture_data() if kind == "host" else None, key=KEY or None, terms_version=terms_version, store_key=store_key_file)
+                       env=dict(os.environ), stdin_tty=sys.stdin.isatty(), stderr_tty=sys.stderr.isatty(), inv=inv if host else srf.project_inventory(found),
+                       posture=posture_data() if host else None, key=KEY or None, terms_version=terms_version, store_key=store_key_file, **extra)
     except Exception as err:   # noqa: BLE001 - the scan's answer matters more than its report
         dbg(f"report: not written: {err}")
 
@@ -3708,16 +3720,14 @@ def confirm_send(a, kind: str, ask: str, sample: str, lines: list[str], note: st
 VERDICT_ORDER = {"in-range": 0, "undetermined": 1, "outside-range": 2}
 
 
-def distribution_verdicts(a, lat: "Lattice", inv: dict, found: list, rows: list) -> None:
-    """For candidates that joined by package identity, ask Lattice for the distribution's or registry's own verdict, after consent, and use it.
+DISTRO_ANSWERS: dict = {}     # {cve: {(package name, 'host' or image): distribution status}}, filled only while the report accuracy fields are switched on
 
-    Only the packages that joined a CVE on the identity list are sent, one at a time: the source package's name, its ecosystem, its version and the release
-    (for example `brotli`, `deb`, `1.1.0-2+deb13u1`, `Debian 13`). Never a host name, path, address or the package list. Without consent, or when an item is
-    not answered, the upstream comparison stands and the person is told so. A verdict from the distribution's own fixed version replaces it; the upstream
-    one is kept beside it (versionCheckUpstream). A candidate the distribution fixed is shown as FIXED, not CANDIDATE."""
+
+def distro_plan(found: list, inv: dict):
+    """What the distribution check would ask: (want, per_cve, unique items, the items), or None when nothing qualifies or the check is switched off."""
     want = [(e, imp) for e, _why, imp in found if e.get("matchBasis") == "identity" and JOINED.get(e["cve"])]
     if not want or env("ITEM_VERDICT", "on").lower() in ("0", "off", "no"):
-        return
+        return None
     per_cve, unique = {}, {}
     for e, _imp in want:
         its = [it for it in (verdict_item(x, inv) for x in JOINED[e["cve"]]) if it]
@@ -3725,8 +3735,72 @@ def distribution_verdicts(a, lat: "Lattice", inv: dict, found: list, rows: list)
         for it in its:
             unique.setdefault(tuple(sorted(it.items())), it)
     items_ = list(unique.values())
-    if not items_:
+    return (want, per_cve, unique, items_) if items_ else None
+
+
+def ask_distro(lat: "Lattice", unique: dict) -> dict:
+    """The lookups, one package at a time. The caller has the person's yes. Stops at the first Lattice error; what was answered is kept."""
+    n = len(unique)
+    answers: dict = {}
+    for k, (key, it) in enumerate(unique.items(), 1):
+        progress(f"[verdict {k}/{n}] {it['product']} {it['version']}" + (f" ({it['os']})" if it.get("os") else ""))
+        try:
+            ans = lat.call("graph_affects", **it)
+        except LatticeError as err:
+            progress(f"[verdict] stopped after {k - 1} of {n}: {clean(str(err))}; the rest keep the upstream comparison")
+            break
+        answers[key] = [r for r in (ans.get("results") or []) if isinstance(r, dict) and r.get("basis") in ("distribution", "registry")]
+    return answers
+
+
+def distro_by_artefact(want: list, inv: dict, answers: dict) -> dict:
+    """{cve: {(package name, 'host' or image ref): the record's distribution status}} for the joined packages. The deciding answer is the one that keeps the CVE open."""
+    from . import scan_report_flow as srf
+    rank = {"in-range": 0, "undetermined": 1, "outside-range": 2}
+    out: dict = {}
+    for e, _imp in want:
+        by: dict = {}
+        for x in JOINED.get(e["cve"], []):
+            it = verdict_item(x, inv)
+            if not it:
+                continue
+            asset = x.source[6:] if x.source.startswith("image ") else scan_record.ASSET_HOST
+            mine = [r for r in answers.get(tuple(sorted(it.items())), []) if r.get("cve") == e["cve"] and r.get("verdict") in rank]
+            by[(x.name, asset)] = srf.distro_entry(min(mine, key=lambda r: rank[r["verdict"]]), it.get("os", "")) if mine else {"verdict": "unknown", "fixedIn": "", "source": ""}
+        out[e["cve"]] = by
+    return out
+
+
+def report_coverage(inv: dict) -> dict:
+    """The run's coverage in the record's words: the share of exploited CVEs the signed identity list matches by package identity (the rest are matched by name), the
+    fixed words of what no package database lists, and which software this run did not read. Counts and words from fixed lists, never read from the host."""
+    lst = (IDENTITY or {}).get("list") or {}
+    n, m = lst.get("cvesWithIdentity") or 0, lst.get("catalogueRows") or 0
+    ident = round(100 * n / m) if m else 0
+    return {"identity": ident, "name": 100 - ident, "notChecked": list(scan_record.NOT_CHECKED_WORDS),
+            "notRead": [w for w, missing in (("python-global", "python" not in inv), ("node-global", "nodeGlobal" not in inv)) if missing]}
+
+
+def changelog_checked(installed: list[str], inv: dict) -> bool:
+    """True when at least one installed Debian package of the candidate has a readable changelog, so an empty answer means 'looked, and none names it'."""
+    names = [i.split(" ")[0] for i in installed if "(image " not in i and i.split(" ")[0] in inv["packages"]]
+    if any(i.startswith("kernel ") for i in installed):
+        k = inv["kernel"]
+        names += [n for n in (f"linux-image-{k}", f"linux-image-unsigned-{k}", f"linux-modules-{k}", f"linux-headers-{k}") if n in inv["packages"]]
+    return any(Path(f"/usr/share/doc/{n}/{f}").is_file() for n in names for f in ("changelog.Debian.gz", "changelog.gz"))
+
+
+def distribution_verdicts(a, lat: "Lattice", inv: dict, found: list, rows: list) -> None:
+    """For candidates that joined by package identity, ask Lattice for the distribution's or registry's own verdict, after consent, and use it.
+
+    Only the packages that joined a CVE on the identity list are sent, one at a time: the source package's name, its ecosystem, its version and the release
+    (for example `brotli`, `deb`, `1.1.0-2+deb13u1`, `Debian 13`). Never a host name, path, address or the package list. Without consent, or when an item is
+    not answered, the upstream comparison stands and the person is told so. A verdict from the distribution's own fixed version replaces it; the upstream
+    one is kept beside it (versionCheckUpstream). A candidate the distribution fixed is shown as FIXED, not CANDIDATE."""
+    plan = distro_plan(found, inv)
+    if plan is None:
         return
+    want, per_cve, unique, items_ = plan
     n = len(items_)
     lines = [" ".join(f"{k}={v}" for k, v in sorted(it.items())) for it in items_]
     sample = ", ".join(f"{it['product']} {it['version']}" + (f" ({it['os']})" if it.get("os") else "") for it in items_[:3]) + (f" and {n - 3} more" if n > 3 else "")
@@ -3741,15 +3815,9 @@ def distribution_verdicts(a, lat: "Lattice", inv: dict, found: list, rows: list)
     if not confirm_send(a, "items:verdict", asked, sample, lines, note, fields):
         progress("[verdict] not sent: the verdicts compare upstream numbers, which a distribution's backported fix can make look unfixed.")
         return
-    answers = {}
-    for k, (key, it) in enumerate(unique.items(), 1):
-        progress(f"[verdict {k}/{n}] {it['product']} {it['version']}" + (f" ({it['os']})" if it.get("os") else ""))
-        try:
-            ans = lat.call("graph_affects", **it)
-        except LatticeError as err:
-            progress(f"[verdict] stopped after {k - 1} of {n}: {clean(str(err))}; the rest keep the upstream comparison")
-            break
-        answers[key] = [r for r in (ans.get("results") or []) if isinstance(r, dict) and r.get("basis") in ("distribution", "registry")]
+    answers = ask_distro(lat, unique)
+    if scan_record.REPORT_FIELDS_AVAILABLE:
+        DISTRO_ANSWERS.update(distro_by_artefact(want, inv, answers))      # kept for the report's check: a second question is not asked for what was answered here
     rank = {"in-range": 0, "undetermined": 1, "outside-range": 2}
     fixed = 0
     for e, imp in want:

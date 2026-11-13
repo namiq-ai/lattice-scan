@@ -10,6 +10,7 @@ Nothing in this module talks to the network.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -41,13 +42,84 @@ def _split_installed(entry: str, inv: dict) -> tuple[str, str]:
     return name, ver
 
 
-def host_items(hits: list, inv: dict) -> list[dict]:
+_IMAGE_ENTRY = re.compile(r"^(?P<label>.*?) \(image (?P<ref>.+)\)$")
+
+
+def entry_parts(entry: str) -> tuple[str, str, str]:
+    """One matched-package string as (name, version, image). 'libbrotli1 1.1.0-2 (image web:1)' gives ('libbrotli1', '1.1.0-2', 'web:1'); a host package has image ''."""
+    m = _IMAGE_ENTRY.match(str(entry))
+    label, ref = (m.group("label"), m.group("ref")) if m else (str(entry), "")
+    name, _, ver = label.partition(" ")
+    return name, ver.strip(), ref
+
+
+def match_basis(imp: dict) -> str:
+    """How this candidate was matched, as one word: 'identity' when the package joined through the signed identity list, 'range' when it matched by name and a version
+    range was compared, otherwise 'name'."""
+    if imp.get("matchBasis") == "identity":
+        return "identity"
+    return "range" if (imp.get("versionCheck") or {}).get("verdict") in ("in-range", "outside-range") else "name"
+
+
+def report_extras(imp: dict, inv: dict, changelog_read=None) -> dict:
+    """The accuracy fields of one item (assets, installedVersions, basis, changelog). The distribution status is added later, only after the person's yes."""
+    parts = [entry_parts(n) for n in (imp.get("installed") or [])][:10]
+    packages = inv.get("packages") or {}
+    if imp.get("changelogNamesCve"):
+        changelog = "names"
+    else:
+        changelog = "none" if changelog_read is not None and changelog_read(list(imp.get("installed") or []), inv) else "unchecked"
+    return {"assets": [ref or rec.ASSET_HOST for _n, _v, ref in parts],
+            "installedVersions": [v or ("" if ref else str(packages.get(n) or (inv.get("snaps") or {}).get(n) or "")) for n, v, ref in parts],
+            "basis": match_basis(imp), "changelog": changelog}
+
+
+def distro_entry(answer: dict, os_name: str) -> dict:
+    """One distribution answer (graph_affects: verdict, why, reason, basis) in the record's words. Anything it cannot place is 'unknown'."""
+    unknown = {"verdict": "unknown", "fixedIn": "", "source": ""}
+    osn = (os_name or "").strip().lower()
+    src = next((k for k in rec.DISTRO_SOURCES if osn.startswith(k)), "")
+    if not src or answer.get("basis") != "distribution":
+        return unknown
+    why = str(answer.get("why") or "")
+    verdict, reason = answer.get("verdict"), answer.get("reason")
+    fixed = ""
+    if verdict == "outside-range":
+        m = re.search(r"fixed this in ([^\s,;()]+)", why)
+        fixed = m.group(1) if m else ""
+        word = "not-affected" if reason == "not-affected" else "fixed"
+    elif verdict == "in-range":
+        m = re.search(r"before the fix in .*?\(([^)]+)\)", why)
+        fixed = m.group(1).split(",")[0].strip() if m else ""
+        word = "before-fix" if fixed else ("no-fix-yet" if "no fix yet" in why else "unknown")
+    else:
+        return unknown
+    if word == "unknown":
+        return unknown
+    return {"verdict": word, "fixedIn": fixed if rec._FIXED_IN.fullmatch(fixed) else "", "source": src}
+
+
+def merge_distro(items: list[dict], answers: dict) -> list[dict]:
+    """Add `distro` to each item the distribution was asked about: `answers` is {cve: {(name, asset): entry}}. An entry the answers do not cover is 'unknown'.
+    Items the question did not cover are returned unchanged, so a row without the status says 'version range only'."""
+    out = []
+    for it in items:
+        got = answers.get(it.get("cve"))
+        if got is None or "assets" not in it:
+            out.append(it)
+            continue
+        unknown = {"verdict": "unknown", "fixedIn": "", "source": ""}
+        out.append({**it, "distro": [got.get((n, a), unknown) for n, a in zip(it.get("installed") or [], it["assets"])]})
+    return out
+
+
+def host_items(hits: list, inv: dict, changelog_read=None) -> list[dict]:
     """From the host scan's (entry, why, impact) tuples. The product is CISA's product name; the name and version are the matched package's own."""
     out = []
     for e, _why, imp in hits:
         parts = [_split_installed(n, inv) for n in (imp.get("installed") or [])]
         pr = imp.get("priority") or {}
-        out.append({"cve": e["cve"], "product": e.get("product") or e.get("title", "")[:60], "version": next((v for _, v in parts if v), ""),
+        out.append({**(report_extras(imp, inv, changelog_read) if rec.REPORT_FIELDS_AVAILABLE else {}), "cve": e["cve"], "product": e.get("product") or e.get("title", "")[:60], "version": next((v for _, v in parts if v), ""),
                     "verdict": (imp.get("versionCheck") or {}).get("verdict", "undetermined"),
                     "priority": pr.get("level", "read"), "why": list(pr.get("reasons") or []), "installed": [n for n, _ in parts][:10],
                     "matched": [f"{n} {v}".strip() for n, v in parts][:5], "listed": e.get("added", ""), "due": e.get("due", ""), "due_status": imp.get("dueStatus", "")})
@@ -100,10 +172,23 @@ def preview(p: dict) -> str:
             + "\nNothing else leaves this machine: no hostname, address, port, path or user name.")
 
 
-def offer(payload: dict, input_fn=input, out=None) -> bool:   # `payload` is the record or the items view
+FIELDS_NOTE = ("Each finding also says which container image or the host holds the package, the installed versions, how it was matched (identity list, name, "
+               "version range) and whether a package changelog names the CVE; the report states what this run covered and did not check (counts and fixed words).")
+
+
+def distro_note(n: int) -> str:
+    """The one confirmation's words for the distribution check: what is asked, how many, and that nothing is asked before the yes."""
+    if n <= 0:
+        return FIELDS_NOTE
+    return (FIELDS_NOTE + f"\nThis one yes also covers the check of the distribution's own data: {n} package name(s) with their versions are asked of Lattice, one at a time. "
+            "Nothing is asked before your yes, and not the host name, address, path or user. Without the check, rows say \"version range only\". "
+            "The distribution status values are added to the record after your yes; 'd' shows the record without them.")
+
+
+def offer(payload: dict, input_fn=input, out=None, note: str = "") -> bool:   # `payload` is the record or the items view
     """Ask once for this run. Enter means No. 'd' shows every value that would be sent, then asks again. Nothing is remembered."""
     out = out if out is not None else sys.stderr
-    print(preview(payload), file=out)
+    print(preview(payload) + (("\n" + note) if note else ""), file=out)
     while True:
         a = (input_fn("Send a report by email? [y/N/d(etails)] ") or "").strip().lower()
         if a in ("y", "yes"):
@@ -138,13 +223,14 @@ def ask_posture(block: dict, input_fn=input, out=None) -> bool:
         return False
 
 
-def record_after_yes(inv: dict | None, items: list[dict], level: str, os_name: str, payload: dict, posture: dict | None, input_fn=input, out=None, secrets_fn=None) -> dict:
+def record_after_yes(inv: dict | None, items: list[dict], level: str, os_name: str, payload: dict, posture: dict | None, input_fn=input, out=None, secrets_fn=None,
+                     coverage: dict | None = None) -> dict:
     """What a yes to the report would send: the record, with the posture block only when the person also says yes to the second question.
     A project scan (no machine inventory) or a posture that could not be read has no second question; the record then has no posture key."""
     if inv is None:
         return payload
     if posture is None:
-        return rec.build_record(inv, items, level, os_name)
+        return rec.build_record(inv, items, level, os_name, coverage=coverage)
     from . import local_secrets
     if "localSecrets" not in posture:                  # looked for only now, when the person is about to be asked; kind, place and count, never the value
         try:
@@ -155,12 +241,17 @@ def record_after_yes(inv: dict | None, items: list[dict], level: str, os_name: s
     note = local_secrets.notice(posture.get("localSecrets") or [])
     if note:
         print(note, file=out if out is not None else sys.stderr)      # shown before the question; the value is not in the posture result and never in the record
-    return rec.build_record(inv, items, level, os_name, posture=posture) if ask_posture(block, input_fn, out) else rec.build_record(inv, items, level, os_name)
+    return (rec.build_record(inv, items, level, os_name, posture=posture, coverage=coverage) if ask_posture(block, input_fn, out)
+            else rec.build_record(inv, items, level, os_name, coverage=coverage))
 
 
 def after_scan(items: list[dict], level: str, directory: Path, *, quiet: bool, fmt: str = "table", env: dict | None = None, stdin_tty: bool = False, stderr_tty: bool = False,
-               input_fn=input, out=None, enabled: bool | None = None, os_name: str | None = None, inv: dict | None = None, posture: dict | None = None, secrets_fn=None, post=None, key: str | None = None, terms_version=None, store_key=None, interactive=None) -> Path | None:
-    """Build the payload and the report, write the private file (unless there is no candidate), then offer a mail where allowed."""
+               input_fn=input, out=None, enabled: bool | None = None, os_name: str | None = None, inv: dict | None = None, posture: dict | None = None, secrets_fn=None, post=None, key: str | None = None, terms_version=None, store_key=None, interactive=None,
+               coverage: dict | None = None, distro_pending: int = 0, distro_fn=None) -> Path | None:
+    """Build the payload and the report, write the private file (unless there is no candidate), then offer a mail where allowed.
+
+    With the report accuracy fields switched on (scan_record.REPORT_FIELDS_AVAILABLE), the one confirmation also says how many package names the distribution check
+    (`distro_fn`) will ask of Lattice; the check runs only after the person's yes, and never for a run without a terminal, because no offer is made there."""
     if not items:
         return None
     os_w = os_name or _os_here()
@@ -168,9 +259,12 @@ def after_scan(items: list[dict], level: str, directory: Path, *, quiet: bool, f
     text = rt.build_report(items, payload, posture=posture)
     path = rt.save_report(text, directory, out if not quiet else _Null())      # the local report never depends on the record or the offer
     if should_offer(len(payload["items"]), stdin_tty=stdin_tty, stderr_tty=stderr_tty, env=env if env is not None else {}, quiet=quiet, fmt=fmt, enabled=enabled):
-        first = rec.build_record(inv, items, level, os_w) if inv is not None else payload      # what a yes would send: the record when the scan has an inventory
-        if offer(first, input_fn, out):
-            sendable = record_after_yes(inv, items, level, os_w, payload, posture if kind_is_host(inv) else None, input_fn, out, secrets_fn)
+        first = rec.build_record(inv, items, level, os_w, coverage=coverage) if inv is not None else payload      # what a yes would send: the record when the scan has an inventory
+        fields_on = rec.REPORT_FIELDS_AVAILABLE and inv is not None
+        if offer(first, input_fn, out, distro_note(distro_pending if distro_fn is not None else 0) if fields_on else ""):
+            if fields_on and distro_pending > 0 and distro_fn is not None:
+                items = merge_distro(items, distro_fn())          # the one yes covers this; the answers are added to the findings before the record is built
+            sendable = record_after_yes(inv, items, level, os_w, payload, posture if kind_is_host(inv) else None, input_fn, out, secrets_fn, coverage=coverage)
             if post is not None or MAIL_AVAILABLE:
                 from . import __version__
                 send.send_report(sendable, key, __version__, input_fn, out, post=post or send.default_post, terms_version=terms_version, store_key=store_key, interactive=interactive)

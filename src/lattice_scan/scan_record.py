@@ -36,6 +36,23 @@ WHERE = ("", "container", "snap", "flatpak")
 MAX_PORTS = 300
 MAX_PROGRAMS = 100
 MAX_STR = 300
+
+# Report accuracy fields (an accepted change to the field list). The client sends none of them until this is switched on, together with the service that accepts them:
+# with it False the record is byte-identical to what earlier versions built, and check_record refuses the new fields.
+REPORT_FIELDS_AVAILABLE = False
+ITEM_FIELDS_NEW = ("assets", "distro", "basis", "changelog", "installedVersions")
+TOP_FIELDS_NEW = ("coverage",)
+ASSET_HOST = "host"
+DISTRO_VERDICTS = ("fixed", "before-fix", "no-fix-yet", "not-affected", "unknown")
+DISTRO_SOURCES = ("debian", "ubuntu", "alpine")
+DISTRO_FIELDS = ("verdict", "fixedIn", "source")
+BASIS_WORDS = ("identity", "name", "range")
+CHANGELOG_WORDS = ("names", "none", "unchecked")
+NOT_READ_WORDS = ("python-global", "node-global", "host-browser")
+# what the run's own "not covered" statement says about software no package database lists; fixed words, never read from the host
+NOT_CHECKED_WORDS = ("hand-built-software", "vendor-appliances", "firmware", "windows", "network-devices")
+COVERAGE_FIELDS = ("identity", "name", "notChecked", "notRead")
+_FIXED_IN = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+~:_-]{0,79}")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _MAC = re.compile(r"\b(?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}\b")
 _PATH = re.compile(r"(?:^|[\s\"'=])/(?:home|root|etc|usr|var|tmp|opt|mnt|srv|proc|sys|run)/")
@@ -43,6 +60,14 @@ _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _IPV6 = re.compile(r"\b[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{0,4}){2,}\b")
 _WORD = re.compile(r"[a-z0-9-]{0,24}")
 _NAME = re.compile(r"[\w.+@ -]{1,40}")
+
+
+def _item_fields() -> tuple:
+    return ITEM_FIELDS + ITEM_FIELDS_NEW if REPORT_FIELDS_AVAILABLE else ITEM_FIELDS
+
+
+def _top_fields() -> tuple:
+    return TOP_FIELDS + TOP_FIELDS_NEW if REPORT_FIELDS_AVAILABLE else TOP_FIELDS
 
 
 def _s(v) -> str:
@@ -62,7 +87,51 @@ def _item(c: dict) -> dict | None:
     base["installed"] = [_s(n) for n in (c.get("installed") or [])][:10]
     base["listed"] = _s(c.get("listed"))[:10]
     base["due"] = _s(c.get("due"))[:10]
+    if REPORT_FIELDS_AVAILABLE:
+        _item_report_fields(base, c)
     return base
+
+
+def _parallel(c: dict, key: str, n: int) -> list | None:
+    v = c.get(key)
+    return v[:n] if isinstance(v, list) and n and len(v) >= n else None
+
+
+def _distro_entry(e) -> dict:
+    """One package's distribution status from the fixed vocabularies; anything else is 'unknown' with nothing else in it."""
+    e = e if isinstance(e, dict) else {}
+    v = _s(e.get("verdict"))
+    src = _s(e.get("source"))
+    fixed = _s(e.get("fixedIn"))
+    if v not in DISTRO_VERDICTS or v == "unknown" or src not in DISTRO_SOURCES:
+        return {"verdict": "unknown", "fixedIn": "", "source": ""}
+    return {"verdict": v, "fixedIn": fixed if _FIXED_IN.fullmatch(fixed) else "", "source": src}
+
+
+def _item_report_fields(base: dict, c: dict) -> None:
+    n = len(base["installed"])
+    assets = _parallel(c, "assets", n)
+    if assets is not None:
+        base["assets"] = [_s(a) for a in assets]
+    versions = _parallel(c, "installedVersions", n)
+    if versions is not None:
+        base["installedVersions"] = [_s(v) for v in versions]
+    distro = _parallel(c, "distro", n)
+    if distro is not None:                       # present only after the person's yes to the distribution check; without it the key is absent
+        base["distro"] = [_distro_entry(d) for d in distro]
+    if _s(c.get("basis")) in BASIS_WORDS:
+        base["basis"] = _s(c.get("basis"))
+    if _s(c.get("changelog")) in CHANGELOG_WORDS:
+        base["changelog"] = _s(c.get("changelog"))
+
+
+def _coverage(c) -> dict | None:
+    if not isinstance(c, dict):
+        return None
+    ident = max(0, min(100, _int(c.get("identity"))))
+    return {"identity": ident, "name": max(0, min(100, _int(c.get("name", 100 - ident)))),
+            "notChecked": [w for w in NOT_CHECKED_WORDS if w in (c.get("notChecked") or [])],
+            "notRead": [w for w in NOT_READ_WORDS if w in (c.get("notRead") or [])]}
 
 
 def _inventory(inv: dict) -> dict:
@@ -177,10 +246,44 @@ def _check_posture(ps: dict) -> None:
             raise ValueError(f"the posture block holds {what}: {m.group(0).strip()[:40]}")
 
 
+def _check_item_report_fields(it: dict, details: dict) -> None:
+    n = len(it.get("installed", []))
+    for k in ("assets", "installedVersions", "distro"):
+        if k in it and (not isinstance(it[k], list) or len(it[k]) != n):
+            raise ValueError(f"a scan record item field is not parallel to installed: {k}")
+    for a in it.get("assets", []):
+        if a != ASSET_HOST and a not in details:
+            raise ValueError("a scan record item asset is neither the host nor an image in the inventory")
+    for d in it.get("distro", []):
+        if not isinstance(d, dict) or set(d) != set(DISTRO_FIELDS):
+            raise ValueError("a scan record distribution status has the wrong fields")
+        if d["verdict"] not in DISTRO_VERDICTS:
+            raise ValueError(f"a scan record distribution verdict is not on the list: {d['verdict']}")
+        if d["verdict"] == "unknown":
+            if d["source"] or d["fixedIn"]:
+                raise ValueError("an unknown distribution status carries a source or version")
+        elif d["source"] not in DISTRO_SOURCES or (d["fixedIn"] and not _FIXED_IN.fullmatch(d["fixedIn"])):
+            raise ValueError("a scan record distribution status has a source or version that is not allowed")
+    for k, words in (("basis", BASIS_WORDS), ("changelog", CHANGELOG_WORDS)):
+        if k in it and it[k] not in words:
+            raise ValueError(f"a scan record item {k} is not on the list: {it[k]}")
+
+
+def _check_coverage(c: dict) -> None:
+    if not isinstance(c, dict) or set(c) != set(COVERAGE_FIELDS):
+        raise ValueError("the scan record coverage has the wrong fields")
+    for k in ("identity", "name"):
+        if not isinstance(c[k], int) or isinstance(c[k], bool) or not 0 <= c[k] <= 100:
+            raise ValueError(f"the scan record coverage {k} is not a percentage")
+    for k, words in (("notChecked", NOT_CHECKED_WORDS), ("notRead", NOT_READ_WORDS)):
+        if not isinstance(c[k], list) or any(w not in words for w in c[k]):
+            raise ValueError(f"the scan record coverage {k} holds a word that is not on the list")
+
+
 def check_record(r: dict) -> None:
     """Raise ValueError naming the first field not on the declared lists, or the first forbidden value (MAC, path, address) outside image names."""
     for k in r:
-        if k not in TOP_FIELDS:
+        if k not in _top_fields():
             raise ValueError(f"field not allowed in the scan record: {k}")
     inv = r.get("inventory", {})
     for k in inv:
@@ -195,8 +298,12 @@ def check_record(r: dict) -> None:
                 raise ValueError(f"field not allowed in a scan record image entry: {k}")
     for it in r.get("items", []):
         for k in it:
-            if k not in ITEM_FIELDS:
+            if k not in _item_fields():
                 raise ValueError(f"field not allowed in a scan record item: {k}")
+        if REPORT_FIELDS_AVAILABLE:
+            _check_item_report_fields(it, inv.get("imageDetails", {}))
+    if REPORT_FIELDS_AVAILABLE and "coverage" in r:
+        _check_coverage(r["coverage"])
     ps = r.get("posture")
     if ps is not None:
         _check_posture(ps)
@@ -212,7 +319,7 @@ def check_record(r: dict) -> None:
             raise ValueError(f"the scan record holds {what}: {m.group(0).strip()[:40]}")
 
 
-def build_record(inv: dict, items: list[dict], level: str, os_name: str, max_bytes: int = MAX_BYTES, posture: dict | None = None) -> dict:
+def build_record(inv: dict, items: list[dict], level: str, os_name: str, max_bytes: int = MAX_BYTES, posture: dict | None = None, coverage: dict | None = None) -> dict:
     """`inv` is the scan's inventory; `items` the candidates (cve, product, version, verdict, priority, why, installed, listed, due; other keys are ignored).
 
     Above `max_bytes` the record keeps the hardware and OS fields, the items and only the packages, snaps and images the items name, and `cut` says how many entries
@@ -228,6 +335,8 @@ def build_record(inv: dict, items: list[dict], level: str, os_name: str, max_byt
     if posture is not None:
         r["schema"] = SCHEMA_POSTURE
         r["posture"] = posture_block(posture)         # only when the person said yes to the second question; without it the key is absent
+    if REPORT_FIELDS_AVAILABLE and coverage is not None and _coverage(coverage) is not None:
+        r["coverage"] = _coverage(coverage)           # counts and words from fixed lists; absent when the run gave none
     if _size(r) > max_bytes:
         named = {n for i in its for n in i["installed"]}
         inv2 = r["inventory"]
@@ -237,5 +346,9 @@ def build_record(inv: dict, items: list[dict], level: str, os_name: str, max_byt
         inv2["images"] = [x for x in inv2["images"] if any(x in n or n in x for n in named)]
         inv2["imageDetails"] = {k: d for k, d in inv2["imageDetails"].items() if k in inv2["images"]}
         r["cut"] = before - (len(inv2["packages"]) + len(inv2["snaps"]) + len(inv2["images"]) + len(inv2["imageDetails"]))
+    if REPORT_FIELDS_AVAILABLE:
+        for i in its:                                  # an asset must be the host or an image the record still holds; after a cut, an item whose image was left out loses its assets
+            if "assets" in i and any(a != ASSET_HOST and a not in r["inventory"]["imageDetails"] for a in i["assets"]):
+                del i["assets"]
     check_record(r)
     return r
