@@ -1,19 +1,19 @@
 {
- "_comment": "Frozen result of packaging/corpus_score.py on hosts.json, and the floors the figures may not drop below. A case whose result changes fails tests/test_corpus_hosts.py and needs review: an improvement moves the floor up in the same change (a ratchet), a regression is a bug. Baselines: 2026-11-12 names only 0.33/0.33; identity 0.60/0.50; identity with the consented distribution verdict 0.83/0.83; after the browser alias and the empty-kernel rule (12 cases): identity 0.67/0.67, verdict 0.86/1.00.",
+ "_comment": "Frozen result of packaging/corpus_score.py on hosts.json, and the floors the figures may not drop below. A case whose result changes fails tests/test_corpus_hosts.py and needs review: an improvement moves the floor up in the same change (a ratchet), a regression is a bug. Baselines: 2026-11-12 names only 0.33/0.33; identity 0.60/0.50; identity with the consented distribution verdict 0.83/0.83; after the browser alias and the empty-kernel rule (12 cases): identity 0.67/0.67, verdict 0.86/1.00. After the partial-name lead rule (a product word only inside a longer name, vendor not installed): identity 0.80/0.67, verdict 1.00/1.00.",
  "floor": {
   "identity": {
-   "precision": 0.67,
+   "precision": 0.8,
    "recall": 0.67
   },
   "verdict": {
-   "precision": 0.86,
+   "precision": 1.0,
    "recall": 1.0
   }
  },
  "identity": {
   "F1": "TN",
   "F2": "TN",
-  "F3": "FP",
+  "F3": "TN",
   "F4": "TP",
   "F5": "FN",
   "F6": "FN",
@@ -27,7 +27,7 @@
  "verdict": {
   "F1": "TN",
   "F2": "TN",
-  "F3": "FP",
+  "F3": "TN",
   "F4": "TP",
   "F5": "TP",
   "F6": "TP",
