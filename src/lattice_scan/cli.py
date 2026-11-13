@@ -793,6 +793,12 @@ class Lattice:
                 dbg(f"   lattice node: {json.dumps(data, sort_keys=True)[:1500]}")
             for n in data.get("notices", []):
                 dbg(f"   lattice notice: {n.get('title')}: {n.get('obligation')}")
+        if isinstance(data, dict):
+            # What answered, for the receipt's data line: the graph snapshot of a search and the private index date of an item verdict.
+            for k, field in (("snapshot", "snapshot"), ("indexAsOf", "indexAsOf")):
+                v = data.get(field)
+                if isinstance(v, str) and v and re.fullmatch(r"[A-Za-z0-9:._+-]{1,64}", v):
+                    SEEN[k] = v
         if isinstance(data, dict) and data.get("error"):
             msg = data.get("message", data["error"])
             raise LatticeError(clean(f"{tool}: {data['error']}: {msg}"))
@@ -1564,6 +1570,12 @@ def inventory() -> dict:
     if env("NODE") in ("1", "true", "yes"):
         node_global = nodeenv.collect()
         progress(f"[host] node: {sum(len(v) for v in node_global.values())} package(s) installed globally in {len(node_global)} folder(s)")
+    bundled_node = []
+    if python or node_global:
+        from . import bundled
+        bundled_node = [{"version": b["version"], "where": f"{b['package']} in {pyenv.label(b['root'])}"} for b in bundled.find_node(list(python) + list(node_global))]
+        if bundled_node:
+            progress(f"[host] bundled runtimes: {len(bundled_node)} Node.js binar{'ies' if len(bundled_node) > 1 else 'y'} inside other packages (read, never run)")
     snaps = {f[0]: f[1] for f in (l.split() for l in run(["snap", "list"]).splitlines()[1:]) if len(f) >= 2}
     progress(f"[host] snaps: {len(snaps)}")
     images = sorted({i for i in run(["docker", "ps", "--format", "{{.Image}}"]).splitlines() if i})
@@ -1581,7 +1593,7 @@ def inventory() -> dict:
     progress("[host] hardware: " + (" ".join(x for x in (host.get("manufacturer"), host.get("model"), host.get("version")) if x) or "not reported by this machine"))
     IMAGE_SCAN.clear()
     details = image_details(images)
-    inv = {"kernel": kernel, "os": osr, "manager": manager if pk else "", "host": host, "packages": pk, "sources": srcs, **({"osRelease": os_release} if os_release else {}), **({"python": python} if python else {}), **({"nodeGlobal": node_global} if node_global else {}), "snaps": snaps, "images": images, "imageDetails": details, "node": run(["node", "-v"]).strip(),
+    inv = {"kernel": kernel, "os": osr, "manager": manager if pk else "", "host": host, "packages": pk, "sources": srcs, **({"osRelease": os_release} if os_release else {}), **({"python": python} if python else {}), **({"nodeGlobal": node_global} if node_global else {}), **({"bundledNode": bundled_node} if bundled_node else {}), "snaps": snaps, "images": images, "imageDetails": details, "node": run(["node", "-v"]).strip(),
            "restartRequired": Path("/var/run/reboot-required").exists()}
     if IMAGE_SCAN:
         inv["imageScan"] = dict(IMAGE_SCAN)
@@ -1760,7 +1772,15 @@ def candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str]] | None
         if m:
             entry["matchBasis"] = "names"
         return m
+    rt = runtime_match(entry, inv)
     ident = identity_match(entry, inv)
+    if rt:
+        # An in-range runtime is decided by NVD's own Node.js range and stays a candidate: it is not sent for a distribution verdict (JOINED is not set),
+        # which describes the library's packages and could otherwise mark the CVE fixed while the bundled runtime is not. A package join is kept in the reason.
+        entry["matchBasis"] = "runtime"
+        if ident is not None and ident[0] == "join":
+            return (rt[0] + "; also " + ident[1][0], rt[1] + ident[1][1], rt[2])
+        return rt
     if ident is not None and ident[0] == "join":
         entry["matchBasis"] = "identity"
         JOINED[entry.get("cve", "")] = ident[2]
@@ -1773,9 +1793,97 @@ def candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str]] | None
     if m and ident is not None and all(i.split(" ", 1)[0] in (inv.get("packages") or {}) for i in m[1]):
         entry["matchBasis"] = "lead"
         return (m[0] + "; a name match only: the identity list names other packages for this CVE", m[1], m[2])
+    if m and partial_name(entry, inv, m):
+        entry["matchBasis"] = "lead"
+        return (m[0] + "; the product's words are only part of a longer name and its vendor is not installed", m[1], m[2])
     if m:
         entry["matchBasis"] = "names"
     return m
+
+
+# Words a package name adds to the software it packages: "samba-common", "exim4-daemon-heavy" and "python3-brotli" are still samba, exim and brotli.
+PACKAGING = set("""common data utils tools bin core base server client daemon libs perl python java runtime doc docs dev plugins plugin modules module
+heavy light full minimal bindings""".split())
+
+
+def own_tokens(name: str) -> list[str]:
+    """The words of an installed name as written, trailing digits dropped, packaging words removed, in order: "libpulse0" -> ["libpulse"],
+    "samba-common-bin" -> ["samba"], "exim4-daemon-heavy" -> ["exim"]. No lib-stripping: "libpulse" is not "pulse" for a name-only match."""
+    out = []
+    for t in re.findall(r"[a-z][a-z0-9]*", name.lower()):
+        t = re.sub(r"\d+$", "", t)
+        if len(t) >= 4 and t not in PACKAGING and t not in out:
+            out.append(t)
+    return out
+
+
+def wanted(entry: dict) -> set[str]:
+    """The distinctive product words name_candidate looks for (the same rule: the title's leading vendor word dropped when there is no product)."""
+    product = entry.get("product", "").lower()
+    if product:
+        return words(product)
+    title = entry.get("title", "").lower()
+    first = {re.sub(r"\d+$", "", f) for f in re.findall(r"[a-z][a-z0-9]{3,}", title)[:1]}
+    return {w for w in words(title) if w not in first} or words(title)
+
+
+def partial_name(entry: dict, inv: dict, m: tuple[str, list[str], list[str]]) -> bool:
+    """A name match too weak to be a candidate: the vendor is not installed, and no installed name IS the product, only a longer name holding its words
+    (Ivanti Pulse Connect Secure against libcanberra-pulse, an IP camera against gstreamer1.0-libcamera, Microsoft Word against a package inside an image).
+    Such a match is kept as a lead, shown but not counted. A package named like the product (bash, samba, wordpress, libbrotli1) stays a candidate.
+    The hardware match is not judged here: a maker and a model are not package names."""
+    if m[0].endswith("hardware"):
+        return False
+    want = wanted(entry)
+    if not want:
+        return False
+    vendor_words = {w for w in words(entry.get("vendor", "").lower()) if w != "unknown"}
+    # With a signed identity list in use and no row for this CVE, OSV and the distributions know no package for the product (a vendor appliance, a
+    # Windows product), so "libpulse0" meeting "Pulse" is a coincidence of words. Without a list (offline, an older server) the lib-stripped name is
+    # still the best evidence there is for a library, as before.
+    strict = bool((IDENTITY or {}).get("list"))
+    names: list[str] = list(inv.get("packages") or {}) + list(inv.get("snaps") or {}) + [im.split("@")[0].rsplit("/", 1)[-1].split(":")[0] for im in inv.get("images") or []]
+    for d in (inv.get("imageDetails") or {}).values():
+        names += [d.get("name", "")] + list((d.get("packages") or {}).keys())
+        names += [n.rsplit("/", 1)[-1].lstrip("@") for pk in (d.get("languages") or {}).values() for n in pk]
+    firsts: set[str] = set()
+    for n in names:
+        toks = own_tokens(n)
+        if set(toks) == want or (not strict and {t[3:] if t.startswith("lib") and len(t) > 6 else t for t in toks} == want):
+            return False                                   # a name that IS the product: bash, samba-common, wordpress (and libexamplelib2 without a list)
+        if toks:
+            firsts |= {toks[0], toks[0][3:] if toks[0].startswith("lib") and not strict else toks[0]}   # libpulse0 is not the vendor Pulse Secure
+    # The vendor counts only as the first word of an installed name (exim4-daemon-heavy for Exim, libexampleco for Exampleco): avahi-daemon is not Daemon.
+    return not (vendor_words & firsts)
+
+
+NODE_PRODUCTS = ("nodejs/node.js", "nodejs/nodejs")
+
+
+def packaged_node(inv: dict) -> bool:
+    """The node on PATH is the distribution's own nodejs package (same version): it is judged as that package, by the distribution's data, because a
+    distribution builds Node against its own system libraries (Debian and Ubuntu link the system Brotli), so NVD's upstream Node range does not fit it.
+    A Node from nvm or a tarball has a version no package matches and stays a runtime."""
+    node = upstream(str(inv.get("node") or "").lstrip("v"))
+    pk = inv.get("packages") or {}
+    return node is not None and any(upstream(re.sub(r"^\d+:", "", str(pk[n]))) == node for n in ("nodejs", "nodejs-current") if n in pk)
+
+
+def runtime_match(entry: dict, inv: dict) -> tuple[str, list[str], list[str]] | None:
+    """A Node.js runtime (the one on PATH, or one bundled inside a package) inside NVD's own Node.js range for a CVE CISA files under another product.
+    A library Node bundles (Brotli, OpenSSL, llhttp) makes Node itself affected, and NVD says so by listing nodejs/node.js with its own fixed version;
+    no package database lists a runtime bundled in Playwright's driver folder, so this is the only way it is ever compared. Only an in-range version is a
+    match: a runtime outside the range says nothing, and the CVE goes on to the ordinary identity and name rules."""
+    rs = [r for r in entry.get("ranges") or [] if str(r.get("product", "")).lower() in NODE_PRODUCTS]
+    if not rs:
+        return None
+    runtimes = ([(f"node {inv['node']}", str(inv["node"]))] if inv.get("node") and not packaged_node(inv) else []) + \
+        [(f"node {b['version']} bundled in {b['where']}", b["version"]) for b in inv.get("bundledNode") or []]
+    hits = [(lab, v) for lab, v in runtimes if (u := upstream(v.lstrip("v"))) and any(in_range(u, r) is True for r in rs)]
+    if not hits:
+        return None
+    return ("NVD lists Node.js among the products this CVE affects, and " + ", ".join(h[0] for h in hits) + " is inside its range",
+            [h[0] for h in hits], [h[1] for h in hits])
 
 
 def name_candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str]] | None:
@@ -1796,8 +1904,12 @@ def name_candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str]] |
     if (vendor == "linux" and product == "kernel" or "linux kernel" in product) and inv.get("family") != "macos" and inv.get("kernel"):
         # a Mac's Darwin number is not a Linux kernel number; an inventory with no kernel version (an imported one) has no running kernel to match
         return f"kernel in use is {inv['kernel']}", [f"kernel {inv['kernel']}"], [inv["kernel"]]
-    if product in ("node.js", "nodejs") and inv.get("node"):
-        return f"Node.js {inv['node']} is installed", [f"node {inv['node']}"], [inv["node"]]
+    if product in ("node.js", "nodejs") and (inv.get("node") or inv.get("bundledNode")):
+        # the node on PATH and every Node bundled inside a package (Playwright's driver/node): each is its own runtime with its own version
+        runtimes = ([(f"node {inv['node']}", inv["node"])] if inv.get("node") else []) + [(f"node {b['version']} bundled in {b['where']}", b["version"]) for b in inv.get("bundledNode") or []]
+        if not inv.get("bundledNode"):
+            return f"Node.js {inv['node']} is installed", [f"node {inv['node']}"], [inv["node"]]
+        return "Node.js is installed: " + ", ".join(r[0] for r in runtimes), [r[0] for r in runtimes], [r[1] for r in runtimes]
     if basis == "title":  # a headline leads with the vendor ("Apache Log4j2 ..."), which package names rarely carry
         first = re.findall(r"[a-z][a-z0-9]{3,}", product)[:1]
         want = {w for w in words(product) if w not in {re.sub(r"\d+$", "", f) for f in first}} or words(product)
@@ -1944,7 +2056,9 @@ def version_check(entry: dict, vers: list[str]) -> dict:
     prod_forms = {_flat(entry.get("product", ""))}
     prod_forms |= {f[:-2] for f in prod_forms if f.endswith("js") and len(f) > 4}
     mine = []
-    for r in entry.get("ranges", []):
+    if entry.get("matchBasis") == "runtime":    # matched as a Node runtime (runtime_match): NVD's Node.js ranges are the ones that apply, not the library's
+        mine = [r for r in entry.get("ranges", []) if str(r.get("product", "")).lower() in NODE_PRODUCTS]
+    for r in ([] if mine else entry.get("ranges", [])):
         sv, _, sp = r.get("product", "").partition("/")
         # Another vendor's range is not ours, unless the product name is the same name: CISA's vendor is often the maintainer today ("Kludex Starlette")
         # while NVD files the product under the original one ("encode/starlette"), and "sudo_project/sudo" is CISA's "Sudo".
@@ -2639,7 +2753,7 @@ def cmd_run(a) -> int:
             + (" restart-required" if inv["restartRequired"] else ""))
     show_offline_banner()
     rows += getattr(a, "extra_rows", [])   # `recent`: the feed's ids that were ruled out on this host and never sent to Lattice
-    rec = receipt(inv, rows, read)
+    rec = receipt(inv, rows, read, {e["cve"]: imp for e, _, imp in hits + again_hits})
     RESULT["receipt"] = rec   # the JSON carries the same object the console lines below are written from
     print(f"host scan {TODAY}: {read} exploited entries read, {len(hits)} candidates (a person must read each against the installed version)")   # wording kept: agents parse it
     withdrawn = recheck_open(inv)   # an open finding from an older, looser matcher is withdrawn, not kept open for ever
@@ -3643,24 +3757,61 @@ def distribution_verdicts(a, lat: "Lattice", inv: dict, found: list, rows: list)
         for it in per_cve.get(e["cve"], []):
             for r in answers.get(tuple(sorted(it.items())), []):
                 if r.get("cve") == e["cve"] and r.get("verdict") in rank:
-                    got.append((r["verdict"], f"{it['product']} {it['version']}: {clean(str(r.get('why') or ''))}", r.get("basis")))
+                    got.append((r["verdict"], f"{it['product']} {it['version']}: {clean(str(r.get('why') or ''))}", r.get("basis"), str(r.get("reason") or "")))
         if not got:
             continue
         verdict = min((g[0] for g in got), key=lambda v: rank[v])      # one affected package is enough to keep it a candidate
         imp["versionCheckUpstream"] = imp.get("versionCheck")
-        imp["versionCheck"] = {"verdict": verdict, "why": "; ".join(dict.fromkeys(g[1] for g in got))[:600], "basis": got[0][2]}   # one line per distinct reason
+        reason = next((g[3] for g in got if g[0] == verdict and g[3]), "")     # the server's code for the deciding answer (graph-mcp affects.REASONS)
+        imp["versionCheck"] = {"verdict": verdict, "why": "; ".join(dict.fromkeys(g[1] for g in got))[:600], "basis": got[0][2],
+                               **({"reason": reason} if re.fullmatch(r"[a-z-]{1,40}", reason) else {})}   # one line per distinct reason
         append("findings.jsonl", {"event": "impact", "ref": e["cve"], "on": TODAY, "impact": imp})
         if verdict == "outside-range":
             fixed += 1
             for row in rows:
                 if row and row[0] == e["cve"] and row[-2] in ("CANDIDATE", "RECORDED"):
                     row[-2] = "FIXED"
-                    row[-1] = f"{imp['versionCheck']['why']} (the distribution's own fixed version)"
+                    row[-1] = f"{imp['versionCheck']['why']} " + {"not-affected": "(the distribution's own status for this release)",
+                                                                   "fixed-in-earlier-release": "(fixed before this release was made, by the distribution's own data)"
+                                                                   }.get(reason, "(the distribution's own fixed version)")
     if fixed:
         progress(f"[verdict] {fixed} candidate(s) are already fixed by the distribution or registry: shown as FIXED")
 
 
-def receipt(inv: dict, rows: list, read: int) -> dict:
+SEEN: dict = {}     # what Lattice answered from in this run (graph snapshot, private index date); set by Lattice.call, read by receipt()
+
+# Why an undetermined result is undetermined, as one code a person can read: the server's reason code (graph_affects "reason") when the distribution was
+# asked, otherwise what the client knows (the kernel rule, a name match, no version range). Order of the printed breakdown.
+UNDETERMINED_REASONS = {
+    "release-not-covered": "the distribution has no record for this release",
+    "other-releases-only": "the distribution's data covers other releases only",
+    "investigating": "the distribution is still investigating",
+    "no-range": "no version range is known for the product",
+    "upstream-only": "only the upstream range was compared (the distribution was not asked)",
+    "kernel": "the running kernel (a distribution kernel's fixes are not compared)",
+    "names": "a name match: the version could not be compared",
+    "other": "other",
+}
+
+
+def undetermined_reason(imp: dict, matched_by: str) -> str:
+    vc = imp.get("versionCheck") or {}
+    code = vc.get("reason")
+    if code in UNDETERMINED_REASONS:
+        return code
+    why = str(vc.get("why") or "")
+    if "kernel" in matched_by.lower():
+        return "kernel"
+    if vc.get("basis") in ("distribution", "registry"):
+        return "release-not-covered" if "no fixed-version data for release" in why else "other-releases-only" if "other releases only" in why else "other"
+    if "no version range" in why or "no affected-version" in why or "holds no version range" in why:
+        return "no-range"
+    if "a distribution can fix" in why or "upstream" in why:
+        return "upstream-only"
+    return "names"
+
+
+def receipt(inv: dict, rows: list, read: int, impacts: dict | None = None) -> dict:
     """What this host scan did and did not cover, from the run itself: the one object the console summary and the JSON both come from.
 
     results      rows by result, counted from the table that is printed (so the numbers can never disagree)
@@ -3688,7 +3839,18 @@ def receipt(inv: dict, rows: list, read: int) -> dict:
         not_covered.append("Python packages installed by pip, uv or conda (add --python)")
     if "nodeGlobal" not in inv:
         not_covered.append("Node packages installed globally (add --node)")
-    return {"cvesRead": read, "results": results, "identityList": idl, "artefacts": by_source, "notCovered": not_covered}
+    if inv.get("bundledNode"):
+        by_source["bundledRuntimes"] = len(inv["bundledNode"])
+    reasons: dict = {}
+    for r in rows:
+        imp = (impacts or {}).get(r[0]) if r else None
+        if imp and r[7] in ("CANDIDATE", "RECORDED") and (imp.get("versionCheck") or {}).get("verdict") == "undetermined":
+            k = undetermined_reason(imp, str(r[-1]))
+            reasons[k] = reasons.get(k, 0) + 1
+    data = {k: v for k, v in (("catalogueAsOf", (lst or {}).get("exploitedAsOf")), ("identityListAgeDays", (lst or {}).get("ageDays")),
+                              ("graphSnapshot", SEEN.get("snapshot")), ("indexAsOf", SEEN.get("indexAsOf"))) if v not in (None, "")}
+    return {"cvesRead": read, "results": results, "undetermined": dict(sorted(reasons.items(), key=lambda x: -x[1])), "data": data, "identityList": idl,
+            "artefacts": by_source, "notCovered": not_covered}
 
 
 def print_receipt(rec: dict) -> None:
@@ -3700,6 +3862,14 @@ def print_receipt(rec: dict) -> None:
         print(f"  identity list: generation {idl['generation']}, CISA as of {idl['exploitedAsOf']} ({idl['ageDays']} days{', OUT OF DATE' if idl['stale'] else ''}); {idl['coverage']}")
     else:
         print(f"  identity list: not used ({idl['note']})")
+    if rec.get("undetermined"):
+        print("  undetermined, by cause: " + "; ".join(f"{UNDETERMINED_REASONS.get(k, k)} {v}" for k, v in rec["undetermined"].items()))
+    d = rec.get("data") or {}
+    if d:
+        print("  data: " + ", ".join(x for x in (f"CISA list as of {d['catalogueAsOf']}" if d.get("catalogueAsOf") else "",
+                                                 f"identity list {d['identityListAgeDays']} days old" if d.get("identityListAgeDays") is not None else "",
+                                                 f"Lattice snapshot {d['graphSnapshot']}" if d.get("graphSnapshot") else "",
+                                                 f"distribution data as of {d['indexAsOf']}" if d.get("indexAsOf") else "") if x))
     print("  installed items read: " + (", ".join(f"{k} {v}" for k, v in sorted(rec["artefacts"].items())) or "none"))
     print("  not covered: " + "; ".join(rec["notCovered"]))
     print()
