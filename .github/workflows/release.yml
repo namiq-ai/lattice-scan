@@ -19,6 +19,7 @@ permissions:
   contents: read
 
 env:
+  LATTICE_SCAN_TEST: "1"   # our own run, not a user of the tool (see ci.yml)
   TAG: ${{ inputs.version && format('v{0}', inputs.version) || github.ref_name }}
 
 jobs:
