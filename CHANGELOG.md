@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Changed: the emailed report goes only to the address registered with your key. The tool no longer asks for another delivery address; a person with no key is asked their own address once, and that is the address the free key is registered to. The consent screen now says the report is free and provided as is and may contain mistakes, that a person at NamiQ reads the findings (and the posture, if you include it) to review it, that the findings go to a model provider, that it is kept 7 days with the posture and otherwise 30 days, and that it is sent only to your registered address.
+- New: after a report is sent, the tool prints a six-digit report code in bold on the terminal. You need it to open the report from the link in the mail; it is not sent by email. It is shown once and is not written to any file or log, nor shown in `--json` output. If the code cannot be shown (not a terminal), nothing is sent and the tool says so.
 - New: the emailed report is a trial feature until 31 December 2026. After a scan with at least one candidate, a person at a terminal is asked once whether to send a report by email; Enter means No, `d` shows every value that would be sent. The report is made from six more fields in the record (which asset a package is on, the distribution's own status, how a match was made, whether the changelog names the CVE, per-package versions, what the run covered), so they are sent with a yes and without them no report is made. The distribution check is covered by the same yes. Nothing is asked in a script, in CI, with `--quiet`, with `--format json|csv`, or after the trial ends; an agent never answers it. The terminal flow that gives a person with no key a free key stays off.
 
 ## 0.9.4 — 2026-11-13
