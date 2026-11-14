@@ -190,17 +190,24 @@ def should_offer(n_items: int, *, stdin_tty: bool, stderr_tty: bool, env: dict, 
 TRIAL_LINE = f"The emailed report is a trial feature until {REPORT_TRIAL_END.day} {REPORT_TRIAL_END.strftime('%B %Y')}.\n"
 
 
+CONSENT = ("The report is free and provided as is. It may contain mistakes.\n"
+           "A person at NamiQ reads the findings (and the posture, if you include it) to review the report.\n"
+           "The findings go to a model provider to help write the report.\n"
+           "It is kept 7 days if you include the posture, otherwise 30 days.\n"
+           "It is sent only to your registered address. The link in the mail needs the report code shown here after the send.")
+
+
 def preview(p: dict) -> str:
     """What would be sent, in words. A scan record (with an inventory) or the items view alone."""
     n = len(p["items"])
     if "inventory" in p:
         inv = p["inventory"]
-        return (TRIAL_LINE + f"A report of this scan can be mailed to you. For this run only, this would be sent: {n} finding(s) (CVE id, product, installed version, verdict, priority, reasons, dates); "
+        return (TRIAL_LINE + CONSENT + f"\nFor this run only, this would be sent: {n} finding(s) (CVE id, product, installed version, verdict, priority, reasons, dates); "
                 f"and the inventory of this machine: {len(inv['packages'])} package(s), {len(inv['snaps'])} snap(s) and {len(set(inv['images']) | set(inv.get('imageDetails', {})))} container image name(s) "
                 f"(an image name can name an internal registry), the kernel and OS names, the hardware maker and model, and the scan level and operating-system family"
                 + (f". The record was reduced to what the findings name: {p['cut']} entr(ies) left out." if p.get("cut") else ".")
                 + "\nNothing else leaves this machine: no hostname, address, port, path, user name or process list. You are asked separately about the runtime posture.")
-    return (TRIAL_LINE + f"A report of this scan can be mailed to you. For this run only, this would be sent: {n} item(s), each with its {', '.join(FIELD_NAMES[:4])}; "
+    return (TRIAL_LINE + CONSENT + f"\nFor this run only, this would be sent: {n} item(s), each with its {', '.join(FIELD_NAMES[:4])}; "
             f"and for the run, the {FIELD_NAMES[4]} and the {FIELD_NAMES[5]}"
             + (f" ({p['cut']} lower-priority item(s) left out)." if p.get("cut") else ".")
             + "\nNothing else leaves this machine: no hostname, address, port, path or user name.")

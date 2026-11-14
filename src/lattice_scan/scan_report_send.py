@@ -97,19 +97,31 @@ def wait_for_claim(claim: str, base: str = BASE, post=default_post, sleep=time.s
     return {"state": "timeout"}
 
 
-def submit(record: dict, token: str, key: str, version: str, delivery_address: str = "", base: str = BASE, post=default_post) -> tuple[int, dict]:
+def submit(record: dict, token: str, key: str, version: str, base: str = BASE, post=default_post) -> tuple[int, dict]:
+    """The report goes only to the address registered with the key; there is no way to name another one."""
     body = {"record": record, "token": token, "client_version": version}
-    if delivery_address:
-        body["delivery_address"] = delivery_address
     return post(f"{base}/api/v1/lattice/report/submit", body, _auth(key), 60)
 
 
 def interactive_here() -> bool:
-    """Both stdin and stderr are a terminal: a person is here. A pipe, CI or an agent-driven run is not, and never gets the terms question."""
+    """Stdin, stdout and stderr are all a terminal: a person is here and can be shown the report code. A pipe, CI or an agent-driven run is not, and never gets the terms question."""
     try:
-        return sys.stdin.isatty() and sys.stderr.isatty()
+        return sys.stdin.isatty() and sys.stdout.isatty() and sys.stderr.isatty()
     except (AttributeError, ValueError):
         return False
+
+
+NO_CODE_SHOWN = "The report code was not shown because this is not a terminal; run the command again in a terminal."
+
+
+def code_line(code: str, bold: bool) -> str:
+    """The one place the report code is turned into text. Bold (ANSI) only when asked, which the caller does for a terminal."""
+    shown = f"\x1b[1mReport code: {code}\x1b[0m" if bold else f"Report code: {code}"
+    return shown + "  (you need it to open the report; it is not sent by email)"
+
+
+def _valid_code(code) -> str:
+    return code if isinstance(code, str) and len(code) == 6 and code.isascii() and code.isdigit() else ""
 
 
 def _store_and_say(key: dict, store_key, out) -> None:
@@ -124,19 +136,24 @@ def _store_and_say(key: dict, store_key, out) -> None:
 
 
 def send_report(record: dict, key: str | None, version: str, input_fn=input, out=None, base: str = BASE, post=default_post, sleep=time.sleep, clock=time.time,
-                terms_version=None, store_key=None, interactive=None) -> bool:
+                terms_version=None, store_key=None, interactive=None, bold=None) -> bool:
     """The whole sequence for a person who said yes. Returns True when the request was accepted.
     With no key, the person types the terms word first; the same Confirm then gives the free key, which is created at the claim and never mailed."""
     out = out if out is not None else sys.stderr
     wants_key = not key
-    if wants_key and not (interactive_here() if interactive is None else interactive):
-        print("Sending a report request needs a Lattice key (LATTICE_API_KEY), or a person at a terminal to get a free one. Nothing was sent.", file=out)
+    if interactive is None:
+        interactive = interactive_here()
+    if not interactive:
+        # no terminal: the report code could not be shown, so nothing is sent (and a free key needs a person anyway)
+        print(NO_CODE_SHOWN + " Nothing was sent." if key else "Sending a report request needs a Lattice key (LATTICE_API_KEY), or a person at a terminal to get a free one. Nothing was sent.", file=out)
         return False
     prefill = known_address(key, base, post)
-    ask = f"Send the report to which address? [{prefill}] " if prefill else "Send the report to which address? "
-    address = (input_fn(ask) or "").strip() or prefill
+    if wants_key:
+        address = (input_fn("Your email address (it is registered with your free key, and the report is sent only to it): ") or "").strip()
+    else:
+        address = prefill      # the report goes only to the registered address; no other address is asked for or accepted
     if not address or "@" not in address:
-        print("No address, so nothing was sent.", file=out)
+        print("No registered address for this key, so nothing was sent." if key else "No address, so nothing was sent.", file=out)
         return False
     tv = ""
     if wants_key:
@@ -169,9 +186,17 @@ def send_report(record: dict, key: str | None, version: str, input_fn=input, out
     if not key:
         print("No key is available for this request. Nothing was sent.", file=out)
         return False
-    status, d = submit(record, got["token"], key, version, address if address != prefill else "", base, post)
+    status, d = submit(record, got["token"], key, version, base, post)
     if status == 200:
-        print(str(d.get("message") or "Your report was requested. It arrives by email within 4 hours, after a person has reviewed it."), file=out)
+        code = _valid_code(d.get("code"))
+        message = str(d.get("message") or "Your report was requested. It arrives by email within 4 hours, after a person has reviewed it.")
+        if code:
+            message = message.replace(code, "")
+        print(message, file=out)
+        if code:
+            print(code_line(code, bool(getattr(out, "isatty", lambda: False)())) if bold is None else code_line(code, bold), file=out)   # shown once; kept nowhere else
+        else:
+            print("The service did not return a report code, so the report cannot be opened. Write to contact@namiq.io.", file=out)
         return True
     print(f"The report request was not accepted: {str(d.get('error') or status)[:200]}", file=out)
     return False

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 NamiQ LLC
 """The record is sent only after the mailbox is proved; the tool waits holding it in memory, and any stop sends nothing. Synthetic data and a fake server."""
-import io, os, sys, tempfile, unittest
+import io, json, os, sys, tempfile, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -16,7 +16,7 @@ KEY = "lat_" + "Q7x" * 8
 
 
 class Server:
-    def __init__(self, claims=("pending", "pending", "confirmed"), claim="c" * 40, submit=(200, {"message": "Your report was requested. It arrives by email within 4 hours, after a person has reviewed it."}), prefill=""):
+    def __init__(self, claims=("pending", "pending", "confirmed"), claim="c" * 40, submit=(200, {"message": "Your report was requested. It arrives by email within 4 hours, after a person has reviewed it.", "code": "042917"}), prefill=""):
         self.calls, self.claims, self.claim, self.submit, self.prefill = [], list(claims), claim, submit, prefill
 
     def __call__(self, url, body, headers=None, timeout=30):
@@ -47,17 +47,17 @@ class Clock:
         self.t += s
 
 
-def run(server, answers=("me@example.org",), key=KEY, **kw):
+def run(server, answers=(), key=KEY, **kw):
     c = Clock()
     out = io.StringIO()
     seq = list(answers)
-    ok = send.send_report(RECORD, key, "0.9.2", lambda p="": seq.pop(0) if seq else "", out, post=server, sleep=c.sleep, clock=c, **kw)
+    ok = send.send_report(RECORD, key, "0.9.2", lambda p="": seq.pop(0) if seq else "", out, post=server, sleep=c.sleep, clock=c, **{"interactive": True, **kw})
     return ok, out.getvalue()
 
 
 class SendFlow(unittest.TestCase):
     def test_the_record_goes_only_after_the_claim_is_confirmed(self):
-        s = Server()
+        s = Server(prefill="key@example.org")
         ok, text = run(s)
         self.assertTrue(ok)
         self.assertEqual(s.names(), ["address", "request", "claim", "claim", "claim", "submit"])
@@ -69,44 +69,54 @@ class SendFlow(unittest.TestCase):
 
     def test_no_key_nothing_is_sent_and_nothing_is_asked(self):
         s = Server()
-        ok, text = run(s, key=None)
+        ok, text = run(s, key=None, interactive=False)
         self.assertFalse(ok)
         self.assertEqual(s.calls, [])
         self.assertIn("needs a Lattice key", text)
 
-    def test_the_prefilled_address_is_used_on_enter_and_another_address_is_sent_as_the_delivery_address(self):
+    def test_the_report_goes_only_to_the_registered_address_and_no_other_is_asked(self):
+        asked = []
         s = Server(prefill="key@example.org")
-        run(s, answers=("",))
+        c, out = Clock(), io.StringIO()
+        ok = send.send_report(RECORD, KEY, "0.9.2", lambda p="": asked.append(p) or "team@example.org", out, post=s, sleep=c.sleep, clock=c, interactive=True)
+        self.assertTrue(ok)
+        self.assertEqual(asked, [])                                      # nothing is asked
         self.assertEqual(s.calls[1][1]["address"], "key@example.org")
         self.assertNotIn("delivery_address", s.calls[-1][1])
-        s2 = Server(prefill="key@example.org")
-        run(s2, answers=("team@example.org",))
-        self.assertEqual(s2.calls[-1][1]["delivery_address"], "team@example.org")
+        self.assertNotIn("team@example.org", json.dumps(s.calls))
+        self.assertNotIn("which address", out.getvalue())
+
+    def test_a_key_with_no_registered_address_sends_nothing(self):
+        s = Server()
+        ok, text = run(s)
+        self.assertFalse(ok)
+        self.assertEqual(s.names(), ["address"])
+        self.assertIn("No registered address", text)
 
     def test_a_refusal_a_not_me_an_expiry_and_a_timeout_send_nothing(self):
         for claims, word in ((("refused",), "not them"), (("expired",), "expired")):
-            s = Server(claims=claims)
+            s = Server(claims=claims, prefill="key@example.org")
             ok, text = run(s)
             self.assertFalse(ok)
             self.assertNotIn("submit", s.names())
             self.assertIn(word, text)
-        s = Server(claims=())                                           # never confirmed
+        s = Server(claims=(), prefill="key@example.org")                # never confirmed
         ok, text = run(s)
         self.assertFalse(ok)
         self.assertNotIn("submit", s.names())
         self.assertIn("Stopped waiting. Nothing was sent.", text)
-        s = Server(claim=None)                                          # the server mailed nothing
+        s = Server(claim=None, prefill="key@example.org")               # the server mailed nothing
         ok, _ = run(s)
         self.assertFalse(ok)
         self.assertNotIn("claim", s.names())
 
     def test_ctrl_c_while_waiting_sends_nothing(self):
-        s = Server()
+        s = Server(prefill="key@example.org")
         out = io.StringIO()
 
         def stop(_s):
             raise KeyboardInterrupt
-        ok = send.send_report(RECORD, KEY, "0.9.2", lambda p="": "me@example.org", out, post=s, sleep=stop, clock=Clock())
+        ok = send.send_report(RECORD, KEY, "0.9.2", lambda p="": "me@example.org", out, post=s, sleep=stop, clock=Clock(), interactive=True)
         self.assertFalse(ok)
         self.assertNotIn("submit", s.names())
         self.assertIn("Stopped. Nothing was sent.", out.getvalue())
@@ -116,7 +126,7 @@ class SendFlow(unittest.TestCase):
             old = os.getcwd()
             os.chdir(d)
             try:
-                ok, text = run(Server(submit=(400, {"error": "field not allowed in the record: hostname"})))
+                ok, text = run(Server(prefill="key@example.org", submit=(400, {"error": "field not allowed in the record: hostname"})))
                 self.assertEqual(list(Path(d).iterdir()), [])
             finally:
                 os.chdir(old)
@@ -124,18 +134,86 @@ class SendFlow(unittest.TestCase):
         self.assertIn("not accepted", text)
 
     def test_the_offer_runs_the_whole_sequence_only_when_a_sender_is_wired_and_never_with_the_mail_switch_off_otherwise(self):
-        answers = iter(["y", "n", "me@example.org"])          # report yes, posture no, address
-        s = Server()
+        answers = iter(["y", "n"])          # report yes, posture no (no address is asked)
+        s = Server(prefill="key@example.org")
         with tempfile.TemporaryDirectory() as d:
             c = Clock()
             flow.after_scan(ITEMS, "quick", Path(d), stdin_tty=True, stderr_tty=True, env={}, quiet=False, input_fn=lambda p="": next(answers), out=io.StringIO(), os_name="Debian", inv=INV,
                             posture={"scope": "user", "level": "quick", "ports": [], "firewall": {"readable": False, "managers": []}, "ssh": {"installed": False, "settings": {}}},
-                            enabled=True, secrets_fn=lambda: [], post=s, key=KEY)
+                            enabled=True, secrets_fn=lambda: [], post=s, key=KEY, interactive=True)
         self.assertEqual(s.names()[0:2], ["address", "request"])
         out = io.StringIO()
         with mock.patch.object(flow, "MAIL_AVAILABLE", False), tempfile.TemporaryDirectory() as d:
             flow.after_scan(ITEMS, "quick", Path(d), stdin_tty=True, stderr_tty=True, env={}, quiet=False, input_fn=lambda p="": "y", out=out, os_name="Debian", enabled=True)
         self.assertIn("not available in this version", out.getvalue())
+
+
+class ReportCode(unittest.TestCase):
+    """The six-digit report code: shown once on a terminal, bold there, and kept out of every log, file and machine-readable output."""
+    CODE = "042917"
+
+    def test_the_code_is_printed_once_with_its_words_and_bold_only_when_asked(self):
+        for bold, mark in ((True, "\x1b[1m"), (False, "")):
+            out = io.StringIO()
+            c = Clock()
+            ok = send.send_report(RECORD, KEY, "0.9.2", lambda p="": "", out, post=Server(prefill="key@example.org"), sleep=c.sleep, clock=c, interactive=True, bold=bold)
+            self.assertTrue(ok)
+            text = out.getvalue()
+            self.assertEqual(text.count(self.CODE), 1)
+            self.assertIn(mark + "Report code: " + self.CODE, text)
+            self.assertEqual("\x1b[1m" in text, bold)
+            self.assertIn("(you need it to open the report; it is not sent by email)", text)
+
+    def test_a_non_terminal_run_does_not_send_and_says_why(self):
+        s = Server(prefill="key@example.org")
+        out = io.StringIO()
+        c = Clock()
+        ok = send.send_report(RECORD, KEY, "0.9.2", lambda p="": "", out, post=s, sleep=c.sleep, clock=c, interactive=False)
+        self.assertFalse(ok)
+        self.assertEqual(s.calls, [])
+        self.assertIn(send.NO_CODE_SHOWN, out.getvalue())
+
+    def test_a_reply_without_a_valid_code_prints_no_code(self):
+        for bad in (None, "12345", "1234567", "abcdef", 123456):
+            s = Server(prefill="key@example.org", submit=(200, {"message": "ok", "code": bad}))
+            ok, text = run(s)
+            self.assertTrue(ok)
+            self.assertNotIn("Report code", text)
+            self.assertIn("did not return a report code", text)
+
+    def test_the_code_is_in_no_log_no_json_and_no_file(self):
+        import contextlib
+        from lattice_scan import cli
+        server = Server(prefill="key@example.org")
+        with tempfile.TemporaryDirectory() as d:
+            logs, stdout, stderr = [], io.StringIO(), io.StringIO()
+            with mock.patch.object(cli, "dbg", lambda m, *a, **k: logs.append(str(m))), contextlib.redirect_stdout(stdout):
+                flow.after_scan(ITEMS, "quick", Path(d), stdin_tty=True, stderr_tty=True, env={}, quiet=False, input_fn=lambda p="": "y" if "report" in p else "n", out=stderr, os_name="Debian",
+                                inv=INV, enabled=True, secrets_fn=lambda: [], post=server, key=KEY, interactive=True)
+            self.assertEqual(stderr.getvalue().count(self.CODE), 1)      # shown once on the terminal stream
+            self.assertNotIn(self.CODE, "\n".join(logs) + stdout.getvalue())
+            self.assertNotIn(self.CODE, json.dumps(server.calls))        # never sent back to the service either
+            found = [str(p) for p in Path(d).rglob("*") if p.is_file() and self.CODE in p.read_text(errors="replace")]
+            self.assertEqual(found, [])                                  # nothing under the records dir holds it, the report file included
+            self.assertTrue(any(Path(d).rglob("*")))                     # the report file was written, so the search above looked at something
+
+    def test_the_json_output_of_a_scan_never_carries_the_code(self):
+        # the offer is not made with --format json (should_offer), so the code has no path into machine-readable output
+        self.assertFalse(flow.should_offer(3, stdin_tty=True, stderr_tty=True, env={}, quiet=False, fmt="json", enabled=True))
+        self.assertFalse(flow.should_offer(3, stdin_tty=False, stderr_tty=True, env={}, quiet=False, fmt="table", enabled=True))
+
+
+class Consent(unittest.TestCase):
+    def test_the_consent_lines(self):
+        text = flow.preview({"items": [{}], "inventory": {"packages": {}, "snaps": {}, "images": []}})
+        for line in ("The report is free and provided as is. It may contain mistakes.",
+                     "A person at NamiQ reads the findings (and the posture, if you include it) to review the report.",
+                     "The findings go to a model provider to help write the report.",
+                     "It is kept 7 days if you include the posture, otherwise 30 days.",
+                     "It is sent only to your registered address. The link in the mail needs the report code shown here after the send."):
+            self.assertIn(line, text)
+        for word in ("vulnerable", "safe", "compromised", "accurate"):
+            self.assertNotIn(word, text.lower())
 
 
 if __name__ == "__main__":

@@ -2853,7 +2853,7 @@ def report_flow(kind: str, found, inv, a, lat=None) -> None:
         if host and scan_record.REPORT_FIELDS_AVAILABLE and DISTRO_ANSWERS:
             items = srf.merge_distro(items, DISTRO_ANSWERS)       # answered earlier in this run with its own yes
         srf.after_scan(items, "deep" if getattr(a, "deep", False) else "quick", OUT / "reports", quiet=not PROGRESS, fmt=getattr(a, "format", "table") or "table",
-                       env=dict(os.environ), stdin_tty=sys.stdin.isatty(), stderr_tty=sys.stderr.isatty(), inv=inv if host else srf.project_inventory(found),
+                       env=dict(os.environ), stdin_tty=sys.stdin.isatty(), stderr_tty=sys.stderr.isatty() and sys.stdout.isatty(), inv=inv if host else srf.project_inventory(found),
                        posture=posture_data() if host else None, key=KEY or None, terms_version=terms_version, store_key=store_key_file, **extra)
     except Exception as err:   # noqa: BLE001 - the scan's answer matters more than its report
         dbg(f"report: not written: {err}")
