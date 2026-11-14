@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.0.0 — 2026-11-14
+
 - Changed: the emailed report goes only to the address registered with your key. The tool no longer asks for another delivery address; a person with no key is asked their own address once, and that is the address the free key is registered to. The consent screen now says the report is free and provided as is and may contain mistakes, that a person at NamiQ reads the findings (and the posture, if you include it) to review it, that the findings go to a model provider, that it is kept 7 days with the posture and otherwise 30 days, and that it is sent only to your registered address.
 - New: after a report is sent, the tool prints a six-digit report code in bold on the terminal. You need it to open the report from the link in the mail; it is not sent by email. It is shown once and is not written to any file or log, nor shown in `--json` output. If the code cannot be shown (not a terminal), nothing is sent and the tool says so.
 - Fixed: the local scan report keeps one verdict per package instead of one per CVE. It lists every running package first, each with its own status (the distribution's word when the person agreed to the check, otherwise "version range only"), takes the item's status from the worst running package, and collapses idle images after three lines. A "likely fixed" assessment is no longer given when the distribution's own verdict names a package before its fix. Nothing sent changes.
