@@ -7,6 +7,12 @@ on:
 permissions:
   contents: read   # nothing here writes to the repository
 
+# Our own runs, not users of the tool: every request the tests or the build make to namiq.io says `lattice-scan/<version> (test)`, so the
+# site's counts of who uses the tool leave them out. Without it every runner of every run (six Pythons and a Mac) was counted as a user of the
+# tool, and on a release day CI outnumbered everyone else.
+env:
+  LATTICE_SCAN_TEST: "1"
+
 jobs:
   test:
     runs-on: ubuntu-latest
