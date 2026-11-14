@@ -1749,11 +1749,38 @@ def stems(name: str) -> set[str]:
         out.add(t)
         if t.startswith("lib") and len(t) > 6:
             out.add(t[3:])
-    return {t for t in out if len(t) >= 4}
+    return {t for t in out if len(t) >= 4 or t in SHORT_NAMES}
+
+
+# Product names shorter than four letters that name a real, widely installed product. Every other short word is still ignored (it would match half the package list).
+SHORT_NAMES = {"php"}
 
 
 def words(s: str) -> set[str]:
-    return {re.sub(r"\d+$", "", w) for w in re.findall(r"[a-z][a-z0-9]{3,}", s.lower()) if w not in GENERIC}
+    low = s.lower()
+    return ({re.sub(r"\d+$", "", w) for w in re.findall(r"[a-z][a-z0-9]{3,}", low) if w not in GENERIC}
+            | {w for w in (re.sub(r"\d+$", "", t) for t in re.findall(r"[a-z][a-z0-9]*", low)) if w in SHORT_NAMES})
+
+
+def inventory_words(inv: dict) -> set[str]:
+    """Every comparable word in the installed names (packages, snaps, images, opened images, the hardware readings)."""
+    have: set[str] = set()
+    for n in list(inv["packages"]) + list(inv["snaps"]) + list(inv["images"]):
+        have |= stems(n)
+    for ref, d in (inv.get("imageDetails") or {}).items():
+        have |= set(image_words(ref, d))
+    have |= {w for v in (inv.get("host") or {}).values() if isinstance(v, str) for w in stems(v)}
+    return have
+
+
+def not_checked(entry: dict, inv: dict) -> bool:
+    """True when this entry was never actually compared: its product has no word this tool can match ('Connect Secure', 'Secure Firewall ASA'), and the vendor's own
+    name, if it has a distinctive one, is installed (so the product might be here) or there is no vendor word to look for. A vendor whose name appears nowhere in the
+    installed names is ruled out instead: nothing of theirs is installed."""
+    if words(str(entry.get("product", "")).lower()) or entry.get("matchBasis") == "component-absent":
+        return False
+    vendor = words(str(entry.get("vendor", "")).lower())
+    return not vendor or bool(vendor & inventory_words(inv))
 
 
 def candidate(entry: dict, inv: dict) -> tuple[str, list[str], list[str]] | None:
@@ -2722,8 +2749,10 @@ def cmd_run(a) -> int:
                      f"{len(inv['images'])} container image names and the kernel ({inv['kernel'] or 'unknown'}) ...")
             m = candidate(e, inv)
             progress(f"{tag}  " + (f"CANDIDATE: {m[0]}" if m else "no installed package, snap, image or kernel matches the product"))
-            rows.append([cve, *cells(e), ("RECORDED" if cve in known else "LEAD" if e.get("matchBasis") == "lead" else "CANDIDATE") if m else "unmatch",
-                         m[0] if m else ("no package, snap, image or kernel matches" if e.get("matchBasis") != "component-absent"
+            nc = m is None and not_checked(e, inv)
+            rows.append([cve, *cells(e), ("RECORDED" if cve in known else "LEAD" if e.get("matchBasis") == "lead" else "CANDIDATE") if m else "NOT CHECKED" if nc else "unmatch",
+                         m[0] if m else ("its product name has no word this tool can compare with an installed name; read the advisory" if nc
+                                         else "no package, snap, image or kernel matches" if e.get("matchBasis") != "component-absent"
                                          else "its package is installed, but not the component the flaw is in")])
             if m and cve in known:
                 imp = with_exposure(impact(e, inv, m[1], m[2]), m[1], inv)
@@ -2756,7 +2785,8 @@ def cmd_run(a) -> int:
     rows += getattr(a, "extra_rows", [])   # `recent`: the feed's ids that were ruled out on this host and never sent to Lattice
     rec = receipt(inv, rows, read, {e["cve"]: imp for e, _, imp in hits + again_hits})
     RESULT["receipt"] = rec   # the JSON carries the same object the console lines below are written from
-    print(f"host scan {TODAY}: {read} exploited entries read, {len(hits)} candidates (a person must read each against the installed version)")   # wording kept: agents parse it
+    print(f"host scan {TODAY}: {read} exploited entries read, {len(hits)} candidates (a person must read each against the installed version)"   # wording kept: agents parse it
+          + (f"; {len(again_hits)} more match again and are already recorded as open" if again_hits else ""))
     withdrawn = recheck_open(inv)   # an open finding from an older, looser matcher is withdrawn, not kept open for ever
     earlier, earlier_rows = earlier_findings({r[0] for r in rows})   # open findings not read in this run: their saved detail is printed below, from the file, with no call
     print_table(rows)
@@ -3331,6 +3361,8 @@ def refine(imp: dict | None) -> tuple[str, str] | None:
     if vc.get("verdict") == "in-range":
         if inst.startswith("kernel "):
             return "VERIFY", "upstream number only: this kernel is a distro or vendor build, check its changelog or the vendor's advisory before treating it as exposed"
+        if vc.get("basis") in ("distribution", "registry"):
+            return None      # the distribution's own verdict names a package before its fix: one changelog line on another package cannot turn that into "likely fixed"
         if imp.get("changelogNamesCve") and DISTRO_REV.search(inst):
             return "LIKELY FIXED", "the version is inside the upstream range, but it has a distro revision and the package's own changelog names this CVE; read that line, then record it with: lattice-scan resolve CVE --status fixed --proof \"...\""
     return None
@@ -3434,13 +3466,11 @@ def why_not(entry: dict, inv: dict) -> str:
     """Why a CISA entry matched nothing here: the distinctive words of its product, and which of them this machine has."""
     want = words(entry.get("product", "").lower())
     if not want:
-        return "its product name has no distinctive word to compare"
-    have = set()
-    for n in list(inv["packages"]) + list(inv["snaps"]) + list(inv["images"]):
-        have |= stems(n)
-    for ref, d in (inv.get("imageDetails") or {}).items():
-        have |= set(image_words(ref, d))
-    have |= {w for v in (inv.get("host") or {}).values() if isinstance(v, str) for w in stems(v)}
+        vendor = words(entry.get("vendor", "").lower())
+        if vendor and not (vendor & inventory_words(inv)):
+            return f"its product name has no distinctive word to compare, and the vendor's name ({', '.join(sorted(vendor))}) is not among the installed names"
+        return "NOT CHECKED: its product name has no distinctive word to compare" + (" and the vendor's name is installed" if vendor else "")
+    have = inventory_words(inv)
     found, missing = sorted(w for w in want if w in have), sorted(w for w in want if w not in have)
     return (f"needs all of: {', '.join(sorted(want))}; this machine has {', '.join(found) if found else 'none of them'}"
             + (f" (missing: {', '.join(missing)})" if found and missing else "") + f" among {len(inv['packages'])} packages, {len(inv['snaps'])} snaps, "
@@ -3556,6 +3586,7 @@ def cmd_recent(a) -> int:
         refresh_inventory(inv, full=getattr(a, "list", False))
     rows: list[list[str]] = []
     look: list[str] = []
+    unchecked: list[str] = []
     by_id: dict[str, dict] = {}
     details: list[str] = []
     for r in feed["exploited"]:
@@ -3565,6 +3596,10 @@ def cmd_recent(a) -> int:
         if m:
             look.append(r["id"])
             by_id[r["id"]] = r
+        elif not_checked(entry, inv):
+            unchecked.append(r["id"])
+            rows.append([r["id"], *feed_cells(r), "NOT CHECKED", "its product name has no word this tool can compare with an installed name; read the advisory (not sent to Lattice)"])
+            details.append(feed_detail(r, "exploited", inv))
         else:
             rows.append([r["id"], *feed_cells(r), "unmatch", "no package, snap, image or kernel matches (not sent to Lattice)"])
             details.append(feed_detail(r, "exploited", inv))
@@ -3591,7 +3626,8 @@ def cmd_recent(a) -> int:
     considered = len(feed["exploited"])
     crit = 0 if a.no_critical else len(feed["critical"])
     head = (f"recent {TODAY} ({getattr(a, 'window_name', None) or a.period}, {feed['from'] or '?'} to {feed['to'] or '?'}): {len(feed['exploited'])} exploited and {len(feed['critical'])} critical CVEs read from namiq.io "
-            f"(as of {feed['asOf'] or '?'}). Checked against this host's software: exploited {considered - len(look) - len(unread)} ruled out, {len(look) + len(unread)} may match; "
+            f"(as of {feed['asOf'] or '?'}). Checked against this host's software: exploited {considered - len(look) - len(unread) - len(unchecked)} ruled out, {len(look) + len(unread)} may match"
+            + (f", {len(unchecked)} not checked (no word to compare)" if unchecked else "") + "; "
             + (f"critical {crit - watch} ruled out, {watch} may match" if not a.no_critical else "critical not checked (--no-critical)") + ".")
     if unread:
         head += f" {len(unread)} may match but were not read (--max-read {cap}); they are listed as skipped."

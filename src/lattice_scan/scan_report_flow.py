@@ -36,6 +36,18 @@ def _os_here() -> str:
     return sr.os_family(info.get("ID", ""), info.get("ID_LIKE", ""), platform.system())
 
 
+def _os_label() -> str:
+    """The host's own name for the local report ('Ubuntu 26.04.1 LTS'), read from /etc/os-release. Never part of the payload or the record, which carry the family only."""
+    try:
+        for line in Path("/etc/os-release").read_text().splitlines():
+            k, _, v = line.partition("=")
+            if k == "PRETTY_NAME" and v.strip('"'):
+                return "a " + v.strip('"') + " system"
+    except OSError:
+        pass
+    return ""
+
+
 def _split_installed(entry: str, inv: dict) -> tuple[str, str]:
     """The scan's matched-package strings carry the version ('libbrotli1 1.2.0-3ubuntu0.1', 'kernel 7.0.0-41'): split on the first space, and fall back to the inventory."""
     name, _, ver = str(entry).partition(" ")
@@ -116,6 +128,18 @@ def merge_distro(items: list[dict], answers: dict) -> list[dict]:
     return out
 
 
+def asset_rows(installed: list, inv: dict) -> list[dict]:
+    """One row per matched package for the local report: name, version, the asset ('' for the host, else the image reference) and whether it runs now (the host does; an
+    image does when a container is using it). Local only: the record and the payload never read this key."""
+    details = inv.get("imageDetails") or {}
+    running = set(inv.get("images") or [])
+    rows = []
+    for entry in installed:
+        name, ver, ref = entry_parts(entry)
+        rows.append({"name": name, "version": ver, "asset": ref, "running": True if not ref else bool((details.get(ref) or {}).get("running", ref in running))})
+    return rows
+
+
 def host_items(hits: list, inv: dict, changelog_read=None) -> list[dict]:
     """From the host scan's (entry, why, impact) tuples. The product is CISA's product name; the name and version are the matched package's own."""
     out = []
@@ -124,7 +148,7 @@ def host_items(hits: list, inv: dict, changelog_read=None) -> list[dict]:
         pr = imp.get("priority") or {}
         out.append({**(report_extras(imp, inv, changelog_read) if rec.REPORT_FIELDS_AVAILABLE else {}), "cve": e["cve"], "product": e.get("product") or e.get("title", "")[:60], "version": next((v for _, v in parts if v), ""),
                     "verdict": (imp.get("versionCheck") or {}).get("verdict", "undetermined"),
-                    "priority": pr.get("level", "read"), "why": list(pr.get("reasons") or []), "installed": [n for n, _ in parts][:10],
+                    "priority": pr.get("level", "read"), "why": list(pr.get("reasons") or []), "installed": [n for n, _ in parts][:10], "rows": asset_rows(imp.get("installed") or [], inv),
                     "matched": [f"{n} {v}".strip() for n, v in parts][:5], "listed": e.get("added", ""), "due": e.get("due", ""), "due_status": imp.get("dueStatus", "")})
     return out
 
@@ -266,7 +290,7 @@ def after_scan(items: list[dict], level: str, directory: Path, *, quiet: bool, f
         return None
     os_w = os_name or _os_here()
     payload = sr.build_payload(items, level, os_w)
-    text = rt.build_report(items, payload, posture=posture)
+    text = rt.build_report(items, payload, posture=posture, os_label=_os_label(), coverage=coverage, restart=bool((inv or {}).get("restartRequired")))
     path = rt.save_report(text, directory, out if not quiet else _Null())      # the local report never depends on the record or the offer
     if should_offer(len(payload["items"]), stdin_tty=stdin_tty, stderr_tty=stderr_tty, env=env if env is not None else {}, quiet=quiet, fmt=fmt, enabled=enabled):
         first = rec.build_record(inv, items, level, os_w, coverage=coverage) if inv is not None else payload      # what a yes would send: the record when the scan has an inventory

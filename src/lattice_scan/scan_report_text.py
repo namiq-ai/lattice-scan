@@ -22,9 +22,9 @@ BANNED = re.compile(r"\b(vulnerable|safe|compromised)\b", re.I)
 PRIORITY_ORDER = ("fix first", "fix soon", "read")
 PRIORITY_TITLE = {"fix first": "Fix first", "fix soon": "Fix soon", "read": "Read"}
 VERDICT_TEXT = {
-    "in-range": "an installed version number lies inside a range NVD lists (a lead to check, not a finding)",
+    "in-range": "an installed version number lies inside a range NVD lists",
     "undetermined": "the tool could not compare the version with a listed range",
-    "outside-range": "every readable range excludes the installed version (this does not close the item)",
+    "outside-range": "every readable range excludes the installed version",
     "lead": "the package only shares a name or scope with the product (no range was compared)",
     "not-read": "this id was not read from Lattice (a limit or a stop); it is not cleared",
 }
@@ -52,7 +52,93 @@ def _why(it: dict) -> list[str]:
     return out
 
 
-def build_report(items: list[dict], payload: dict, generated: dt.date | None = None, posture: dict | None = None) -> str:
+DISTRO_TEXT = {"before-fix": "before the distribution's fix", "no-fix-yet": "the distribution has no fix yet", "fixed": "FIXED (the distribution's own record)",
+               "not-affected": "FIXED: the distribution lists this release as not affected", "unknown": "the distribution gave no answer for it"}
+OPEN_VERDICTS = ("before-fix", "no-fix-yet")
+IDLE_SHOWN = 3
+
+
+def _row_rank(row: dict) -> tuple:
+    """Running first; then the distribution's word (open ones, then no answer, then fixed); then the name."""
+    word = (row.get("distro") or {}).get("verdict")
+    order = 0 if word in OPEN_VERDICTS else 2 if word in ("fixed", "not-affected") else 1
+    return (0 if row.get("running") else 1, order, 0 if word == "before-fix" else 1, row.get("asset", ""), row.get("name", ""))
+
+
+def _row_text(row: dict, range_verdict: str) -> str:
+    where = row.get("asset") or "host"
+    version = (" " + row["version"]) if row.get("version") else ""
+    d = row.get("distro")
+    if d:
+        word = DISTRO_TEXT.get(d.get("verdict"), DISTRO_TEXT["unknown"])
+        if d.get("verdict") == "before-fix" and d.get("fixedIn"):
+            word += f" ({d['fixedIn']})"
+        basis = f"{word} [{d.get('source') or 'distribution'}]"
+    else:
+        basis = f"version range only: {range_verdict}"
+    return f"{row.get('name', '')}{version} in {where}: {basis}"
+
+
+def asset_lines(it: dict) -> list[str]:
+    """The per-package part of one item. Each package keeps its own verdict; the item's status is that of its worst running package, never an average. Running packages are
+    all listed and none is cut off; idle images are collapsed after IDLE_SHOWN lines. [] when the item has no per-package rows (a project scan, an older item)."""
+    rows = [dict(r) for r in (it.get("rows") or []) if isinstance(r, dict)]
+    if not rows:
+        return []
+    dist = it.get("distro") or []
+    for i, r in enumerate(rows):
+        if i < len(dist) and isinstance(dist[i], dict):
+            r["distro"] = dist[i]
+    rows.sort(key=_row_rank)
+    run, idle = [r for r in rows if r.get("running")], [r for r in rows if not r.get("running")]
+    rv = str(it.get("verdict", "undetermined"))
+    open_run = [r for r in run if (r.get("distro") or {}).get("verdict") in OPEN_VERDICTS]
+    if open_run:
+        status = f"{len(open_run)} running package(s) are before the distribution's fix or have none yet"
+    elif run and all((r.get("distro") or {}).get("verdict") in ("fixed", "not-affected") for r in run):
+        status = "every running package is fixed by the distribution's own record"
+    elif run:
+        status = "no running package is confirmed fixed; a person has to check them"
+    else:
+        status = "no package is running now (idle images only)"
+    out = [f"     status: {status}"]
+    if len({str(r.get("distro")) for r in rows if r.get("distro")}) == 0:
+        out.append(f"     version check: {rv}: {VERDICT_TEXT.get(rv, VERDICT_TEXT['undetermined'])}")
+    out += [f"     running: {_row_text(r, rv)}" for r in run]
+    out += [f"     idle: {_row_text(r, rv)}" for r in idle[:IDLE_SHOWN]]
+    if len(idle) > IDLE_SHOWN:
+        out.append(f"     idle: +{len(idle) - IDLE_SHOWN} more idle image(s)")
+    return out
+
+
+def confidence(it: dict) -> str:
+    """How firm the evidence behind one item is, in words: the distribution's record, a version range, or only a name match."""
+    if any(isinstance(d, dict) and d.get("verdict") not in (None, "unknown") for d in (it.get("distro") or [])):
+        return "distribution record (for the packages it answered), version range for the rest"
+    return {"identity": "version range, package identity", "range": "version range", "name": "name match only"}.get(str(it.get("basis")), "version range" if it.get("verdict") in ("in-range", "outside-range") else "name match only")
+
+
+def action_lines(it: dict) -> list[str]:
+    """One line per running package the distribution puts before its fix (or has no fix for yet), built from the asset and the fixed version it named."""
+    rows, dist = it.get("rows") or [], it.get("distro") or []
+    out = []
+    for i, r in enumerate(rows):
+        d = dist[i] if i < len(dist) and isinstance(dist[i], dict) else {}
+        if not r.get("running") or d.get("verdict") not in OPEN_VERDICTS:
+            continue
+        what = f"{r.get('name', '')} {r.get('version', '')}".strip()
+        fix = f" to {d['fixedIn']} or later" if d.get("fixedIn") else ""
+        if d.get("verdict") == "no-fix-yet":
+            out.append(f"{it['cve']}: {what} in {r.get('asset') or 'host'}: the distribution has no fix yet; watch its advisory.")
+        elif r.get("asset"):
+            out.append(f"{it['cve']}: {what}: pull or rebuild {r['asset']} so it carries {r.get('name', 'the package')}{fix}, then restart the container.")
+        else:
+            out.append(f"{it['cve']}: {what} on the host: update the package{fix}, then restart what uses it.")
+    return out
+
+
+def build_report(items: list[dict], payload: dict, generated: dt.date | None = None, posture: dict | None = None, os_label: str = "", coverage: dict | None = None,
+                 restart: bool = False) -> str:
     """`items` are the scan's candidates (cve, product, version, verdict, priority, and optionally why, listed, due, due_status, attack);
     `payload` is scan_report.build_payload of the same items. `posture` is the host's posture reading (posture.collect): when given, a section on what listens and
     what runs is added after "What to check". It names ports and programs, so it stays in the local file and is never part of the payload or the record.
@@ -63,9 +149,9 @@ def build_report(items: list[dict], payload: dict, generated: dt.date | None = N
     other = [i for i in shown if str(i.get("priority", "read")).lower() not in PRIORITY_ORDER]
     by_p["read"] += other
     lines = [f"Lattice scan report, {day}", "", f"1. {SECTIONS[0]}",
-             f"{len(shown)} candidate(s) from a {payload.get('level', 'quick')} scan on a {payload.get('os', 'Other')} system: "
+             f"{len(shown)} candidate(s) from a {payload.get('level', 'quick')} scan on {os_label or 'a ' + str(payload.get('os', 'Other')) + ' system'}: "
              + ", ".join(f"{len(by_p[p])} {p}" for p in PRIORITY_ORDER) + ".",
-             "A candidate is a product CISA lists as exploited that is installed here. It is something for a person to check, not a finding that this machine is affected.", ""]
+             "A candidate is a product CISA lists as exploited that is installed here. The limits are in the last section.", ""]
     lines += [f"2. {SECTIONS[1]}"]
     n = 0
     for p in PRIORITY_ORDER:
@@ -74,18 +160,28 @@ def build_report(items: list[dict], payload: dict, generated: dt.date | None = N
         lines += ["", f"{PRIORITY_TITLE[p]} ({len(by_p[p])})"]
         for it in by_p[p]:
             n += 1
-            lines.append(f"  {n}. {it['cve']}  {it.get('product', '')} {it.get('version', '')}".rstrip())
-            lines.append(f"     version check: {it.get('verdict', 'undetermined')}: {VERDICT_TEXT.get(str(it.get('verdict')), VERDICT_TEXT['undetermined'])}")
-            if it.get("matched"):
-                lines.append("     matched: " + "; ".join(str(m) for m in it["matched"][:5]))
+            rows = asset_lines(it)
+            if rows:
+                lines.append(f"  {n}. {it['cve']}  {it.get('product', '')}".rstrip())
+                lines.append(f"     confidence: {confidence(it)}")
+                lines += rows
+            else:
+                lines.append(f"  {n}. {it['cve']}  {it.get('product', '')} {it.get('version', '')}".rstrip())
+                lines.append(f"     version check: {it.get('verdict', 'undetermined')}: {VERDICT_TEXT.get(str(it.get('verdict')), VERDICT_TEXT['undetermined'])}")
+                if it.get("matched"):
+                    lines.append("     matched: " + "; ".join(str(m) for m in it["matched"][:5]))
             lines += [f"     why: {w}" for w in _why(it)]
     if not shown:
         lines.append("No candidate was found by this scan. That is not an all-clear: see what was not covered.")
     if payload.get("cut"):
         lines += ["", f"{payload['cut']} lower-priority item(s) are left out of the payload that a mailed report would use; this file lists every candidate."]
     lines += ["", f"3. {SECTIONS[2]}",
-              "The installed upstream version of each matching product, against the version ranges NVD lists, for ids CISA lists as exploited. A match by product name is a candidate; the range check is evidence, not a verdict.", "",
+              "The installed version of each matching package, against the distribution's own record where you agreed to that check, and otherwise against the version ranges NVD lists, for ids CISA lists as exploited.", "",
               f"4. {SECTIONS[3]}", "These are things to read or look at yourself. This report runs nothing."]
+    acts = [a for i in shown for a in action_lines(i)]
+    if acts:
+        lines.append("  Per running package that is before the fix or has none yet (suggestions to read, not steps taken):")
+        lines += [f"    - {a}" for a in acts]
     for v in dict.fromkeys(str(i.get("verdict")) for i in shown):
         ex = next(i for i in shown if str(i.get("verdict")) == v)
         lines.append(f"  - {CHECK_TEXT.get(v, CHECK_TEXT['undetermined']).format(cve=ex['cve'], product=ex.get('product', 'the package'))}")
@@ -100,6 +196,10 @@ def build_report(items: list[dict], payload: dict, generated: dt.date | None = N
         lines.append("A deep scan also opened local container images. Packages that this tool does not read (firmware beyond what the machine reports, software installed outside a package manager, anything not on this machine) were not checked.")
     else:
         lines.append("Quick scan: running images only; stopped images and the packages inside images were not checked. Software installed outside a package manager was not checked either.")
+    if coverage and isinstance(coverage.get("identity"), int):
+        lines.append(f"Matching: {coverage['identity']}% of the exploited CVEs CISA lists were matched by package identity; the other {coverage.get('name', 100 - coverage['identity'])}% by product name, which is weaker evidence.")
+    if restart:
+        lines.append("An installed update is waiting for a restart: programs that are still running may be the version from before the update.")
     lines += ["A scan with no candidate, or a version outside a range, is not an all-clear.", "", f"{7 + off}. {SECTIONS[6]}",
               "A candidate is not a finding. A distribution can fix a flaw under an unchanged version number. CISA lists exploitation it has seen; an id it does not list may still be exploited. This report makes no claim about accuracy.", ""]
     text = "\n".join(lines)
@@ -116,8 +216,13 @@ def posture_lines(d: dict) -> list[str]:
     who = "root" if d.get("scope") == "root" else "a normal user"
     ports = d.get("ports") or []
     cnt = lambda b: len([p for p in ports if p.get("bind") == b])      # noqa: E731
+    wide = [p for p in ports if p.get("bind") == "all interfaces"]
+    tcp = len({p.get("port") for p in wide if p.get("proto") == "tcp"})
+    high = len({p.get("port") for p in wide if p.get("proto") == "udp" and (p.get("port") or 0) >= 32768})
+    udp = len({p.get("port") for p in wide if p.get("proto") == "udp"}) - high
     out = ["This section names ports and programs on this machine. It stays in this file and is never sent.",
-           f"Read as {who} ({d.get('level', 'quick')}). {len(ports)} listening sockets: {cnt('all interfaces')} on all interfaces, {cnt('loopback only')} on loopback only, {cnt('one address')} on one address."]
+           f"Read as {who} ({d.get('level', 'quick')}). {len(ports)} listening sockets (TCP and UDP, IPv4 and IPv6 counted separately): {len(wide)} on all interfaces, {cnt('loopback only')} on loopback only, {cnt('one address')} on one address.",
+           f"The sockets on all interfaces are {tcp} distinct TCP port(s) and {udp} UDP port(s), plus {high} UDP port(s) from 32768 up (temporary ports, not named below)."]
     obs = sorted((o for o in d.get("observations") or [] if o.get("text")), key=lambda o: 0 if o.get("level") == "attention" else 1)
     if obs:
         out.append("Signals for a person to read (each can be harmless; none is a verdict):")
