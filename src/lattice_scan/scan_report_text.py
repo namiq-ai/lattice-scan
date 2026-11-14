@@ -52,6 +52,65 @@ def _why(it: dict) -> list[str]:
     return out
 
 
+DISTRO_TEXT = {"before-fix": "before the distribution's fix", "no-fix-yet": "the distribution has no fix yet", "fixed": "FIXED (the distribution's own record)",
+               "not-affected": "FIXED: the distribution lists this release as not affected", "unknown": "the distribution gave no answer for it"}
+OPEN_VERDICTS = ("before-fix", "no-fix-yet")
+IDLE_SHOWN = 3
+
+
+def _row_rank(row: dict) -> tuple:
+    """Running first; then the distribution's word (open ones, then no answer, then fixed); then the name."""
+    word = (row.get("distro") or {}).get("verdict")
+    order = 0 if word in OPEN_VERDICTS else 2 if word in ("fixed", "not-affected") else 1
+    return (0 if row.get("running") else 1, order, 0 if word == "before-fix" else 1, row.get("asset", ""), row.get("name", ""))
+
+
+def _row_text(row: dict, range_verdict: str) -> str:
+    where = row.get("asset") or "host"
+    version = (" " + row["version"]) if row.get("version") else ""
+    d = row.get("distro")
+    if d:
+        word = DISTRO_TEXT.get(d.get("verdict"), DISTRO_TEXT["unknown"])
+        if d.get("verdict") == "before-fix" and d.get("fixedIn"):
+            word += f" ({d['fixedIn']})"
+        basis = f"{word} [{d.get('source') or 'distribution'}]"
+    else:
+        basis = f"version range only: {range_verdict}"
+    return f"{row.get('name', '')}{version} in {where}: {basis}"
+
+
+def asset_lines(it: dict) -> list[str]:
+    """The per-package part of one item. Each package keeps its own verdict; the item's status is that of its worst running package, never an average. Running packages are
+    all listed and none is cut off; idle images are collapsed after IDLE_SHOWN lines. [] when the item has no per-package rows (a project scan, an older item)."""
+    rows = [dict(r) for r in (it.get("rows") or []) if isinstance(r, dict)]
+    if not rows:
+        return []
+    dist = it.get("distro") or []
+    for i, r in enumerate(rows):
+        if i < len(dist) and isinstance(dist[i], dict):
+            r["distro"] = dist[i]
+    rows.sort(key=_row_rank)
+    run, idle = [r for r in rows if r.get("running")], [r for r in rows if not r.get("running")]
+    rv = str(it.get("verdict", "undetermined"))
+    open_run = [r for r in run if (r.get("distro") or {}).get("verdict") in OPEN_VERDICTS]
+    if open_run:
+        status = f"{len(open_run)} running package(s) are before the distribution's fix or have none yet"
+    elif run and all((r.get("distro") or {}).get("verdict") in ("fixed", "not-affected") for r in run):
+        status = "every running package is fixed by the distribution's own record"
+    elif run:
+        status = "no running package is confirmed fixed; a person has to check them"
+    else:
+        status = "no package is running now (idle images only)"
+    out = [f"     status: {status}"]
+    if len({str(r.get("distro")) for r in rows if r.get("distro")}) == 0:
+        out.append(f"     version check: {rv}: {VERDICT_TEXT.get(rv, VERDICT_TEXT['undetermined'])}")
+    out += [f"     running: {_row_text(r, rv)}" for r in run]
+    out += [f"     idle: {_row_text(r, rv)}" for r in idle[:IDLE_SHOWN]]
+    if len(idle) > IDLE_SHOWN:
+        out.append(f"     idle: +{len(idle) - IDLE_SHOWN} more idle image(s)")
+    return out
+
+
 def build_report(items: list[dict], payload: dict, generated: dt.date | None = None, posture: dict | None = None) -> str:
     """`items` are the scan's candidates (cve, product, version, verdict, priority, and optionally why, listed, due, due_status, attack);
     `payload` is scan_report.build_payload of the same items. `posture` is the host's posture reading (posture.collect): when given, a section on what listens and
@@ -74,10 +133,15 @@ def build_report(items: list[dict], payload: dict, generated: dt.date | None = N
         lines += ["", f"{PRIORITY_TITLE[p]} ({len(by_p[p])})"]
         for it in by_p[p]:
             n += 1
-            lines.append(f"  {n}. {it['cve']}  {it.get('product', '')} {it.get('version', '')}".rstrip())
-            lines.append(f"     version check: {it.get('verdict', 'undetermined')}: {VERDICT_TEXT.get(str(it.get('verdict')), VERDICT_TEXT['undetermined'])}")
-            if it.get("matched"):
-                lines.append("     matched: " + "; ".join(str(m) for m in it["matched"][:5]))
+            rows = asset_lines(it)
+            if rows:
+                lines.append(f"  {n}. {it['cve']}  {it.get('product', '')}".rstrip())
+                lines += rows
+            else:
+                lines.append(f"  {n}. {it['cve']}  {it.get('product', '')} {it.get('version', '')}".rstrip())
+                lines.append(f"     version check: {it.get('verdict', 'undetermined')}: {VERDICT_TEXT.get(str(it.get('verdict')), VERDICT_TEXT['undetermined'])}")
+                if it.get("matched"):
+                    lines.append("     matched: " + "; ".join(str(m) for m in it["matched"][:5]))
             lines += [f"     why: {w}" for w in _why(it)]
     if not shown:
         lines.append("No candidate was found by this scan. That is not an all-clear: see what was not covered.")

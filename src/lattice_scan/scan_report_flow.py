@@ -116,6 +116,18 @@ def merge_distro(items: list[dict], answers: dict) -> list[dict]:
     return out
 
 
+def asset_rows(installed: list, inv: dict) -> list[dict]:
+    """One row per matched package for the local report: name, version, the asset ('' for the host, else the image reference) and whether it runs now (the host does; an
+    image does when a container is using it). Local only: the record and the payload never read this key."""
+    details = inv.get("imageDetails") or {}
+    running = set(inv.get("images") or [])
+    rows = []
+    for entry in installed:
+        name, ver, ref = entry_parts(entry)
+        rows.append({"name": name, "version": ver, "asset": ref, "running": True if not ref else bool((details.get(ref) or {}).get("running", ref in running))})
+    return rows
+
+
 def host_items(hits: list, inv: dict, changelog_read=None) -> list[dict]:
     """From the host scan's (entry, why, impact) tuples. The product is CISA's product name; the name and version are the matched package's own."""
     out = []
@@ -124,7 +136,7 @@ def host_items(hits: list, inv: dict, changelog_read=None) -> list[dict]:
         pr = imp.get("priority") or {}
         out.append({**(report_extras(imp, inv, changelog_read) if rec.REPORT_FIELDS_AVAILABLE else {}), "cve": e["cve"], "product": e.get("product") or e.get("title", "")[:60], "version": next((v for _, v in parts if v), ""),
                     "verdict": (imp.get("versionCheck") or {}).get("verdict", "undetermined"),
-                    "priority": pr.get("level", "read"), "why": list(pr.get("reasons") or []), "installed": [n for n, _ in parts][:10],
+                    "priority": pr.get("level", "read"), "why": list(pr.get("reasons") or []), "installed": [n for n, _ in parts][:10], "rows": asset_rows(imp.get("installed") or [], inv),
                     "matched": [f"{n} {v}".strip() for n, v in parts][:5], "listed": e.get("added", ""), "due": e.get("due", ""), "due_status": imp.get("dueStatus", "")})
     return out
 

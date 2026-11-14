@@ -30,7 +30,7 @@ class Dogfood(unittest.TestCase):
     def test_the_report_shows_the_version_the_match_and_the_due_date_once(self):
         items = flow.host_items([(E1, "why", IMP)], INV)
         t = rt.build_report(items, sr.build_payload(items, "deep", "Debian"), dt.date(2026, 11, 12))
-        self.assertIn("Synth 1.2.0", t); self.assertIn("matched: libsynth1 1.2.0-3ubuntu0.1", t)
+        self.assertIn("Synth", t); self.assertIn("libsynth1 1.2.0-3ubuntu0.1 in host", t)
         self.assertEqual(t.count("2026-11-10"), 1); self.assertEqual(t.count("overdue by 2 days"), 1)
 
     def test_the_preview_counts_every_image_name_the_record_sends(self):

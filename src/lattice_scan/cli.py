@@ -3331,6 +3331,8 @@ def refine(imp: dict | None) -> tuple[str, str] | None:
     if vc.get("verdict") == "in-range":
         if inst.startswith("kernel "):
             return "VERIFY", "upstream number only: this kernel is a distro or vendor build, check its changelog or the vendor's advisory before treating it as exposed"
+        if vc.get("basis") in ("distribution", "registry"):
+            return None      # the distribution's own verdict names a package before its fix: one changelog line on another package cannot turn that into "likely fixed"
         if imp.get("changelogNamesCve") and DISTRO_REV.search(inst):
             return "LIKELY FIXED", "the version is inside the upstream range, but it has a distro revision and the package's own changelog names this CVE; read that line, then record it with: lattice-scan resolve CVE --status fixed --proof \"...\""
     return None
