@@ -58,7 +58,7 @@ class PostureSection(unittest.TestCase):
     def test_the_section_comes_after_what_to_check_and_before_the_sources_with_the_signals_attention_first(self):
         t = self.build(POSTURE)
         self.assertLess(t.index("4. What to check"), t.index("5. " + rt.POSTURE_TITLE)); self.assertLess(t.index("5. " + rt.POSTURE_TITLE), t.index("6. Sources"))
-        self.assertLess(t.index("[attention]"), t.index("[note]")); self.assertIn("2 listening sockets: 1 on all interfaces, 1 on loopback only", t)
+        self.assertLess(t.index("[attention]"), t.index("[note]")); self.assertIn("2 listening sockets (TCP and UDP, IPv4 and IPv6 counted separately): 1 on all interfaces, 1 on loopback only", t)
         self.assertIn("Not read: firewall rules (needs root)", t); self.assertIn("never sent", t); self.assertIn("8. Limits", t)
 
     def test_without_a_posture_reading_the_report_is_unchanged(self):

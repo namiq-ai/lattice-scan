@@ -36,6 +36,18 @@ def _os_here() -> str:
     return sr.os_family(info.get("ID", ""), info.get("ID_LIKE", ""), platform.system())
 
 
+def _os_label() -> str:
+    """The host's own name for the local report ('Ubuntu 26.04.1 LTS'), read from /etc/os-release. Never part of the payload or the record, which carry the family only."""
+    try:
+        for line in Path("/etc/os-release").read_text().splitlines():
+            k, _, v = line.partition("=")
+            if k == "PRETTY_NAME" and v.strip('"'):
+                return "a " + v.strip('"') + " system"
+    except OSError:
+        pass
+    return ""
+
+
 def _split_installed(entry: str, inv: dict) -> tuple[str, str]:
     """The scan's matched-package strings carry the version ('libbrotli1 1.2.0-3ubuntu0.1', 'kernel 7.0.0-41'): split on the first space, and fall back to the inventory."""
     name, _, ver = str(entry).partition(" ")
@@ -278,7 +290,7 @@ def after_scan(items: list[dict], level: str, directory: Path, *, quiet: bool, f
         return None
     os_w = os_name or _os_here()
     payload = sr.build_payload(items, level, os_w)
-    text = rt.build_report(items, payload, posture=posture)
+    text = rt.build_report(items, payload, posture=posture, os_label=_os_label(), coverage=coverage, restart=bool((inv or {}).get("restartRequired")))
     path = rt.save_report(text, directory, out if not quiet else _Null())      # the local report never depends on the record or the offer
     if should_offer(len(payload["items"]), stdin_tty=stdin_tty, stderr_tty=stderr_tty, env=env if env is not None else {}, quiet=quiet, fmt=fmt, enabled=enabled):
         first = rec.build_record(inv, items, level, os_w, coverage=coverage) if inv is not None else payload      # what a yes would send: the record when the scan has an inventory

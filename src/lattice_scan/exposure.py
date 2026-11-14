@@ -39,13 +39,14 @@ def label(installed: list[str], packages: dict, post: dict | None) -> dict:
         return {"class": "installed", "text": "no package to join with the running layer", "listeners": []}
     ports = [p for p in post.get("ports") or [] if isinstance(p, dict)]
     mine = [p for p in ports if (p.get("package") in names) or (snaps and p.get("where") == "snap" and p.get("process") in snaps)]
-    wide = [p for p in mine if p.get("bind") in ("all interfaces", "one address")]
+    multicast = lambda a: str(a).startswith(("224.", "239.", "ff0", "ff1"))      # noqa: E731 - mDNS and other group addresses: no remote client connects to them
+    wide = [p for p in mine if p.get("bind") in ("all interfaces", "one address") and not multicast(p.get("addr"))]
     root = post.get("scope") == "root"
     fw = "" if root else " (firewall rules not read: needs root)"
     if wide:
         w = sorted(wide, key=lambda p: (p["bind"] != "all interfaces", p["port"]))[0]
         where = "all interfaces" if w["bind"] == "all interfaces" else "one address"
-        owner = ", ".join(sorted(names)) or ", ".join(sorted(snaps))
+        owner = ", ".join(sorted({str(p["package"]) for p in wide if p.get("package") in names})) or ", ".join(sorted(snaps)) or ", ".join(sorted(names))
         return {"class": "all", "text": f"listens on {where}: {w['addr']}:{w['port']}, owned by {owner}{fw}",
                 "listeners": [f"{p['proto']}/{p['port']}" for p in wide]}
     if mine:
