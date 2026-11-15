@@ -3851,20 +3851,15 @@ def distribution_verdicts(a, lat: "Lattice", inv: dict, found: list, rows: list)
     n = len(items_)
     lines = [" ".join(f"{k}={v}" for k, v in sorted(it.items())) for it in items_]
     sample = ", ".join(f"{it['product']} {it['version']}" + (f" ({it['os']})" if it.get("os") else "") for it in items_[:3]) + (f" and {n - 3} more" if n > 3 else "")
-    note = (f"for each of the {n} package(s) that matched a CVE here: its name, ecosystem, version and OS release. Never: host name, addresses, ports, paths, "
-            "user names, your package list.\nnamiq.io does not record who asked; it only counts lookups.")
-    asked = "Ask Lattice whether your distribution or registry has already fixed {} matched package{}?\nthe distribution's own verdict instead of a comparison of upstream numbers.".format(n, "s" if n != 1 else "")
-    fields = {k for it in items_ for k in it}
     if getattr(lat, "down", False) or NET_DOWN:                # no connection: nothing can be sent, so nothing is asked; saved answers are used, labelled with their date
         progress("[verdict] no connection to Lattice: using saved distribution verdicts where there are any")
     else:
-        if not getattr(a, "yes", False) and not sys.stdin.isatty() and not consent_remembered("items:verdict", tuple(sorted(fields))):
-            progress(f"[verdict] {n} matched package(s) were not sent for the distribution's verdict (no terminal to ask on; --yes sends them). "
-                     "Their verdicts compare upstream numbers.")
-            return
-        if not confirm_send(a, "items:verdict", asked, sample, lines, note, fields):
-            progress("[verdict] not sent: the verdicts compare upstream numbers, which a distribution's backported fix can make look unfixed.")
-            return
+        # Sent without a question (ADR-LATTICE-SCAN-004, amended 2026-11-15): these four fields of a matched package are not host identity. The notice is printed
+        # on every run, even with --quiet, before anything is sent; --no-distro or LATTICE_SCAN_ITEM_VERDICT=off sends nothing.
+        print(f"Sending for the distribution's own verdict: {n} matched package{'s' if n != 1 else ''} ({sample}): name, ecosystem, version, OS release; never your host name, "
+              "addresses, paths or package list. Turn this off with --no-distro or LATTICE_SCAN_ITEM_VERDICT=off.", file=sys.stderr)
+        for ln in lines:
+            progress(f"[verdict] sends: {ln}")
     answers = ask_distro(lat, unique)
     if scan_record.REPORT_FIELDS_AVAILABLE:
         DISTRO_ANSWERS.update(distro_by_artefact(want, inv, answers))      # kept for the report's check: a second question is not asked for what was answered here
@@ -4483,6 +4478,7 @@ def _main() -> int:
     p.add_argument("--again", action="store_true", help="re-read ids already read before")
     p.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print what is being checked, step by step, on stderr (the default; see --quiet)")
     p.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
+    p.add_argument("--no-distro", action="store_true", help="do not send the matched packages (name, ecosystem, version, OS release) for the distribution's own verdict; the verdicts then compare upstream numbers (also LATTICE_SCAN_ITEM_VERDICT=off). By default they are sent, and the tool prints what it sends first")
     p.add_argument("--report", action="store_true", help="after the scan, write the local report and, for a person at a terminal during the trial, offer the emailed report (it asks questions: the distribution check and the offer). Off by default so a script or CI job never waits for an answer")
     sub = p.add_subparsers(dest="c")
     r = sub.add_parser("resolve"); r.add_argument("cve"); r.add_argument("--status", required=True, choices=["verified", "fixed", "not-applicable"]); r.add_argument("--proof", default=""); r.add_argument("--on")
@@ -4576,6 +4572,8 @@ def _main() -> int:
         os.environ["LATTICE_SCAN_READ_CACHE"] = "off"   # ... and asks Lattice again
     if getattr(a, "again", False):
         os.environ["LATTICE_SCAN_READ_CACHE"] = "off"   # --again reads the id again, from Lattice
+    if getattr(a, "no_distro", False):
+        os.environ["LATTICE_SCAN_ITEM_VERDICT"] = "off"  # --no-distro: the distribution's verdict is not asked for, nothing is sent for it
     global DEBUG, PROGRESS, KEEP, NET_DOWN, BANNER_SHOWN
     NET_DOWN, BANNER_SHOWN = False, False
     SAVED_USED.clear()
