@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.0.1 — 2026-11-15
+
+- Changed: the report step is now off unless you pass `--report` (on a host scan and on `project`). Without it the tool writes no local report, asks no distribution check and makes no offer to mail it, so a script, a CI job or an automation never stops to wait for y/n/all. With `--report` nothing else changes: the local report, then the offer to a person at a terminal during the trial.
+
 ## 1.0.0 — 2026-11-14
 
 - Changed: the emailed report goes only to the address registered with your key. The tool no longer asks for another delivery address; a person with no key is asked their own address once, and that is the address the free key is registered to. The consent screen now says the report is free and provided as is and may contain mistakes, that a person at NamiQ reads the findings (and the posture, if you include it) to review it, that the findings go to a model provider, that it is kept 7 days with the posture and otherwise 30 days, and that it is sent only to your registered address.
