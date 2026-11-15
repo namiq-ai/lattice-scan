@@ -20,7 +20,7 @@ EXTRAS = {"assets": ["host", IMG], "installedVersions": ["1.1.0-2", "1.0.0-1"], 
           "distro": [{"verdict": "fixed", "fixedIn": "1.1.0-2+deb13u1", "source": "debian"}, {"verdict": "before-fix", "fixedIn": "1.0.0-2", "source": "debian"}]}
 BASE_ITEM = {"cve": "CVE-2030-0001", "product": "Foo", "version": "1.1.0", "verdict": "in-range", "priority": "fix first", "why": ["listed"],
              "installed": ["libfoo1", "libfoo1"], "listed": "2030-01-01", "due": "2030-01-22"}
-COVERAGE = {"identity": 22, "name": 78, "notChecked": ["firmware", "windows"], "notRead": ["node-global"]}
+COVERAGE = {"identity": 22, "name": 78, "notChecked": ["php", "go"], "notRead": ["node-global"]}
 
 
 def record(item_extra=None, coverage=None, **kw):
@@ -129,8 +129,8 @@ class Fields(On):
             rec.check_record(r)
 
     def test_coverage_holds_percentages_and_words_from_fixed_lists(self):
-        c = record(coverage={"identity": 250, "name": -3, "notChecked": ["firmware", "my-secret-project"], "notRead": ["node-global", "/home/x"]})["coverage"]
-        self.assertEqual(c, {"identity": 100, "name": 0, "notChecked": ["firmware"], "notRead": ["node-global"]})
+        c = record(coverage={"identity": 250, "name": -3, "notChecked": ["php", "my-secret-project"], "notRead": ["node-global", "/home/x"]})["coverage"]
+        self.assertEqual(c, {"identity": 100, "name": 0, "notChecked": ["php"], "notRead": ["node-global"]})
         r = record(coverage=COVERAGE)
         for bad in ({**COVERAGE, "extra": 1}, {**COVERAGE, "identity": "22"}, {**COVERAGE, "notRead": ["somewhere"]}):
             with self.assertRaises(ValueError):

@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lattice_scan import scan_report_send as send  # noqa: E402
-from test_report_send import KEY, RECORD, Server  # noqa: E402
+from test_report_send import KEY, RECORD, Clock, Server  # noqa: E402
 
 
 class NoWait(unittest.TestCase):
@@ -78,6 +78,59 @@ class NoWait(unittest.TestCase):
     def test_the_mask(self):
         self.assertEqual(send.mask_address("hung@namiq.io"), "h***@n***.io")
         self.assertEqual(send.mask_address("nonsense"), "your mailbox")
+
+
+class WaitThenFinish(unittest.TestCase):
+    """The default: wait a few minutes while the person confirms, and go on by itself; fall back to `report finish`."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name) / "rec"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_it(self, server, wait_s=180, sleep=None):
+        c = Clock()
+        out = io.StringIO()
+        ok = send.send_report(RECORD, KEY, "1.1.3", lambda p="": "", out, post=server, sleep=sleep or c.sleep, clock=c, interactive=True, wait_s=wait_s, pending_dir=self.dir, bold=False)
+        return ok, out.getvalue()
+
+    def test_confirming_during_the_wait_finishes_the_run_by_itself(self):
+        s = Server(claims=("pending", "pending", "confirmed"), prefill="person@example.org", submit=(200, {"message": "Your report was requested.", "code": "482913", "order_id": "RO-0123456789"}))
+        ok, out = self.run_it(s)
+        self.assertTrue(ok)
+        self.assertEqual(s.names()[-1], "submit")
+        self.assertIn("Report code: 482913", out)
+        self.assertIn("Request id: RO-0123456789", out)
+        self.assertIn("p***@e***.org", out)
+        self.assertIn("What happens next", out)
+        self.assertNotIn("person@example.org", out)
+        self.assertFalse((self.dir / send.PENDING_NAME).exists())
+
+    def test_not_confirmed_in_time_keeps_the_request_and_says_how_to_finish(self):
+        s = Server(claims=(), prefill="person@example.org")          # always pending
+        ok, out = self.run_it(s, wait_s=30)
+        self.assertTrue(ok)
+        self.assertNotIn("submit", s.names())
+        self.assertIn("lattice-scan report finish", out)
+        self.assertTrue((self.dir / send.PENDING_NAME).is_file())
+
+    def test_ctrl_c_keeps_the_request(self):
+        def stop(_s):
+            raise KeyboardInterrupt
+        s = Server(claims=(), prefill="person@example.org")
+        ok, out = self.run_it(s, sleep=stop)
+        self.assertTrue(ok)
+        self.assertNotIn("submit", s.names())
+        self.assertIn("Stopped waiting", out)
+        self.assertTrue((self.dir / send.PENDING_NAME).is_file())
+
+    def test_a_refused_request_is_dropped(self):
+        s = Server(claims=("refused",), prefill="person@example.org")
+        ok, out = self.run_it(s)
+        self.assertFalse(ok)
+        self.assertIn("not them", out)
+        self.assertFalse((self.dir / send.PENDING_NAME).exists())
 
 
 if __name__ == "__main__":
