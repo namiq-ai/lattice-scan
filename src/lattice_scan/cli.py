@@ -2859,7 +2859,7 @@ def report_flow(kind: str, found, inv, a, lat=None) -> None:
             items = srf.merge_distro(items, DISTRO_ANSWERS)       # answered earlier in this run with its own yes
         srf.after_scan(items, "deep" if getattr(a, "deep", False) else "quick", OUT / "reports", quiet=not PROGRESS, fmt=getattr(a, "format", "table") or "table",
                        env=dict(os.environ), stdin_tty=sys.stdin.isatty(), stderr_tty=sys.stderr.isatty() and sys.stdout.isatty(), inv=inv if host else srf.project_inventory(found),
-                       posture=posture_data() if host else None, key=KEY or None, terms_version=terms_version, store_key=store_key_file, **extra)
+                       posture=posture_data() if host else None, key=KEY or None, terms_version=terms_version, store_key=store_key_file, pending_dir=OUT, **extra)
     except Exception as err:   # noqa: BLE001 - the scan's answer matters more than its report
         dbg(f"report: not written: {err}")
 
@@ -4210,6 +4210,18 @@ def store_key_file(key: str) -> bool:
     return True
 
 
+def cmd_report(a) -> int:
+    """`lattice-scan report finish`: finish a report request after the mailbox owner pressed Confirm. Asks once, never waits."""
+    from . import scan_report_send as srs
+    from . import __version__
+    if not KEY:
+        print("report finish needs the Lattice key the request was made with (LATTICE_API_KEY), or a free key stored by an earlier run.", file=sys.stderr)
+        if not (OUT / srs.PENDING_NAME).is_file():
+            return 1
+    ok = srs.finish_report(OUT, KEY or None, __version__, store_key=store_key_file)
+    return 0 if ok else 1
+
+
 def cmd_get_key(a) -> int:
     """Ask for a Lattice key on behalf of a real person who gave these details and agreed to the terms. The key goes to a private file and is never printed."""
     terms_page = "https://namiq.io/lattice/docs"
@@ -4540,6 +4552,7 @@ def _main() -> int:
     en.add_argument("--fail-on", choices=["never", "exploited"], default="never", help="exit 1 when any id is exploited (default never)")
     en.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each step on stderr (the default)")
     en.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
+    rp = sub.add_parser("report", help="finish a report request after pressing Confirm in the mail"); rp.add_argument("what", choices=["finish"])
     gk = sub.add_parser("get-key", help="request a Lattice key for a real person who has read the terms and gave these details; the key is stored, never printed")
     for flag in ("name", "position", "company", "email", "purpose"):
         gk.add_argument(f"--{flag}", help=f"the person's {flag}" if flag != "purpose" else "what the key will be used for, one or two sentences (at least 20 characters)")
@@ -4601,6 +4614,7 @@ def _main() -> int:
     if a.c == "posture": return cmd_posture(a)
     if a.c == "enrich": return structured(a, cmd_enrich)
     if a.c == "get-key": return cmd_get_key(a)
+    if a.c == "report": return cmd_report(a)
     if a.c == "impact": return cmd_impact(a)
     if a.c == "resolve": return cmd_resolve(a)
     if a.c == "add": return cmd_add(a)

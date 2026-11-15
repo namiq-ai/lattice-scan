@@ -90,6 +90,7 @@ sudo lattice-scan posture --deep                           # as root: firewall r
 
 ```bash
 lattice-scan project . --cve CVE-2026-46300                # what the project declares (see below)
+lattice-scan report finish                                                  # after pressing Confirm in the report mail: sends the saved request and shows the code once (--report does not wait)
 lattice-scan get-key --name ... --position ... --company ... --email ... --purpose "..."   # asks nothing until --accept-terms; for a real person who read the terms
 lattice-scan --progress --cve CVE-...                      # which CVE, and which part of the host or project, as it runs (on by default; -q silences)
 lattice-scan --debug --cve CVE-...                         # every request, response and match decision
