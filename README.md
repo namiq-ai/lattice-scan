@@ -275,7 +275,7 @@ CVE ids, and the key if you set one. `posture` sends nothing at all, unless you 
 package only, its source package name, ecosystem, version and OS release (for example `brotli`, `deb`, `1.1.0-2+deb13u1`, `Debian 13`). Lattice answers
 with the distribution's or registry's own fixed version, so a Debian fix backported under an unchanged upstream number shows as `FIXED`, and a package
 NVD gives no usable range for gets the registry's verdict instead of "undetermined". `d` at the question lists every item; `a` remembers "always" (`lattice-scan consent forget` removes it);
-with no terminal nothing is sent unless `--yes` is given. Unmatched packages, host name, addresses, paths and the package list are never sent. Say no,
+with no terminal nothing is sent unless `--yes` is given. With no connection nothing is asked or sent: a verdict saved on an earlier run is used and labelled with its date, and a package with none keeps the upstream comparison. Unmatched packages, host name, addresses, paths and the package list are never sent. Say no,
 or set `LATTICE_SCAN_ITEM_VERDICT=off`, and the verdict stays a comparison of upstream numbers, as before.
 
 **Package identity list.** A host scan (`--cve`, `--discover`, `recent`) also downloads namiq.io's signed list of package identities per exploited CVE
