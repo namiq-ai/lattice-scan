@@ -105,7 +105,7 @@ def submit(record: dict, token: str, key: str, version: str, base: str = BASE, p
 
 
 PENDING_NAME = "report-pending.json"
-PENDING_MAX_AGE = 24 * 3600      # a confirmation link is good for a day; a pending request older than that is dropped
+PENDING_MAX_AGE = 3600           # the confirmation link lives an hour; a pending request older than that is dropped
 
 
 def mask_address(a: str) -> str:

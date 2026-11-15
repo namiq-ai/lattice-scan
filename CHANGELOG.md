@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.1.2 — 2026-11-15
+
+- Changed: the saved report request (kept so `report finish` can send it after you press Confirm) is dropped after one hour, the life of the confirmation link, not a day. After that, run the scan with `--report` again.
+
 ## 1.1.1 — 2026-11-15
 
 - Changed: `--report` no longer waits at the command line. It asks for the confirmation mail, prints "Report request received. Check your email (h***@n***.io) and press Confirm", keeps the request and the record you agreed to send in a private file (mode 0600, one day at most) and exits. After you press Confirm, `lattice-scan report finish` sends the report and prints the 6-digit code once. Nothing about the machine is sent before the mailbox owner confirms.
