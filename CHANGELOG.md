@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## 1.1.0 — 2026-11-15
+
+- Changed: the distribution's own verdict is now sent by default, without a question. A host scan that matches packages by identity sends, for each matched package only, its source package name, ecosystem, version and OS release, and prints a notice of what it sends before it does (even with `--quiet`). Pass `--no-distro` or set `LATTICE_SCAN_ITEM_VERDICT=off` to send nothing. A script or CI job no longer sits at a question, with or without a terminal; `--yes` is unchanged for the other prompts. Never sent: the host name, addresses, ports, paths, user names, the package list or an image name. The question and the remembered "always" for it are gone.
 - Fixed: with no connection, the distribution verdict step no longer asks its question (nothing can be sent), uses a verdict saved on an earlier run, says it is saved and from which date, and keeps the upstream comparison for any package with no saved verdict. One missing verdict no longer stops the others. A run is never broken by it. Verdicts are now kept in the same private cache (your own cache folder, readable by you only, 800 entries) as the CVE answers, so a repeat run within 6 hours asks Lattice nothing; `LATTICE_SCAN_READ_CACHE=off` and `--refresh` turn it off. The saved entries name a package, its version and the OS release.
 
 ## 1.0.1 — 2026-11-15

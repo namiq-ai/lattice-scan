@@ -93,22 +93,23 @@ class Verdict(unittest.TestCase):
         self.assertEqual((imp["versionCheck"]["verdict"], imp["versionCheck"]["basis"]), ("in-range", "registry"))
         self.assertEqual(rows[1][7], "CANDIDATE")
 
-    def test_nothing_is_sent_without_a_terminal_and_without_yes(self):
+    def test_it_is_sent_without_a_terminal_and_without_a_question(self):
         lat, found, rows, err = self.scan(yes=False, tty=False)
-        self.assertEqual(lat.sent, [])
-        self.assertNotIn("versionCheckUpstream", found[0][2])
-        self.assertIn("--yes sends them", err)
+        self.assertEqual(len(lat.sent), 3)
+        self.assertEqual(rows[0][7], "FIXED")
+        self.assertIn("Turn this off with --no-distro", err)
 
-    def test_nothing_is_sent_when_the_person_says_no(self):
-        lat, _, rows, err = self.scan(yes=False, tty=True, answer="n\n")
-        self.assertEqual(lat.sent, [])
-        self.assertEqual(rows[0][7], "CANDIDATE")
-
-    def test_the_person_sees_what_will_be_sent_before_saying_yes(self):
-        lat, _, _, err = self.scan(yes=False, tty=True, answer="d\ny\n")
-        self.assertIn("ecosystem=deb", err)
+    def test_the_notice_is_printed_before_the_first_lookup_and_lists_what_is_sent(self):
+        lat, _, _, err = self.scan(yes=False, tty=True, answer="")
+        self.assertIn("never your host name", err)
         self.assertIn("os=Debian 13", err)
         self.assertEqual(len(lat.sent), 3)
+
+    def test_the_notice_survives_quiet(self):
+        with mock.patch.object(cli, "PROGRESS", False):
+            lat, _, _, err = self.scan(yes=False, tty=False)
+        self.assertIn("Sending for the distribution's own verdict", err)
+        self.assertNotIn("[verdict] sends:", err)
 
     def test_it_can_be_turned_off(self):
         with mock.patch.dict(os.environ, {"LATTICE_SCAN_ITEM_VERDICT": "off"}):

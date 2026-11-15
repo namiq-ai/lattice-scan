@@ -271,12 +271,13 @@ CVE ids, and the key if you set one. `posture` sends nothing at all, unless you 
 
 **Signed list.** namiq.io signs the recent-CVE list. The tool fetches the signature and a short certificate (two static files beside `recent.json`, the same host, nothing of yours sent) and checks them with a key built into the tool: the certificate must be signed by NamiQ's root key, valid for at most 90 days and not older than the lowest serial this version accepts, and its key must have signed the exact bytes of the list. A good check prints `[feed] signature verified`. A list with no signature (for example from a self-hosted server) is read and labelled `not signed`. A wrong, expired or revoked signature or certificate stops the read with the reason, and the list is not used. You can check the same signature by hand with OpenSSL once you have the public key: `openssl pkeyutl -verify -rawin -pubin -inkey FEEDKEY.pub -sigfile recent.json.sig -in recent.json`.
 
-**The distribution's own verdict (asks first).** When a host scan matches packages by identity, it asks once whether to send, for each matched
-package only, its source package name, ecosystem, version and OS release (for example `brotli`, `deb`, `1.1.0-2+deb13u1`, `Debian 13`). Lattice answers
+**The distribution's own verdict (sent by default, printed first).** When a host scan matches packages by identity, it sends, for each matched
+package only, its source package name, ecosystem, version and OS release (for example `brotli`, `deb`, `1.1.0-2+deb13u1`, `Debian 13`), and prints a notice of what it sends
+before it does (even with `--quiet`; the full list is in the progress lines). It does not ask, so a script or CI job never waits. Lattice answers
 with the distribution's or registry's own fixed version, so a Debian fix backported under an unchanged upstream number shows as `FIXED`, and a package
-NVD gives no usable range for gets the registry's verdict instead of "undetermined". `d` at the question lists every item; `a` remembers "always" (`lattice-scan consent forget` removes it);
-with no terminal nothing is sent unless `--yes` is given. With no connection nothing is asked or sent: a verdict saved on an earlier run is used and labelled with its date, and a package with none keeps the upstream comparison. Unmatched packages, host name, addresses, paths and the package list are never sent. Say no,
-or set `LATTICE_SCAN_ITEM_VERDICT=off`, and the verdict stays a comparison of upstream numbers, as before.
+NVD gives no usable range for gets the registry's verdict instead of "undetermined". Unmatched packages, host name, addresses, paths and the package list are never sent.
+Pass `--no-distro`, or set `LATTICE_SCAN_ITEM_VERDICT=off`, and nothing is sent for it: the verdict stays a comparison of upstream numbers, as before 1.1.0.
+With no connection nothing is sent: a verdict saved on an earlier run is used and labelled with its date, and a package with none keeps the upstream comparison.
 
 **Package identity list.** A host scan (`--cve`, `--discover`, `recent`) also downloads namiq.io's signed list of package identities per exploited CVE
 (`identities.json` and its manifest, at most twice a day; nothing of yours is sent, and the list carries no version data). Where the list has a row for a CVE,
