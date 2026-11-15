@@ -1,11 +1,11 @@
 .\" SPDX-License-Identifier: Apache-2.0
 .\" Copyright 2026 NamiQ LLC
-.TH LATTICE-SCAN 1 "November 2026" "lattice-scan 1.0.0" "User Commands"
+.TH LATTICE-SCAN 1 "November 2026" "lattice-scan 1.0.1" "User Commands"
 .SH NAME
 lattice-scan \- check this host, or a project's declared dependencies, against the CVEs CISA lists as exploited, through Lattice
 .SH SYNOPSIS
 .B lattice-scan
-[\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-discover\fR] [\fB\-\-format\fR \fBconsole\fR|\fBjson\fR|\fBcsv\fR] [\fB\-\-json\fR \fIFILE\fR] [\fB\-\-refresh\fR [\fB\-\-inventory\fR]] [\fB\-\-list\fR] [\fB\-\-deep\fR] [\fB\-\-python\fR] [\fB\-\-python\-path\fR \fIDIR\fR]... [\fB\-\-node\fR] [\fB\-\-again\fR] [\fB\-\-keep\fR] [\fB\-\-debug\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
+[\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-discover\fR] [\fB\-\-format\fR \fBconsole\fR|\fBjson\fR|\fBcsv\fR] [\fB\-\-json\fR \fIFILE\fR] [\fB\-\-refresh\fR [\fB\-\-inventory\fR]] [\fB\-\-list\fR] [\fB\-\-deep\fR] [\fB\-\-python\fR] [\fB\-\-python\-path\fR \fIDIR\fR]... [\fB\-\-node\fR] [\fB\-\-again\fR] [\fB\-\-keep\fR] [\fB\-\-debug\fR] [\fB\-\-report\fR] [\fB\-\-progress\fR|\fB\-\-quiet\fR]
 .br
 .B lattice-scan project
 [\fIPATH\fR...] [\fB\-\-cve\fR \fIID\fR]... [\fB\-\-cve\-file\fR \fIFILE\fR] [\fB\-\-kev\-catalogue\fR \fIFILE\fR] [\fB\-\-max\-read\fR \fIN\fR]
@@ -132,6 +132,9 @@ Read ids that were read before.
 .TP
 .B \-\-progress
 Print, on standard error, what is being checked: each part of the host collected (packages, snaps, container image names, kernel) with counts, each project file read with its kind, and for each CVE which one it is (n of N), what CISA lists, and whether anything matched. Standard output is unchanged. On by default.
+.TP
+.B \-\-report
+After the scan, write the local report and, for a person at a terminal during the trial, offer the emailed report. The offer asks questions (the distribution check, then whether to send), so it is off unless this option is given: a script or CI job never waits for an answer. Also available on \fBproject\fR.
 .TP
 .B \-\-quiet\fR, \fB\-q
 Print no progress.

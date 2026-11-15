@@ -28,7 +28,7 @@ class Project(unittest.TestCase):
             cli.OUT = Path(d)
             sys.stderr = err
             try:
-                cli.report_flow("project", RESULTS, None, type("A", (), {"deep": False, "format": "table"})())
+                cli.report_flow("project", RESULTS, None, type("A", (), {"deep": False, "format": "table", "report": True})())
             finally:
                 cli.OUT, sys.stderr = old
             files = list((Path(d) / "reports").glob("report-*.txt"))

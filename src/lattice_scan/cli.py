@@ -2837,7 +2837,10 @@ def cmd_run(a) -> int:
 
 
 def report_flow(kind: str, found, inv, a, lat=None) -> None:
-    """The local report file, and the offer to mail it where the report ADR allows (scan_report_flow). Never breaks a scan: the report is extra."""
+    """The local report file, and the offer to mail it where the report ADR allows (scan_report_flow). Never breaks a scan: the report is extra.
+    Off unless the run said --report: a script or a CI job must never stop at a question (the distribution check, the offer) it did not ask for."""
+    if not getattr(a, "report", False):
+        return
     try:
         from . import scan_report_flow as srf
         host = kind == "host"
@@ -4469,6 +4472,7 @@ def _main() -> int:
     p.add_argument("--again", action="store_true", help="re-read ids already read before")
     p.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print what is being checked, step by step, on stderr (the default; see --quiet)")
     p.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
+    p.add_argument("--report", action="store_true", help="after the scan, write the local report and, for a person at a terminal during the trial, offer the emailed report (it asks questions: the distribution check and the offer). Off by default so a script or CI job never waits for an answer")
     sub = p.add_subparsers(dest="c")
     r = sub.add_parser("resolve"); r.add_argument("cve"); r.add_argument("--status", required=True, choices=["verified", "fixed", "not-applicable"]); r.add_argument("--proof", default=""); r.add_argument("--on")
     im = sub.add_parser("impact", help="the recorded impact detail of one finding"); im.add_argument("cve")
@@ -4479,6 +4483,7 @@ def _main() -> int:
     pj.add_argument("paths", nargs="*", default=["."], help="project folders (default: the current folder)")
     pj.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print each file and CVE as it is checked, on stderr (the default; see --quiet)")
     pj.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
+    pj.add_argument("--report", action="store_true", help="after the scan, write the local report and, for a person at a terminal during the trial, offer the emailed report. Off by default so a script or CI job never waits for an answer")
     pj.add_argument("--cve", action="append", help="CVE ids, comma separated (CVE-A,CVE-B); repeatable"); pj.add_argument("--cve-file", help="file of ids, one or several per line, # comments")
     pj.add_argument("--kev-catalogue", help="CISA's known_exploited_vulnerabilities.json; chooses which ids to read. Needs a key whose email is confirmed. Nothing from the file is sent")
     pj.add_argument("--discover", action="store_true", help="no CVE ids needed, no key needed: read namiq.io's list of recent exploited CVEs, keep those whose product a dependency here matches, and read only those from Lattice (default window: monthly)")
