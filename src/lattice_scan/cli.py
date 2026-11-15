@@ -2859,7 +2859,7 @@ def report_flow(kind: str, found, inv, a, lat=None) -> None:
             items = srf.merge_distro(items, DISTRO_ANSWERS)       # answered earlier in this run with its own yes
         srf.after_scan(items, "deep" if getattr(a, "deep", False) else "quick", OUT / "reports", quiet=not PROGRESS, fmt=getattr(a, "format", "table") or "table",
                        env=dict(os.environ), stdin_tty=sys.stdin.isatty(), stderr_tty=sys.stderr.isatty() and sys.stdout.isatty(), inv=inv if host else srf.project_inventory(found),
-                       posture=posture_data() if host else None, key=KEY or None, terms_version=terms_version, store_key=store_key_file, pending_dir=OUT, **extra)
+                       posture=posture_data() if host else None, key=KEY or None, terms_version=terms_version, store_key=store_key_file, pending_dir=OUT, wait_s=0 if getattr(a, "no_wait", False) else None, **extra)
     except Exception as err:   # noqa: BLE001 - the scan's answer matters more than its report
         dbg(f"report: not written: {err}")
 
@@ -3824,7 +3824,7 @@ def report_coverage(inv: dict) -> dict:
     lst = (IDENTITY or {}).get("list") or {}
     n, m = lst.get("cvesWithIdentity") or 0, lst.get("catalogueRows") or 0
     ident = round(100 * n / m) if m else 0
-    return {"identity": ident, "name": 100 - ident, "notChecked": list(scan_record.NOT_CHECKED_WORDS),
+    return {"identity": ident, "name": 100 - ident, "notChecked": list(scan_record.NOT_CHECKED_SENT),
             "notRead": [w for w, missing in (("python-global", "python" not in inv), ("node-global", "nodeGlobal" not in inv)) if missing]}
 
 
@@ -4491,6 +4491,7 @@ def _main() -> int:
     p.add_argument("--progress", action="store_true", default=argparse.SUPPRESS, help="print what is being checked, step by step, on stderr (the default; see --quiet)")
     p.add_argument("--quiet", "-q", action="store_true", default=argparse.SUPPRESS, help="print no progress (also LATTICE_SCAN_PROGRESS=0)")
     p.add_argument("--no-distro", action="store_true", help="do not send the matched packages (name, ecosystem, version, OS release) for the distribution's own verdict; the verdicts then compare upstream numbers (also LATTICE_SCAN_ITEM_VERDICT=off). By default they are sent, and the tool prints what it sends first")
+    p.add_argument("--no-wait", action="store_true", help="with --report: do not wait for the confirmation mail; the request is kept an hour and `lattice-scan report finish` sends it after you confirm (the default waits up to 3 minutes)")
     p.add_argument("--report", action="store_true", help="after the scan, write the local report and, for a person at a terminal during the trial, offer the emailed report (it asks questions: the distribution check and the offer). Off by default so a script or CI job never waits for an answer")
     sub = p.add_subparsers(dest="c")
     r = sub.add_parser("resolve"); r.add_argument("cve"); r.add_argument("--status", required=True, choices=["verified", "fixed", "not-applicable"]); r.add_argument("--proof", default=""); r.add_argument("--on")

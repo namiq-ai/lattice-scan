@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 1.1.3 — 2026-11-15
+
+- Changed: `--report` waits up to 3 minutes for you to press Confirm in the mail and then goes on by itself in the same run: it sends the report and prints the request id, what happens next and the 6-digit code once. A person with no key gets the free key at the same Confirm, stored in the private key file. If you do not confirm in time (or press Ctrl-C) the request is kept for an hour and `lattice-scan report finish` sends it later. `--no-wait` never waits (scripts).
+- Fixed: the report request was refused after you confirmed the mailbox with "a coverage notChecked word is not one of the listed words". The words the client sent for what a run does not check (hand-built software, vendor appliances, firmware, windows, network devices) were not the closed list accepted for the record and enforced by the service (php, java, ruby, go, dotnet, browser). The client now sends only accepted words (php, java, ruby, go, dotnet; the browser is checked). A request saved by an earlier version carries the old words: run the scan with `--report` again.
+
 ## 1.1.2 — 2026-11-15
 
 - Changed: the saved report request (kept so `report finish` can send it after you press Confirm) is dropped after one hour, the life of the confirmation link, not a day. After that, run the scan with `--report` again.

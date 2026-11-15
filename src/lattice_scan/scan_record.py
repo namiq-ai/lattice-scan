@@ -49,8 +49,9 @@ DISTRO_FIELDS = ("verdict", "fixedIn", "source")
 BASIS_WORDS = ("identity", "name", "range")
 CHANGELOG_WORDS = ("names", "none", "unchecked")
 NOT_READ_WORDS = ("python-global", "node-global", "host-browser")
-# what the run's own "not covered" statement says about software no package database lists; fixed words, never read from the host
-NOT_CHECKED_WORDS = ("hand-built-software", "vendor-appliances", "firmware", "windows", "network-devices")
+# the product families the run does not check, as the owner accepted them (allowlist change A3, the same closed list the service enforces); fixed words, never read from the host
+NOT_CHECKED_WORDS = ("php", "java", "ruby", "go", "dotnet", "browser")
+NOT_CHECKED_SENT = ("php", "java", "ruby", "go", "dotnet")      # what this client says it does not check: the browser is checked (Chrome joins Chromium by alias)
 COVERAGE_FIELDS = ("identity", "name", "notChecked", "notRead")
 _FIXED_IN = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+~:_-]{0,79}")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
