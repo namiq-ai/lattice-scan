@@ -179,7 +179,7 @@ def show_offline_banner() -> None:
 QUICK_ITEMS, KEY_ITEMS, RATE_WAIT_BUDGET = 25, 200, 5   # items per level; waits for the minute limit in one --discover --all run
 RATE_RETRIES, MAX_RATE_WAIT = 2, 70.0   # a 429 that says 'retry after N seconds' is waited out (at most twice, and only if N is a minute or so)
 PACE_CALLS, PACE_WINDOW = 5, 60.5         # keyless: calls a minute until the server says otherwise, counted across runs; half a second of margin
-READ_CACHE_MAX = 400                      # entries kept in the read cache
+READ_CACHE_MAX = 800                      # entries kept in the read cache
 RETRY_DELAYS = (2.0, 6.0)   # seconds before the 2nd and 3rd try of a request that failed on the network or with 502/503/504
 MAX_REPLY = 8 * 1024 * 1024  # a reply bigger than this is not a Lattice answer
 
@@ -378,6 +378,8 @@ def _cache_key(tool: str, args: dict) -> str | None:
         return f"lookup:{str(args['id']).upper()}"
     if tool == "graph_node" and args.get("uid"):
         return f"node:{args['uid']}"
+    if tool == "graph_affects" and args.get("product"):   # a distribution verdict: package name, ecosystem, version, OS release. Kept in the user's own 0600 cache so a run with no connection can reuse it, labelled with its date
+        return "affects:" + json.dumps({k: args[k] for k in sorted(args) if args[k] is not None}, sort_keys=True, separators=(",", ":"))
     return None
 
 
@@ -818,7 +820,7 @@ class Lattice:
         data, at = saved
         self.cached += 1
         self.saved_at[str(args.get("id") or args.get("uid") or "").upper()] = at
-        saved_note("CVE answers", at)
+        saved_note("distribution verdicts" if tool == "graph_affects" else "CVE answers", at)
         return json.loads(json.dumps(data))
 
     def _learn(self, answer: dict) -> None:
@@ -3781,14 +3783,20 @@ def ask_distro(lat: "Lattice", unique: dict) -> dict:
     """The lookups, one package at a time. The caller has the person's yes. Stops at the first Lattice error; what was answered is kept."""
     n = len(unique)
     answers: dict = {}
+    missing = 0
     for k, (key, it) in enumerate(unique.items(), 1):
         progress(f"[verdict {k}/{n}] {it['product']} {it['version']}" + (f" ({it['os']})" if it.get("os") else ""))
         try:
             ans = lat.call("graph_affects", **it)
+        except LatticeUnreachable:
+            missing += 1                    # no connection and no saved answer for this one: the rest are still tried against the saved answers, with no wait
+            continue
         except LatticeError as err:
             progress(f"[verdict] stopped after {k - 1} of {n}: {clean(str(err))}; the rest keep the upstream comparison")
             break
         answers[key] = [r for r in (ans.get("results") or []) if isinstance(r, dict) and r.get("basis") in ("distribution", "registry")]
+    if missing:
+        progress(f"[verdict] no connection to Lattice and no saved answer for {missing} of {n} package(s); those keep the upstream comparison")
     return answers
 
 
@@ -3847,13 +3855,16 @@ def distribution_verdicts(a, lat: "Lattice", inv: dict, found: list, rows: list)
             "user names, your package list.\nnamiq.io does not record who asked; it only counts lookups.")
     asked = "Ask Lattice whether your distribution or registry has already fixed {} matched package{}?\nthe distribution's own verdict instead of a comparison of upstream numbers.".format(n, "s" if n != 1 else "")
     fields = {k for it in items_ for k in it}
-    if not getattr(a, "yes", False) and not sys.stdin.isatty() and not consent_remembered("items:verdict", tuple(sorted(fields))):
-        progress(f"[verdict] {n} matched package(s) were not sent for the distribution's verdict (no terminal to ask on; --yes sends them). "
-                 "Their verdicts compare upstream numbers.")
-        return
-    if not confirm_send(a, "items:verdict", asked, sample, lines, note, fields):
-        progress("[verdict] not sent: the verdicts compare upstream numbers, which a distribution's backported fix can make look unfixed.")
-        return
+    if getattr(lat, "down", False) or NET_DOWN:                # no connection: nothing can be sent, so nothing is asked; saved answers are used, labelled with their date
+        progress("[verdict] no connection to Lattice: using saved distribution verdicts where there are any")
+    else:
+        if not getattr(a, "yes", False) and not sys.stdin.isatty() and not consent_remembered("items:verdict", tuple(sorted(fields))):
+            progress(f"[verdict] {n} matched package(s) were not sent for the distribution's verdict (no terminal to ask on; --yes sends them). "
+                     "Their verdicts compare upstream numbers.")
+            return
+        if not confirm_send(a, "items:verdict", asked, sample, lines, note, fields):
+            progress("[verdict] not sent: the verdicts compare upstream numbers, which a distribution's backported fix can make look unfixed.")
+            return
     answers = ask_distro(lat, unique)
     if scan_record.REPORT_FIELDS_AVAILABLE:
         DISTRO_ANSWERS.update(distro_by_artefact(want, inv, answers))      # kept for the report's check: a second question is not asked for what was answered here

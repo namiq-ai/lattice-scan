@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: with no connection, the distribution verdict step no longer asks its question (nothing can be sent), uses a verdict saved on an earlier run, says it is saved and from which date, and keeps the upstream comparison for any package with no saved verdict. One missing verdict no longer stops the others. A run is never broken by it. Verdicts are now kept in the same private cache (your own cache folder, readable by you only, 800 entries) as the CVE answers, so a repeat run within 6 hours asks Lattice nothing; `LATTICE_SCAN_READ_CACHE=off` and `--refresh` turn it off. The saved entries name a package, its version and the OS release.
+
 ## 1.0.1 — 2026-11-15
 
 - Changed: the report step is now off unless you pass `--report` (on a host scan and on `project`). Without it the tool writes no local report, asks no distribution check and makes no offer to mail it, so a script, a CI job or an automation never stops to wait for y/n/all. With `--report` nothing else changes: the local report, then the offer to a person at a terminal during the trial.
