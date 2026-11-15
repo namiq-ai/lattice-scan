@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.1.1 — 2026-11-15
+
+- Changed: `--report` no longer waits at the command line. It asks for the confirmation mail, prints "Report request received. Check your email (h***@n***.io) and press Confirm", keeps the request and the record you agreed to send in a private file (mode 0600, one day at most) and exits. After you press Confirm, `lattice-scan report finish` sends the report and prints the 6-digit code once. Nothing about the machine is sent before the mailbox owner confirms.
+
 ## 1.1.0 — 2026-11-15
 
 - Changed: the distribution's own verdict is now sent by default, without a question. A host scan that matches packages by identity sends, for each matched package only, its source package name, ecosystem, version and OS release, and prints a notice of what it sends before it does (even with `--quiet`). Pass `--no-distro` or set `LATTICE_SCAN_ITEM_VERDICT=off` to send nothing. A script or CI job no longer sits at a question, with or without a terminal; `--yes` is unchanged for the other prompts. Never sent: the host name, addresses, ports, paths, user names, the package list or an image name. The question and the remembered "always" for it are gone.

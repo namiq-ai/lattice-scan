@@ -9,6 +9,7 @@ it. The record is never written to disk by this module, a Ctrl-C or a timeout se
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -103,6 +104,56 @@ def submit(record: dict, token: str, key: str, version: str, base: str = BASE, p
     return post(f"{base}/api/v1/lattice/report/submit", body, _auth(key), 60)
 
 
+PENDING_NAME = "report-pending.json"
+PENDING_MAX_AGE = 24 * 3600      # a confirmation link is good for a day; a pending request older than that is dropped
+
+
+def mask_address(a: str) -> str:
+    """'hung@namiq.io' -> 'h***@n***.io': enough for the person to know which mailbox to open, not enough to read the address off a screen."""
+    local, _, dom = (a or "").partition("@")
+    host, _, tld = dom.rpartition(".")
+    return f"{local[:1]}***@{host[:1]}***.{tld}" if local and host and tld else "your mailbox"
+
+
+def save_pending(directory, claim: str, address: str, record: dict, wants_key: bool, clock=time.time) -> bool:
+    """The request waits in a private file (mode 0600) in the records folder until `report finish`: the claim secret, the address, and the record the person already said yes to.
+    Nothing is sent from it until the mailbox owner has confirmed."""
+    try:
+        from pathlib import Path
+        d = Path(directory)
+        d.mkdir(parents=True, exist_ok=True, mode=0o700)
+        f = d / PENDING_NAME
+        tmp = f.with_name(PENDING_NAME + ".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            json.dump({"claim": claim, "address": address, "record": record, "wants_key": bool(wants_key), "at": clock()}, fh)
+        os.replace(tmp, f)
+        return True
+    except OSError:
+        return False
+
+
+def load_pending(directory, clock=time.time) -> dict | None:
+    from pathlib import Path
+    f = Path(directory) / PENDING_NAME
+    try:
+        d = json.loads(f.read_text())
+        if isinstance(d, dict) and isinstance(d.get("claim"), str) and isinstance(d.get("record"), dict) and clock() - float(d.get("at", 0)) < PENDING_MAX_AGE:
+            return d
+    except (OSError, ValueError, TypeError):
+        pass
+    clear_pending(directory)
+    return None
+
+
+def clear_pending(directory) -> None:
+    from pathlib import Path
+    try:
+        (Path(directory) / PENDING_NAME).unlink()
+    except OSError:
+        pass
+
+
 def interactive_here() -> bool:
     """Stdin, stdout and stderr are all a terminal: a person is here and can be shown the report code. A pipe, CI or an agent-driven run is not, and never gets the terms question."""
     try:
@@ -136,7 +187,7 @@ def _store_and_say(key: dict, store_key, out) -> None:
 
 
 def send_report(record: dict, key: str | None, version: str, input_fn=input, out=None, base: str = BASE, post=default_post, sleep=time.sleep, clock=time.time,
-                terms_version=None, store_key=None, interactive=None, bold=None) -> bool:
+                terms_version=None, store_key=None, interactive=None, bold=None, wait_s: int = WAIT_S, pending_dir=None) -> bool:
     """The whole sequence for a person who said yes. Returns True when the request was accepted.
     With no key, the person types the terms word first; the same Confirm then gives the free key, which is created at the claim and never mailed."""
     out = out if out is not None else sys.stderr
@@ -169,6 +220,17 @@ def send_report(record: dict, key: str | None, version: str, input_fn=input, out
             print("The terms were not accepted. Nothing was sent.", file=out)
             return False
     claim = request_confirmation(address, key, base, post, tv or None)
+    if wait_s == 0 and pending_dir is not None:
+        # No waiting: the request is kept in a private file and the person finishes it after pressing Confirm in the mail. Nothing about this machine has been sent yet.
+        print(NEUTRAL, file=out)
+        if claim is None:
+            return False
+        if not save_pending(pending_dir, claim, address, record, wants_key):
+            print("The request could not be saved here, so it cannot be finished later. Nothing about this machine was sent.", file=out)
+            return False
+        print(f"Report request received. Check your email ({mask_address(address)}) and press Confirm. Then run:  lattice-scan report finish\n"
+              "Nothing about this machine has been sent yet; it is sent only after you confirm.", file=out)
+        return True
     print(NEUTRAL + " Open it and press Confirm. Waiting here for up to 15 minutes; press Ctrl-C to stop. Nothing about this machine has been sent yet.", file=out)
     if claim is None:
         return False
@@ -180,6 +242,11 @@ def send_report(record: dict, key: str | None, version: str, input_fn=input, out
     if got.get("state") != "confirmed":
         print({"refused": "The address owner said it was not them. Nothing was sent.", "expired": "The link expired. Nothing was sent.", "timeout": "", "key_failed": ""}.get(str(got.get("state")), "The confirmation did not complete. Nothing was sent."), file=out)
         return False
+    return _finish_submit(record, got, key, version, base, post, store_key, out, bold)
+
+
+def _finish_submit(record: dict, got: dict, key: str | None, version: str, base: str, post, store_key, out, bold) -> bool:
+    """After the mailbox owner confirmed: store a free key if one was issued, send the record with the confirmed token, and show the report code once."""
     if isinstance(got.get("key"), dict) and got["key"].get("key"):
         _store_and_say(got["key"], store_key, out)
         key = str(got["key"]["key"])
@@ -199,6 +266,33 @@ def send_report(record: dict, key: str | None, version: str, input_fn=input, out
             print("The service did not return a report code, so the report cannot be opened. Write to contact@namiq.io.", file=out)
         return True
     print(f"The report request was not accepted: {str(d.get('error') or status)[:200]}", file=out)
+    return False
+
+
+def finish_report(pending_dir, key: str | None, version: str, base: str = BASE, post=default_post, out=None, store_key=None, bold=None, clock=time.time) -> bool:
+    """`lattice-scan report finish`: ask once whether the mailbox owner confirmed; if so, send the saved record with the confirmed token and show the report code. Never waits."""
+    out = out if out is not None else sys.stderr
+    p = load_pending(pending_dir, clock)
+    if p is None:
+        print("No report request is waiting (or it is older than a day). Run the scan with --report again.", file=out)
+        return False
+    wants_key = bool(p.get("wants_key"))
+    status, d = post(f"{base}/api/v1/lattice/report/claim", {"claim": p["claim"], **({"address": p["address"]} if wants_key and p.get("address") else {})})
+    state = d.get("state") if status == 200 else "error"
+    if state == "confirmed" and d.get("token"):
+        ok = _finish_submit(p["record"], d, key, version, base, post, store_key, out, bold)
+        if ok:
+            clear_pending(pending_dir)
+        return ok
+    if state in ("refused", "expired", "unknown", "claimed"):
+        clear_pending(pending_dir)
+        print({"refused": "The address owner said it was not them. Nothing was sent.", "expired": "The link expired. Nothing was sent.", "claimed": "That request was already finished."}.get(str(state), "That request is no longer valid. Nothing was sent.")
+              + " Run the scan with --report again to start a new one.", file=out)
+        return False
+    if state == "key_failed":
+        print(str(d.get("message") or "The key could not be issued.")[:200], file=out)
+        return False
+    print(f"Not confirmed yet. Open the mail sent to {mask_address(str(p.get('address', '')))} and press Confirm, then run this again. Nothing was sent.", file=out)
     return False
 
 
