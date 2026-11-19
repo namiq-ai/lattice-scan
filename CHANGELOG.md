@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.1.4 — 2026-11-19
+
+- Changed: the identity list bundled in the release is refreshed to generation 35 (CISA catalogue as of 2026-11-18, 415 rows); the copy in 1.1.3 was generation 8 (2026-11-10). It is used only on a first run when namiq.io cannot be reached and nothing is cached, and it is verified like a download.
+- Includes everything in 1.1.3, which was merged but not published to PyPI or the apt repository.
+- No change to how the recent-CVE list is read: every version reads namiq.io's recent.json live and checks its signature, so the list's changes of 19 November (a critical bar of 8.0 instead of 9.0; nginx and OpenJDK CVEs named so the installed packages match) reach every installed version without an upgrade.
+
 ## 1.1.3 — 2026-11-15
 
 - Changed: `--report` waits up to 3 minutes for you to press Confirm in the mail and then goes on by itself in the same run: it sends the report and prints the request id, what happens next and the 6-digit code once. A person with no key gets the free key at the same Confirm, stored in the private key file. If you do not confirm in time (or press Ctrl-C) the request is kept for an hour and `lattice-scan report finish` sends it later. `--no-wait` never waits (scripts).
